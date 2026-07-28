@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Luke's Picks app icon</title>
+  <desc id="desc">The Luke's Picks shield on an opaque navy field.</desc>
+  <rect width="512" height="512" fill="#0B1F3A"/>
+  <g transform="translate(64 64) scale(1.5)">
+    <path fill="#FFC857" d="M128 8 226 43v73c0 66-39 111-98 132-59-21-98-66-98-132V43L128 8Z"/>
+    <path fill="#0B1F3A" stroke="#F7F9FC" stroke-width="4" d="M128 25 210 54v62c0 53-29 92-82 113-53-21-82-60-82-113V54l82-29Z"/>
+    <rect width="132" height="66" x="62" y="62" fill="#F7F9FC" rx="16"/>
+    <rect width="104" height="12" x="76" y="76" fill="#0B1F3A" rx="6"/>
+    <circle cx="82" cy="107" r="8" fill="#FFC857"/>
+    <circle cx="174" cy="107" r="8" fill="#FFC857"/>
+    <path fill="none" stroke="#2563EB" stroke-linecap="round" stroke-linejoin="round" stroke-width="22" d="m79 156 31 31 70-76"/>
+  </g>
+</svg>

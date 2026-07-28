@@ -1,0 +1,435 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../core/domain/league_time.dart';
+import '../../core/responsive/breakpoints.dart';
+import '../../core/widgets/ui.dart';
+import '../../data/demo/demo_repository.dart';
+import '../../data/models/game.dart';
+
+class PicksScreen extends ConsumerWidget {
+  const PicksScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.watch(appControllerProvider);
+    final games = controller.selectedGames;
+    final confirmed = games
+        .where(
+          (game) =>
+              controller.picks.containsKey(game.id) &&
+              controller.syncStateFor(game.id) == PickSyncState.synced,
+        )
+        .length;
+    return Padding(
+      padding: AppBreakpoints.pagePadding(context),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          PageHeader(
+            eyebrow: 'Week 9 · Your entry',
+            title: 'Make your picks',
+            description:
+                'Choose exactly one winner per game. You can edit any '
+                'selection until that game locks.',
+            action: _ProgressPill(done: confirmed, total: games.length),
+          ),
+          if (controller.offline) ...[
+            const SizedBox(height: 16),
+            const _SyncWarning(),
+          ],
+          const SizedBox(height: 20),
+          Expanded(
+            child: !controller.canMakePicks
+                ? const EmptyState(
+                    icon: Icons.sports_rounded,
+                    title: 'You are this week’s picker',
+                    message:
+                        'The picker is excluded from winner picks for this '
+                        'week. Build the slate, then follow results here.',
+                  )
+                : games.isEmpty
+                ? EmptyState(
+                    icon: Icons.hourglass_empty_rounded,
+                    title: 'The slate is not ready yet',
+                    message:
+                        'The weekly picker must publish at least one game '
+                        'before member picks open.',
+                    action: OutlinedButton(
+                      onPressed: () => context.go('/dashboard'),
+                      child: const Text('Back to dashboard'),
+                    ),
+                  )
+                : ListView.separated(
+                    key: const Key('pick-game-list'),
+                    itemCount: games.length,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 14),
+                    itemBuilder: (context, index) {
+                      final game = games[index];
+                      return _PickGameCard(
+                        game: game,
+                        selection: controller.picks[game.id],
+                        syncState: controller.syncStateFor(game.id),
+                        locked: controller.isGameLocked(game),
+                        timezone: controller.leagueTimezone,
+                        onChoose: (teamId) =>
+                            controller.chooseTeam(game, teamId),
+                      );
+                    },
+                  ),
+          ),
+          if (controller.canMakePicks && games.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            _EntryBar(
+              confirmed: confirmed,
+              total: games.length,
+              hasUnsynced: games.any(
+                (game) =>
+                    controller.picks.containsKey(game.id) &&
+                    controller.syncStateFor(game.id) != PickSyncState.synced,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ProgressPill extends StatelessWidget {
+  const _ProgressPill({required this.done, required this.total});
+
+  final int done;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: '$done of $total picks confirmed',
+      liveRegion: true,
+      child: StatusPill(
+        label: '$done of $total confirmed',
+        icon: done == total
+            ? Icons.check_circle_rounded
+            : Icons.pending_actions_rounded,
+        tone: done == total ? StatusTone.success : StatusTone.info,
+      ),
+    );
+  }
+}
+
+class _SyncWarning extends StatelessWidget {
+  const _SyncWarning();
+
+  @override
+  Widget build(BuildContext context) {
+    return SectionCard(
+      color: Theme.of(context).colorScheme.errorContainer,
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.cloud_off_rounded),
+          SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'You’re offline. New choices remain local drafts and are not '
+              'confirmed until the server accepts them before lock.',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PickGameCard extends StatelessWidget {
+  const _PickGameCard({
+    required this.game,
+    required this.selection,
+    required this.syncState,
+    required this.locked,
+    required this.timezone,
+    required this.onChoose,
+  });
+
+  final Game game;
+  final String? selection;
+  final PickSyncState syncState;
+  final bool locked;
+  final String timezone;
+  final ValueChanged<String> onChoose;
+
+  @override
+  Widget build(BuildContext context) {
+    final missing = locked && selection == null;
+    return SectionCard(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    game.leagueName,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    formatLeagueTime(
+                      game.effectiveLockAtUtc,
+                      timezone,
+                      'EEE, MMM d · h:mm a',
+                    ),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              StatusPill(
+                label: locked ? 'Locked' : 'Open',
+                icon: locked ? Icons.lock_rounded : Icons.lock_open_rounded,
+                tone: locked ? StatusTone.neutral : StatusTone.success,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final away = _TeamChoice(
+                gameId: game.id,
+                team: game.awayTeam,
+                selected: selection == game.awayTeam.id,
+                enabled: !locked,
+                onTap: () => onChoose(game.awayTeam.id),
+              );
+              final home = _TeamChoice(
+                gameId: game.id,
+                team: game.homeTeam,
+                selected: selection == game.homeTeam.id,
+                enabled: !locked,
+                onTap: () => onChoose(game.homeTeam.id),
+              );
+              if (constraints.maxWidth < 580) {
+                return Column(
+                  children: [
+                    away,
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 7),
+                      child: Text(
+                        'OR',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ),
+                    home,
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: away),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      'OR',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ),
+                  Expanded(child: home),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          if (missing)
+            const StatusPill(
+              label: 'No pick · counted incorrect if graded',
+              icon: Icons.remove_circle_outline_rounded,
+              tone: StatusTone.danger,
+            )
+          else
+            _SyncLabel(state: syncState, hasSelection: selection != null),
+        ],
+      ),
+    );
+  }
+}
+
+class _TeamChoice extends StatelessWidget {
+  const _TeamChoice({
+    required this.gameId,
+    required this.team,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final String gameId;
+  final Team team;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      selected: selected,
+      enabled: enabled,
+      inMutuallyExclusiveGroup: true,
+      label:
+          'Pick ${team.name}${selected ? ', currently selected' : ''}'
+          '${enabled ? '' : ', locked'}',
+      child: InkWell(
+        key: Key('team-choice-$gameId-${team.id}'),
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(16),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          constraints: const BoxConstraints(minHeight: 82),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: selected
+                ? scheme.primaryContainer
+                : scheme.surfaceContainerLowest,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: selected
+                  ? scheme.tertiary
+                  : Theme.of(context).dividerColor,
+              width: selected ? 2 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              TeamBadge(team: team, size: 46),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      team.name,
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      team.abbreviation,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                selected
+                    ? Icons.check_circle_rounded
+                    : Icons.radio_button_unchecked_rounded,
+                color: selected ? scheme.tertiary : scheme.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SyncLabel extends StatelessWidget {
+  const _SyncLabel({required this.state, required this.hasSelection});
+
+  final PickSyncState state;
+  final bool hasSelection;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!hasSelection) {
+      return const StatusPill(
+        label: 'Pick required',
+        icon: Icons.circle_outlined,
+      );
+    }
+    return switch (state) {
+      PickSyncState.saving => const StatusPill(
+        label: 'Saving…',
+        icon: Icons.sync_rounded,
+        tone: StatusTone.info,
+      ),
+      PickSyncState.synced => const StatusPill(
+        label: 'Saved and confirmed',
+        icon: Icons.cloud_done_rounded,
+        tone: StatusTone.success,
+      ),
+      PickSyncState.offline => const StatusPill(
+        label: 'Local draft · not confirmed',
+        icon: Icons.cloud_off_rounded,
+        tone: StatusTone.warning,
+      ),
+      PickSyncState.rejected => const StatusPill(
+        label: 'Not accepted · game locked',
+        icon: Icons.error_outline_rounded,
+        tone: StatusTone.danger,
+      ),
+      PickSyncState.idle => const StatusPill(
+        label: 'Not yet confirmed',
+        icon: Icons.cloud_upload_outlined,
+        tone: StatusTone.warning,
+      ),
+    };
+  }
+}
+
+class _EntryBar extends StatelessWidget {
+  const _EntryBar({
+    required this.confirmed,
+    required this.total,
+    required this.hasUnsynced,
+  });
+
+  final int confirmed;
+  final int total;
+  final bool hasUnsynced;
+
+  @override
+  Widget build(BuildContext context) {
+    return SectionCard(
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              confirmed == total
+                  ? hasUnsynced
+                        ? 'Selections made · not all confirmed'
+                        : 'Your entry is complete'
+                  : '$confirmed of $total picks confirmed',
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+          FilledButton(
+            onPressed: () => context.go('/results'),
+            child: const Text('Review entry'),
+          ),
+        ],
+      ),
+    );
+  }
+}

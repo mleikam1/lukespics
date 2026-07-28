@@ -1,46 +1,46 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
   <base href="$FLUTTER_BASE_HREF">
-
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
-
-  <!-- iOS meta tags & icons -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Luke’s Picks is a private weekly sports pick’em arena—no odds, no wagers, just bragging rights.">
+  <meta name="theme-color" content="#0B1F3A">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="lukespics">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Luke’s Picks">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
-
-  <!-- Favicon -->
-  <link rel="icon" type="image/png" href="favicon.png"/>
-
-  <title>lukespics</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.json">
+  <title>Luke’s Picks</title>
+  <style>
+    html, body { height: 100%; margin: 0; background: #0B1F3A; }
+    #boot {
+      align-items: center; color: #F7F9FC; display: flex; flex-direction: column;
+      font: 800 16px system-ui, -apple-system, sans-serif; gap: 16px;
+      inset: 0; justify-content: center; letter-spacing: .08em; position: fixed;
+    }
+    #boot img { height: 76px; width: 76px; }
+    @media (prefers-reduced-motion: no-preference) {
+      #boot img { animation: pulse 1.4s ease-in-out infinite alternate; }
+      @keyframes pulse { to { transform: scale(1.04); opacity: .82; } }
+    }
+  </style>
 </head>
 <body>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
-
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
+  <div id="boot" role="status" aria-live="polite">
+    <img src="favicon.svg" alt="">
+    <span>SETTING THE ARENA…</span>
+  </div>
+  <script>
+    window.addEventListener('flutter-first-frame', function () {
+      document.getElementById('boot')?.remove();
+      document.body.style.background = '';
+    });
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
