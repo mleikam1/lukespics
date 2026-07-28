@@ -1,0 +1,229 @@
+import {describe, expect, it} from "vitest";
+import {
+  finalWinner,
+  resultVersionFor,
+  withSourceHash,
+} from "../src/providers/normalization.js";
+import {MockSportsProvider} from "../src/providers/mock.js";
+import {scoreEntry} from "../src/services/scoring.js";
+import {isCatalogGameSelectable} from "../src/services/weeks.js";
+
+describe("authoritative scoring", () => {
+  const games = [
+    {
+      id: "final-home",
+      status: "final",
+      winnerTeamId: "home",
+      resultVersion: "version-home",
+    },
+    {
+      id: "final-away",
+      status: "final",
+      winnerTeamId: "away",
+      resultVersion: "version-away",
+    },
+    {
+      id: "void-game",
+      status: "void",
+      winnerTeamId: null,
+      resultVersion: "version-void",
+    },
+    {
+      id: "pending-game",
+      status: "postponed",
+      winnerTeamId: null,
+      resultVersion: "version-pending",
+    },
+  ];
+
+  it("awards one point per correct pick, counts missing, and excludes void", () => {
+    const result = scoreEntry("member", true, games, [
+      {gameId: "final-home", selectedTeamId: "home"},
+      {gameId: "void-game", selectedTeamId: "one"},
+    ]);
+    expect(result).toMatchObject({
+      points: 1,
+      correctCount: 1,
+      incorrectCount: 1,
+      gradedCount: 2,
+      voidCount: 1,
+      accuracy: 0.5,
+    });
+  });
+
+  it("excludes an ineligible picker from all denominators", () => {
+    expect(
+      scoreEntry("picker", false, games, [
+        {gameId: "final-home", selectedTeamId: "home"},
+      ]),
+    ).toEqual({
+      uid: "picker",
+      eligible: false,
+      gradedCount: 0,
+      correctCount: 0,
+      incorrectCount: 0,
+      voidCount: 0,
+      points: 0,
+      accuracy: null,
+    });
+  });
+
+  it("is deterministic when delivery is duplicated", () => {
+    const picks = [{gameId: "final-home", selectedTeamId: "home"}];
+    expect(scoreEntry("member", true, games, picks)).toEqual(
+      scoreEntry("member", true, games, picks),
+    );
+  });
+});
+
+describe("result normalization", () => {
+  it("uses a stable outcome version that ignores sync timestamps", () => {
+    const first = resultVersionFor({
+      status: "final",
+      homeScore: 24,
+      awayScore: 17,
+      winnerTeamId: "home",
+      manualOverride: false,
+    });
+    const second = resultVersionFor({
+      status: "final",
+      homeScore: 24,
+      awayScore: 17,
+      winnerTeamId: "home",
+      manualOverride: false,
+    });
+    expect(first).toBe(second);
+  });
+
+  it("flags a true final tie for commissioner review", () => {
+    expect(finalWinner("final", "home", "away", 21, 21)).toEqual({
+      status: "reviewRequired",
+      winnerTeamId: null,
+    });
+  });
+
+  it("keeps result versions stable across volatile provider timestamps", () => {
+    const base = {
+      id: "mock:football:1",
+      provider: "mock",
+      providerGameId: "1",
+      sportCode: "football",
+      leagueCode: "demo-football",
+      leagueName: "Demo Football",
+      season: "demo",
+      weekOrRound: null,
+      scheduledAtUtc: new Date("2030-01-01T18:00:00.000Z"),
+      publishedScheduledAtUtc: new Date("2030-01-01T18:00:00.000Z"),
+      effectiveLockAtUtc: new Date("2030-01-01T18:00:00.000Z"),
+      venueName: null,
+      neutralSite: false,
+      homeTeam: {
+        id: "home",
+        name: "Home",
+        shortName: "Home",
+        abbreviation: "HOM",
+        logoUrl: null,
+      },
+      awayTeam: {
+        id: "away",
+        name: "Away",
+        shortName: "Away",
+        abbreviation: "AWY",
+        logoUrl: null,
+      },
+      status: "final" as const,
+      homeScore: 10,
+      awayScore: 7,
+      winnerTeamId: "home",
+      manualOverride: false,
+      manualOverrideReason: null,
+      manualOverrideBy: null,
+    };
+    const first = withSourceHash(
+      {
+        ...base,
+        providerLastUpdatedAt: new Date("2030-01-01T20:00:00.000Z"),
+        lastSyncedAt: new Date("2030-01-01T20:00:00.000Z"),
+      },
+      {id: 1},
+    );
+    const second = withSourceHash(
+      {
+        ...base,
+        providerLastUpdatedAt: new Date("2030-01-01T21:00:00.000Z"),
+        lastSyncedAt: new Date("2030-01-01T21:00:00.000Z"),
+      },
+      {id: 1},
+    );
+    expect(first.resultVersion).toBe(second.resultVersion);
+  });
+});
+
+describe("mock provider contract", () => {
+  it("returns deterministic normalized games without network access", async () => {
+    const provider = new MockSportsProvider();
+    const query = {
+      sportCode: "football",
+      leagueCode: "demo-football",
+      leagueId: "demo-football",
+      season: "demo",
+      from: "2030-09-01",
+      to: "2030-09-01",
+    };
+    const first = await provider.listGames(query);
+    const second = await provider.listGames(query);
+    expect(first).toHaveLength(8);
+    expect(first.map((game) => game.id)).toEqual(
+      second.map((game) => game.id),
+    );
+    expect(first.every((game) => game.homeTeam.logoUrl === null)).toBe(true);
+  });
+});
+
+describe("catalog eligibility", () => {
+  it("accepts only future scheduled-like games in the configured week", async () => {
+    const provider = new MockSportsProvider();
+    const [game] = await provider.listGames({
+      sportCode: "football",
+      leagueCode: "demo-football",
+      leagueId: "demo-football",
+      season: "demo",
+      from: "2030-09-01",
+      to: "2030-09-01",
+    });
+    expect(game).toBeDefined();
+    if (game === undefined) return;
+    const input = {
+      now: new Date("2030-08-31T00:00:00.000Z"),
+      weekStartAt: new Date("2030-09-01T00:00:00.000Z"),
+      weekEndAt: new Date("2030-09-08T00:00:00.000Z"),
+      enabledSports: ["football"],
+      enabledLeagues: ["demo-football"],
+    };
+    expect(isCatalogGameSelectable(game, input)).toBe(true);
+    expect(
+      isCatalogGameSelectable({...game, status: "postponed"}, input),
+    ).toBe(true);
+    expect(isCatalogGameSelectable({...game, status: "final"}, input)).toBe(
+      false,
+    );
+    expect(
+      isCatalogGameSelectable(game, {
+        ...input,
+        now: new Date("2030-09-02T00:00:00.000Z"),
+      }),
+    ).toBe(false);
+    expect(
+      isCatalogGameSelectable(game, {
+        ...input,
+        weekStartAt: new Date("2030-09-02T00:00:00.000Z"),
+      }),
+    ).toBe(false);
+    expect(
+      isCatalogGameSelectable(game, {
+        ...input,
+        enabledLeagues: ["another-league"],
+      }),
+    ).toBe(false);
+  });
+});

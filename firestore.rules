@@ -1,0 +1,225 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function memberPath(leagueId, uid) {
+      return /databases/$(database)/documents/leagues/$(leagueId)/members/$(uid);
+    }
+
+    function member(leagueId) {
+      return get(memberPath(leagueId, request.auth.uid)).data;
+    }
+
+    function isActiveMember(leagueId) {
+      return signedIn()
+        && exists(memberPath(leagueId, request.auth.uid))
+        && member(leagueId).status == "active";
+    }
+
+    function isLeagueAdmin(leagueId) {
+      return isActiveMember(leagueId)
+        && member(leagueId).role in ["owner", "commissioner"];
+    }
+
+    function weekPath(leagueId, weekId) {
+      return /databases/$(database)/documents/leagues/$(leagueId)/weeks/$(weekId);
+    }
+
+    function gamePath(leagueId, weekId, gameId) {
+      return /databases/$(database)/documents/leagues/$(leagueId)/weeks/$(weekId)/games/$(gameId);
+    }
+
+    function entryPath(leagueId, weekId, uid) {
+      return /databases/$(database)/documents/leagues/$(leagueId)/weeks/$(weekId)/entries/$(uid);
+    }
+
+    function validPickTeam(leagueId, weekId, gameId) {
+      let game = get(gamePath(leagueId, weekId, gameId)).data;
+      return request.resource.data.selectedTeamId in [
+        game.homeTeam.id,
+        game.awayTeam.id
+      ];
+    }
+
+    function pickIsOpen(leagueId, weekId, gameId, uid) {
+      let week = get(weekPath(leagueId, weekId)).data;
+      let game = get(gamePath(leagueId, weekId, gameId)).data;
+      let entry = get(entryPath(leagueId, weekId, uid)).data;
+      return week.status in ["open", "inProgress"]
+        && entry.eligible == true
+        && game.effectiveLockAtUtc is timestamp
+        && request.time < game.effectiveLockAtUtc;
+    }
+
+    match /users/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list: if false;
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly([
+          "uid",
+          "email",
+          "displayName",
+          "photoUrl",
+          "createdAt",
+          "updatedAt",
+          "lastLoginAt",
+          "accountStatus"
+        ])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.accountStatus == "active"
+        && request.resource.data.updatedAt == request.time;
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "displayName",
+          "photoUrl",
+          "updatedAt",
+          "lastLoginAt"
+        ])
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.accountStatus == resource.data.accountStatus
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /leagues/{leagueId} {
+      allow read: if isActiveMember(leagueId);
+      allow write: if false;
+
+      match /members/{uid} {
+        allow read: if isActiveMember(leagueId);
+        allow write: if false;
+      }
+
+      match /private/{document=**} {
+        allow read, write: if false;
+      }
+
+      match /weeks/{weekId} {
+        allow read: if isActiveMember(leagueId);
+        allow write: if false;
+
+        match /games/{gameId} {
+          allow read: if isActiveMember(leagueId);
+          allow write: if false;
+        }
+
+        match /entries/{uid} {
+          allow read: if isActiveMember(leagueId);
+          allow write: if false;
+
+          match /picks/{gameId} {
+            allow get: if isActiveMember(leagueId)
+              && request.auth.uid == uid;
+            allow list: if isActiveMember(leagueId)
+              && request.auth.uid == uid;
+            allow create: if isActiveMember(leagueId)
+              && request.auth.uid == uid
+              && pickIsOpen(leagueId, weekId, gameId, uid)
+              && validPickTeam(leagueId, weekId, gameId)
+              && request.resource.data.keys().hasOnly([
+                "gameId",
+                "selectedTeamId",
+                "selectedAt",
+                "updatedAt",
+                "lockAtSnapshot"
+              ])
+              && request.resource.data.gameId == gameId
+              && request.resource.data.selectedAt == request.time
+              && request.resource.data.updatedAt == request.time
+              && request.resource.data.lockAtSnapshot
+                == get(gamePath(leagueId, weekId, gameId)).data.effectiveLockAtUtc;
+            allow update: if isActiveMember(leagueId)
+              && request.auth.uid == uid
+              && pickIsOpen(leagueId, weekId, gameId, uid)
+              && validPickTeam(leagueId, weekId, gameId)
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                "selectedTeamId",
+                "updatedAt"
+              ])
+              && request.resource.data.gameId == resource.data.gameId
+              && request.resource.data.updatedAt == request.time;
+            allow delete: if false;
+          }
+        }
+
+        match /reveals/{gameId} {
+          allow read, write: if false;
+
+          match /picks/{uid} {
+            allow read: if isActiveMember(leagueId)
+              && get(gamePath(leagueId, weekId, gameId)).data.pickRevealCompletedAt is timestamp
+              && request.time
+                >= get(gamePath(leagueId, weekId, gameId)).data.effectiveLockAtUtc;
+            allow write: if false;
+          }
+        }
+
+        match /{document=**} {
+          allow read, write: if false;
+        }
+      }
+
+      match /standings/{uid} {
+        allow read: if isActiveMember(leagueId);
+        allow write: if false;
+      }
+
+      match /auditLogs/{logId} {
+        allow read: if isLeagueAdmin(leagueId);
+        allow write: if false;
+      }
+
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /sportsCache/{document=**} {
+      allow read, write: if false;
+    }
+    match /sportsCatalogGames/{document=**} {
+      allow read, write: if false;
+    }
+    match /providerUsage/{document=**} {
+      allow read, write: if false;
+    }
+    match /providerLocks/{document=**} {
+      allow read, write: if false;
+    }
+    match /providerManualRefreshLimits/{document=**} {
+      allow read, write: if false;
+    }
+    match /joinCodeMappings/{document=**} {
+      allow read, write: if false;
+    }
+    match /joinAttemptLimits/{document=**} {
+      allow read, write: if false;
+    }
+    match /leagueSlugs/{document=**} {
+      allow read, write: if false;
+    }
+    match /systemConfig/{document=**} {
+      allow read, write: if false;
+    }
+
+    // Collection-group discovery restores the caller's own active arena
+    // memberships after a browser refresh. Query constraints must prove both
+    // fields, so this cannot enumerate other members or inactive records.
+    match /{path=**}/members/{uid} {
+      allow list: if signedIn()
+        && resource.data.uid == request.auth.uid
+        && resource.data.status == "active";
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
