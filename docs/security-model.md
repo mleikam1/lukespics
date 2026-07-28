@@ -47,6 +47,10 @@ Only secret names are documented:
 - `COLLEGE_FOOTBALL_DATA_KEY`
 - `INVITE_CODE_PEPPER`
 
+`INVITE_CODE_PEPPER` is required for production invite-code hashing.
+`API_SPORTS_KEY` is required only when API-Sports mode is enabled, and the CFBD
+key is optional. Emulator-only defaults are not production secret substitutes.
+
 No service-account file is needed in source control. Local emulator credentials
 use the Firebase emulators and ignored files.
 

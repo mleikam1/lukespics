@@ -1,5 +1,11 @@
 # Commissioner runbook
 
+This is the intended operating contract. The callable backend supports these
+operations, and Flutter surfaces the core manual weekly flow. Explicit
+next-week creation/assignment and some recovery operations remain backend-only,
+and the connected flow has not had browser-to-emulator end-to-end validation.
+Track release readiness in [validation-report.md](validation-report.md).
+
 ## Weekly operation
 
 1. Confirm the draft week boundaries and designated picker.

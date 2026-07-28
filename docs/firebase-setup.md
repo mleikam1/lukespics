@@ -20,8 +20,13 @@ The repository uses `demo-lukes-picks-local` only for emulators.
    replacing signing material.
 8. Configure iOS reversed client ID/URL scheme.
 9. Set server secrets by name; never paste values into repo files.
+   `INVITE_CODE_PEPPER` is required in production. `API_SPORTS_KEY` is required
+   only when enabling API-Sports, and `COLLEGE_FOOTBALL_DATA_KEY` is optional.
 10. Confirm an already-authorized billing plan before deploying Functions that
     require it. Never add a payment method from this workflow.
+11. Close the connected-client limitations in
+    [validation-report.md](validation-report.md) before treating a Hosting
+    preview as a release candidate.
 
 ## App Check staged rollout
 

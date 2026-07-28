@@ -57,5 +57,7 @@ jobs:
         working-directory: functions
       - run: npm run test:rules
         working-directory: functions
+      - run: npm run test:integration
+        working-directory: functions
       - run: npm run build
         working-directory: functions

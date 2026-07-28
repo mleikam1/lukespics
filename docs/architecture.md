@@ -28,13 +28,23 @@ Widgets do not call a sports provider. Repository providers own data access and
 functions own privileged mutations. A pure `ScoringEngine` makes domain behavior
 repeatable in Flutter tests and mirrors server recomputation.
 
+The target boundary above is implemented for the core collections and
+operations. The client restores membership and subscribes to league, week,
+games, entries, picks, reveals, standings, members, and finalized history.
+However, the Flutter and Functions layers have separate automated evidence; a
+full browser-to-emulator or live-cloud end-to-end test has not been run. Some
+administrative callables, including explicit next-week creation/assignment, are
+not yet surfaced in the client. See
+[validation-report.md](validation-report.md).
+
 ## Backend
 
 Functions use Firebase Admin, strict TypeScript, schema validation, authenticated
-role checks, request IDs, structured logs, and conservative v2 scaling. Every
-mutation is either transactional or uses safe chunks. Provider reads are
-cache-first and guarded by a distributed lock, quota headroom, timeout, backoff,
-and circuit breaker.
+role checks, request IDs, structured logs, and conservative v2 scaling.
+Mutations use transactions or bounded chunks according to the operation.
+Provider reads are cache-first and guarded by a distributed lock, quota
+headroom, timeout, backoff, and circuit breaker. Recovery and concurrency paths
+still require production-scale load and fault-injection validation.
 
 Finalization reads the entire authoritative week, recomputes entries, writes
 ranked snapshots, rebuilds aggregate standings, records an audit event, and
@@ -50,8 +60,8 @@ fields to `reveals/{gameId}/picks/{uid}`. Email remains in private
 
 ## Resilience
 
-- Mock/manual data permits full operation during provider outage or quota
-  exhaustion.
+- Mock/manual data permits backend operation during provider outage or quota
+  exhaustion; complete connected Flutter UI coverage is still pending.
 - Final normalized games are cached indefinitely until a requested correction.
 - Content hashes suppress unchanged writes.
 - Result and outcome versions make retries no-ops.

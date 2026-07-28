@@ -34,6 +34,7 @@ Identical concurrent refreshes serve cache or wait rather than multiplying API
 calls. Requests use strict timeouts, exponential backoff with jitter, and a
 circuit breaker. Only materially changed normalized content is written.
 
-When quota is unavailable, users continue with cached or manual data and see
-“Sports data refresh is temporarily delayed.” Commissioners can enter results;
-the picks workflow remains intact.
+The backend is designed to continue with cached or manual data when quota is
+unavailable and surface “Sports data refresh is temporarily delayed.”
+Commissioners can enter results through callable operations. Complete connected
+Flutter UI coverage of that fallback still needs end-to-end validation.

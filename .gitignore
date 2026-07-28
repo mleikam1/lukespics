@@ -32,6 +32,24 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+/android/build/
+**/xcshareddata/swiftpm/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+firebase-debug.log
+firebase-debug.*.log
+.firebase/
+**/GoogleService-Info.plist
+**/google-services.json
+**/service-account*.json
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+*.pem
 
 # Symbolication related
 app.*.symbols

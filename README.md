@@ -1,18 +1,20 @@
 # Luke’s Picks
 
 Luke’s Picks is a private, cross-platform sports pick’em arena for rotating
-weekly game selection, straight-up winner picks, live results, and transparent
-standings. It is built with Flutter and Firebase and remains fully demonstrable
-with deterministic mock data when no sports-provider key or production Firebase
-project is available.
+weekly game selection, straight-up winner picks, results, and transparent
+standings. It includes a deterministic Flutter showcase and an emulator-tested
+Firebase backend, so development does not require a cloud project or
+sports-provider credential.
 
-> Status: production-oriented MVP implementation. The legal text is starter
-> copy and needs attorney review before a public commercial launch.
+> Status: MVP implementation for local evaluation, not a production release.
+> The connected Flutter/Firebase experience still has integration work listed
+> under [Known limitations](#known-limitations), and the legal text is starter
+> copy that needs attorney review.
 
 ## What is included
 
 - Responsive Flutter web, iOS, and Android experience
-- Google authentication integration point plus a safe local demo mode
+- Google authentication integration point plus a safe in-memory demo mode
 - Create/join arena, dashboard, picker catalog, picks, results, standings,
   history, member rotation, administration, settings, and legal pages
 - Pure, tested scoring and rotation domain logic
@@ -21,6 +23,11 @@ project is available.
 - Mock/manual sports providers and an API-Sports adapter boundary
 - Firestore caching, quota headroom, refresh locking, and circuit-breaker state
 - GitHub Actions validation without production deployment credentials
+
+The in-memory demo and emulator-tested backend have separate validation
+evidence. Flutter connects the core create/join/publish/pick/result operations,
+but it does not yet expose every mock/manual backend operation as one connected
+end-to-end workflow.
 
 ## Architecture
 
@@ -34,18 +41,21 @@ and [security model](docs/security-model.md).
 
 ## Prerequisites
 
-Validated development environment:
+Validated development environment on 2026-07-27:
 
 - Flutter 3.44.4 / Dart 3.12.2
-- Node.js 22 for Functions (Node 24 may run tooling locally but is not the
-  configured Functions runtime)
-- npm 11+
-- Firebase CLI 15+
-- Java 17+ for emulators
-- Xcode 26+ and CocoaPods for iOS
-- Android SDK 36+ and Java 17/21 for Android
+- Node.js 22.23.1 for Functions (the host had Node 24.14.0, but Node 22 is the
+  configured and verified Functions runtime)
+- npm 11.9.0 and Firebase CLI 15.9.0
+- Java 21.0.9 for Firebase Emulator Suite validation
+- Xcode 26.3 and CocoaPods 1.16.2
+- iOS 15.0 minimum deployment target
+- Android SDK 36.1; Android Studio’s Java 21 runtime was used where required
 
-Do not upgrade global tools solely for this repository.
+The Flutter Swift Package Manager integration is disabled for this project
+because Flutter 3.44.4 generated invalid local package symlinks after a clean.
+iOS uses the supported CocoaPods fallback. Do not upgrade global tools solely
+for this repository.
 
 ## Firebase project selection
 
@@ -66,7 +76,9 @@ flutter run -d chrome
 ```
 
 Demo mode requires no Google account, provider key, or cloud project. Use the
-on-screen demo controls to walk through the complete product.
+on-screen persona controls to review representative member, picker, and
+commissioner screens. This is a UI showcase; it does not prove the connected
+Firebase repository path.
 
 ## Quick start: emulators
 
@@ -117,12 +129,14 @@ Expected server secret names:
 
 - `API_SPORTS_KEY`
 - `COLLEGE_FOOTBALL_DATA_KEY` (optional adapter)
-- `INVITE_CODE_PEPPER` (optional additional hashing pepper)
+- `INVITE_CODE_PEPPER` (required for a production deployment)
 
 Set a secret only after selecting the authorized project:
 
 ```bash
 firebase functions:secrets:set API_SPORTS_KEY --project YOUR_AUTHORIZED_PROJECT_ID
+firebase functions:secrets:set INVITE_CODE_PEPPER \
+  --project YOUR_AUTHORIZED_PROJECT_ID
 ```
 
 The safe template is `.env.example`; it contains names only.
@@ -137,6 +151,9 @@ The safe template is `.env.example`; it contains names only.
 
 No provider request is made directly from Flutter. No ESPN undocumented
 endpoint, scraping, league artwork, odds, wagers, or betting feature is used.
+Mock behavior is covered by unit and emulator integration tests. Manual
+operations exist as callable backend functions, but the Flutter UI does not yet
+wire the entire manual lifecycle end to end.
 Provider status is documented in
 [sports-provider-validation.md](docs/sports-provider-validation.md).
 
@@ -158,14 +175,32 @@ npm --prefix functions ci
 npm --prefix functions run lint
 npm --prefix functions run typecheck
 npm --prefix functions test
+npm --prefix functions run build
 
 # Rules and integration tests
 npm --prefix functions run test:rules
 npm --prefix functions run test:integration
 ```
 
+Run Functions commands under Node 22. Run Firebase emulator tests under Java 21.
+See [local development](docs/local-development.md) for version-selection
+examples and [the validation report](docs/validation-report.md) for observed
+results and counts.
+
 Run provider contract tests only against sanitized fixtures. Live provider calls
 are never part of CI.
+
+## Responsive evidence
+
+The deterministic dashboard was visually reviewed at the requested widths:
+
+- [Mobile — 390 × 844](docs/screenshots/mobile-dashboard-390x844.png)
+- [Tablet — 768 × 1024](docs/screenshots/tablet-dashboard-768x1024.png)
+- [Desktop — 1440 × 900](docs/screenshots/desktop-dashboard-1440x900.png)
+
+These captures verify responsive layout and navigation presentation in demo
+mode. They are not evidence of a real Firebase, provider, accessibility, or
+physical-device smoke test.
 
 ## Deployment
 
@@ -186,19 +221,40 @@ web, Android, and iOS. See [deployment.md](docs/deployment.md).
 ## Known limitations
 
 - A real Firebase project and Google provider registration were not selected.
-- API-Sports live coverage/quota cannot be validated without an existing key;
-  mock/manual modes remain fully usable.
+- Nothing was deployed to Firebase Hosting, Functions, Firestore, Auth, Secret
+  Manager, or another cloud resource.
+- The connected Flutter repository restores membership and streams the core
+  league/week/game/entry/pick/reveal/standing/history data, but it has not been
+  exercised as a full browser-to-emulator or live-cloud end-to-end test.
+- Some administrative callables are not surfaced in Flutter, notably explicit
+  next-week creation/assignment after finalization.
+- API-Sports coverage, fixture shape, and authenticated quota behavior could not
+  be validated without a pre-existing key. No live provider call was made.
+- Google sign-in, App Check tokens/enforcement, Analytics, and Crashlytics were
+  not validated against a real project.
+- `npm audit --omit=dev` reported 12 transitive production-dependency
+  advisories (5 high, 7 moderate, 0 critical). Including development tooling,
+  `npm audit` reported 27 (18 high, 8 moderate, 1 low, 0 critical). They were
+  not force-upgraded because compatibility needs review.
 - Legal pages require professional review.
 - Store submission, push notifications, chat, odds, payments, and AI predictions
   are outside this MVP.
 - Android release signing and App Store/Play Store distribution are not
   configured in source control.
+- Keyboard-only navigation, screen-reader output, text scaling, and physical
+  device layouts still need dedicated manual QA beyond the captured responsive
+  dashboard widths.
 
 ## Troubleshooting
 
 - If Functions report an unsupported runtime, use Node 22.
-- If Firestore emulator startup requires a newer Java, point `JAVA_HOME` at the
-  installed Java 21 runtime for that command.
+- For Firestore emulator work, point `JAVA_HOME` and `PATH` at an installed
+  Java 21 runtime.
+- If `flutter build ios --simulator` attempts Swift Package Manager resolution,
+  confirm the project-specific `flutter.config.enable-swift-package-manager:
+  false` setting remains in `pubspec.yaml`, run `flutter pub get`, and use
+  CocoaPods. The deployment target must remain iOS 15 or newer for the current
+  Firebase packages.
 - If the app reports “Demo mode,” provide a complete authorized Firebase
   configuration or run with the emulator defines above.
 - If a late offline pick fails, the server lock is authoritative; reopen the

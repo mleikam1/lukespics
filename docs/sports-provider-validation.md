@@ -108,7 +108,9 @@ configuration, is required to:
 6. save sanitized test fixtures.
 
 If API-Sports fails NCAA football coverage, a separate CFBD bearer key is then
-required. Until then, mock/manual modes are the supported end-to-end path.
+required. Until then, mock/manual modes are the supported backend fallback.
+The deterministic mock lifecycle is emulator-tested; full mock/manual operation
+through the connected Flutter client is still pending.
 
 ## Fallback behavior
 
