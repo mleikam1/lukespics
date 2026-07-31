@@ -118,6 +118,14 @@ export type SportsDataProvider = {
   mapStatus(providerStatus: string): GameStatus;
 };
 
+export const PROVIDER_NAMES = [
+  "mock",
+  "manual",
+  "theSportsDbTest",
+  "apiSports",
+] as const;
+export type ProviderName = (typeof PROVIDER_NAMES)[number];
+
 export type LeagueSettings = {
   pickerParticipatesInPicks: boolean;
   pickLockPolicy: "perGame" | "firstGame";
@@ -126,7 +134,7 @@ export type LeagueSettings = {
   enabledSports: string[];
   enabledLeagues: string[];
   manualFinalizationRequired: boolean;
-  providerName: "mock" | "manual" | "apiSports";
+  providerName: ProviderName;
 };
 
 export type EntryScore = {

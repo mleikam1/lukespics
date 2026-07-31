@@ -1,266 +1,283 @@
 # Luke’s Picks
 
-Luke’s Picks is a private, cross-platform sports pick’em arena for rotating
-weekly game selection, straight-up winner picks, results, and transparent
-standings. It includes a deterministic Flutter showcase and an emulator-tested
-Firebase backend, so development does not require a cloud project or
-sports-provider credential.
+Luke’s Picks is a private, cross-platform weekly sports pick’em arena. One
+designated picker chooses the slate, eligible arena members choose straight-up
+winners, picks stay private until lock, and final results update weekly and
+overall standings.
 
-> Status: MVP implementation for local evaluation, not a production release.
-> The connected Flutter/Firebase experience still has integration work listed
-> under [Known limitations](#known-limitations), and the legal text is starter
-> copy that needs attorney review.
+> Status as of 2026-07-31: the guarded backend release and Hosting preview are
+> deployed only to the authorized `lukes-picks` project
+> (`271408880910`). Firestore rules/indexes, 29 Gen 2 Functions, and the
+> `connected-picker-flow` preview were verified; live Hosting was untouched.
+> Production Google sign-in, reload/session/membership restoration, the arena
+> dashboard, and the manual-catalog empty state passed a real-browser smoke
+> test. Commit, push, and draft pull request remain explicitly pending. This is
+> not a public production or app-store readiness claim.
 
-## What is included
+## Product contract
 
-- Responsive Flutter web, iOS, and Android experience
-- Google authentication integration point plus a safe in-memory demo mode
-- Create/join arena, dashboard, picker catalog, picks, results, standings,
-  history, member rotation, administration, settings, and legal pages
-- Pure, tested scoring and rotation domain logic
-- Firebase Functions v2 backend with server-only provider adapters
-- Deny-by-default Firestore rules and emulator tests
-- Mock/manual sports providers and an API-Sports adapter boundary
-- Firestore caching, quota headroom, refresh locking, and circuit-breaker state
-- GitHub Actions validation without production deployment credentials
+- One designated picker per explicit week.
+- At least one selected game and no artificial maximum.
+- Picker participation is configurable and defaults to disabled.
+- Per-game lock is the default; server time is authoritative.
+- A member can change an open pick but never a locked pick.
+- Pre-lock choices are private even from owners and commissioners.
+- One correct pick is one point; missing or incorrect is zero.
+- Void and canceled games are excluded from the denominator.
+- Ties without a valid winner require review or a void decision.
+- Postponed, suspended, and unresolved games block finalization.
+- Co-winners are supported.
+- Finalization, standings rebuild, and picker rotation are idempotent.
+- Inactive members retain history and are skipped by future rotation.
+- No odds, spreads, wagering, payments, or advanced scoring.
 
-The in-memory demo and emulator-tested backend have separate validation
-evidence. Flutter connects the core create/join/publish/pick/result operations,
-but it does not yet expose every mock/manual backend operation as one connected
-end-to-end workflow.
+The complete intended sequence is documented in
+[connected-weekly-picker.md](docs/connected-weekly-picker.md).
 
 ## Architecture
 
-Flutter uses a feature-first structure with Riverpod for state and `go_router`
-for URL-safe navigation. Firebase callable functions form the mutation boundary
-for privileged operations. Firestore keeps private picks under each entry and
-publishes separate reveal documents only after the corresponding lock.
+Flutter uses Riverpod and `go_router`. Firestore streams member-visible state;
+callable Functions are the server-authoritative mutation boundary. Private
+picks live under each member entry, while separate reveal documents become
+member-readable only after lock.
 
-See [architecture](docs/architecture.md), [Firestore schema](docs/firestore-schema.md),
-and [security model](docs/security-model.md).
+The backend includes the weekly lifecycle, scoring, correction, standings,
+rotation, manual-game fallback, provider cache, quota controls, and scheduled
+result/reveal processing. A passing browser-to-emulator release test exercises
+the connected Flutter client and backend together with three isolated users.
 
-## Prerequisites
+See:
 
-Validated development environment on 2026-07-27:
+- [Architecture](docs/architecture.md)
+- [Firestore schema](docs/firestore-schema.md)
+- [Security model](docs/security-model.md)
+- [Commissioner runbook](docs/admin-runbook.md)
+
+## Firebase isolation
+
+The only authorized cloud project is:
+
+| Field | Value |
+|---|---|
+| Project ID | `lukes-picks` |
+| Display name | `Lukes-picks` |
+| Project number | `271408880910` |
+| Firestore location | `us-central1` |
+
+Registered apps:
+
+- Web: `1:271408880910:web:b7e8b5aa9d2cbc1314cb5f`
+- Android: `1:271408880910:android:a99dd01fb4d5bb8114cb5f`
+  (`com.mleikam.lukespics`)
+- iOS: `1:271408880910:ios:dd22577f5d50ef1f14cb5f`
+  (`com.mleikam.lukespics`)
+
+Aliases are intentionally fail-closed:
+
+- `default -> demo-lukes-picks-local`
+- `prod -> lukes-picks`
+
+`demo-lukes-picks-local` is emulator-only and must never receive a cloud
+deployment. `wingman-interactive-live` belongs to another product and must
+never be targeted, read, or modified.
+
+Every rules/indexes, Functions, or Hosting-preview deployment must go through
+[release_firebase.sh](scripts/release_firebase.sh). The wrapper accepts only the
+authorized project and confirms both CLI accounts and project ownership
+immediately before the write. Prerequisite mutations that the wrapper does not
+perform—such as enabling a reviewed API or setting `INVITE_CODE_PEPPER`—must run
+`./scripts/assert_firebase_project.sh lukes-picks` immediately before their own
+explicitly targeted write. Never record a secret value.
+
+## Toolchain
+
+The established versions are:
 
 - Flutter 3.44.4 / Dart 3.12.2
-- Node.js 22.23.1 for Functions (the host had Node 24.14.0, but Node 22 is the
-  configured and verified Functions runtime)
-- npm 11.9.0 and Firebase CLI 15.9.0
-- Java 21.0.9 for Firebase Emulator Suite validation
-- Xcode 26.3 and CocoaPods 1.16.2
-- iOS 15.0 minimum deployment target
-- Android SDK 36.1; Android Studio’s Java 21 runtime was used where required
+- Node.js 22.23.1 for Functions
+- npm 11.9.0
+- Java 21.0.9 for Firebase emulators
+- Firebase CLI 15.24.0 from the Functions development dependencies
+- Chrome 151 for the connected browser lifecycle
+- Xcode 26.3 / CocoaPods 1.16.2
+- iOS 15.0 minimum target
+- Android SDK 36.1
 
-The Flutter Swift Package Manager integration is disabled for this project
-because Flutter 3.44.4 generated invalid local package symlinks after a clean.
-iOS uses the supported CocoaPods fallback. Do not upgrade global tools solely
-for this repository.
+The host may default to Node 24 and Java 17. Select Node 22 and the Android
+Studio Java 21 runtime explicitly; do not upgrade project dependencies merely
+to match host defaults.
 
-## Firebase project selection
+## Run modes
 
-No accessible Firebase/GCP project was selected during implementation because
-none had an ID or display name that unambiguously belonged to Luke’s Picks.
-The checked-in alias uses the synthetic emulator-only project ID
-`demo-lukes-picks-local`. It is intentionally not deployable.
+### Explicit local demo
 
-Before live setup, an owner must create or explicitly identify a Luke’s Picks
-Firebase project. Never substitute another existing project. Follow
-[firebase-setup.md](docs/firebase-setup.md).
-
-## Quick start: demo app
+Demo is opt-in:
 
 ```bash
-flutter pub get
-flutter run -d chrome
+flutter run -d chrome \
+  --dart-define=LUKE_PICKS_PUBLIC_RELEASE=false \
+  --dart-define=USE_DEMO=true
 ```
 
-Demo mode requires no Google account, provider key, or cloud project. Use the
-on-screen persona controls to review representative member, picker, and
-commissioner screens. This is a UI showcase; it does not prove the connected
-Firebase repository path.
+It is a UI showcase only. Demo screenshots and widget tests do not prove the
+Firebase-connected path.
 
-## Quick start: emulators
-
-Install Functions dependencies and compile:
+### Firebase emulators
 
 ```bash
 npm --prefix functions ci
 npm --prefix functions run build
+ALLOW_THESPORTSDB_TEST_PROVIDER=true firebase emulators:start \
+  --project demo-lukes-picks-local \
+  --only auth,firestore,functions,hosting
 ```
 
-Start the Firebase Emulator Suite:
-
-```bash
-firebase emulators:start --project demo-lukes-picks-local
-```
-
-Seed local demo documents in a separate terminal:
+In another terminal:
 
 ```bash
 npm --prefix functions run seed
-```
-
-Then start Flutter against the emulators:
-
-```bash
 flutter run -d chrome \
+  --dart-define=LUKE_PICKS_PUBLIC_RELEASE=false \
   --dart-define=USE_FIREBASE_EMULATORS=true \
   --dart-define=FIREBASE_PROJECT_ID=demo-lukes-picks-local
 ```
 
-## Firebase configuration
+The emulator project ID is enforced by the client and seed script. Emulator
+tests may use deterministic mock data and the gated TheSportsDB internal-test
+mode. The sanitized fixtures, provider-policy tests, production rejection, and
+connected internal-schedule browser lifecycle are recorded as passing.
 
-For an authorized live project, generate platform app registrations with:
+The automated three-user browser flow runs the actual Flutter UI against the
+isolated emulator stack:
 
 ```bash
-flutterfire configure \
-  --project YOUR_AUTHORIZED_PROJECT_ID \
-  --platforms web,android,ios \
-  --android-package-name com.mleikam.lukespics \
-  --ios-bundle-id com.mleikam.lukespics
+npm --prefix functions ci
+./scripts/test_browser_e2e.sh
 ```
 
-The app can also consume compile-time Firebase values documented in
-`lib/core/firebase/firebase_bootstrap.dart`. Never commit service-account JSON,
-OAuth client secrets, signing files, or provider keys.
+It verifies refresh plus explicit sign-out/re-sign-in restoration. The script
+leaves an emulator-configured release in `build/web`, so run a fresh production
+`flutter build web --release` afterward before the public-build scan or preview.
 
-Expected server secret names:
+### Connected production configuration
 
-- `API_SPORTS_KEY`
-- `COLLEGE_FOOTBALL_DATA_KEY` (optional adapter)
-- `INVITE_CODE_PEPPER` (required for a production deployment)
+Normal builds use `DefaultFirebaseOptions.currentPlatform` for `lukes-picks`.
+Configuration or connection failure must show an error and retry action; it
+must not fall back to demo state. `web/index.html` must not contain a second
+Firebase JavaScript initialization.
 
-Set a secret only after selecting the authorized project:
+## Provider and logo policy
 
-```bash
-firebase functions:secrets:set API_SPORTS_KEY --project YOUR_AUTHORIZED_PROJECT_ID
-firebase functions:secrets:set INVITE_CODE_PEPPER \
-  --project YOUR_AUTHORIZED_PROJECT_ID
-```
+| Mode | Policy |
+|---|---|
+| `mock` | Emulator and automated tests only |
+| `manual` | Valid production fallback and required production mode today |
+| `theSportsDbTest` | Internal/emulator only; requires an explicit flag and hard production rejection |
+| `apiSports` | Disabled until a pre-existing key, coverage, quota, contract shapes, terms, and publication rights are verified |
 
-The safe template is `.env.example`; it contains names only.
+No provider credential is exposed to Flutter or Hosting. Do not create,
+purchase, or register a provider account from this workflow. Do not scrape or
+hotlink ESPN pages, APIs, JSON, or images.
 
-## Sports-provider modes
+Remote team marks are shown only when their host and use rights are permitted.
+Provider access alone is not a logo license. Production uses neutral initials
+badges until rights are confirmed. See
+[sports-provider-validation.md](docs/sports-provider-validation.md) and
+[asset-sources.md](docs/asset-sources.md).
 
-| Mode | Purpose | Key required |
-|---|---|---|
-| `mock` | Deterministic schedules/results for demos and tests | No |
-| `manual` | Commissioner-created games and outcomes | No |
-| `apiSports` | Server-side API-Sports schedule/result adapter | Yes |
-
-No provider request is made directly from Flutter. No ESPN undocumented
-endpoint, scraping, league artwork, odds, wagers, or betting feature is used.
-Mock behavior is covered by unit and emulator integration tests. Manual
-operations exist as callable backend functions, but the Flutter UI does not yet
-wire the entire manual lifecycle end to end.
-Provider status is documented in
-[sports-provider-validation.md](docs/sports-provider-validation.md).
-
-## Common commands
+## Validation commands
 
 ```bash
-# Formatting and analysis
+flutter doctor -v
+flutter pub get
 dart format --output=none --set-exit-if-changed .
 flutter analyze
-
-# Flutter tests and build
 flutter test
-flutter build web --release
 flutter build apk --debug
 flutter build ios --simulator
 
-# Functions
 npm --prefix functions ci
 npm --prefix functions run lint
 npm --prefix functions run typecheck
 npm --prefix functions test
 npm --prefix functions run build
-
-# Rules and integration tests
 npm --prefix functions run test:rules
 npm --prefix functions run test:integration
+npm audit --prefix functions --omit=dev
+npm audit --prefix functions
+
+./scripts/test_browser_e2e.sh
+
+flutter build web --release
+bash -n scripts/*.sh
+./scripts/check_public_source.sh
+./scripts/check_public_build.sh build/web
 ```
 
-Run Functions commands under Node 22. Run Firebase emulator tests under Java 21.
-See [local development](docs/local-development.md) for version-selection
-examples and [the validation report](docs/validation-report.md) for observed
-results and counts.
+The public-build scan requires a fresh connected release. It rejects stale
+artifacts, a missing production or present non-public attestation, active
+emulator/test flags, the forbidden project, ESPN hosts, source maps, symbolic
+links, control-character paths, or likely secrets. It scans every deployed
+regular file rather than trusting its extension.
 
-Run provider contract tests only against sanitized fixtures. Live provider calls
-are never part of CI.
-
-## Responsive evidence
-
-The deterministic dashboard was visually reviewed at the requested widths:
-
-- [Mobile — 390 × 844](docs/screenshots/mobile-dashboard-390x844.png)
-- [Tablet — 768 × 1024](docs/screenshots/tablet-dashboard-768x1024.png)
-- [Desktop — 1440 × 900](docs/screenshots/desktop-dashboard-1440x900.png)
-
-These captures verify responsive layout and navigation presentation in demo
-mode. They are not evidence of a real Firebase, provider, accessibility, or
-physical-device smoke test.
+CI runs the static suites and these scans without deployment credentials. It
+does not deploy.
 
 ## Deployment
 
-Deployment is intentionally manual and additive. Validate a Hosting preview
-channel before any production release:
+The connected implementation has passed its three-user browser-to-emulator
+release gate and its guarded Firebase preview release. The active preview is:
+
+- URL:
+  <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app>
+- Firebase-displayed expiry: `2026-08-07 07:50:46`
+- deployed `main.dart.js` SHA-256:
+  `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`
+
+The active Firestore ruleset is
+`projects/lukes-picks/rulesets/93614c6a-add3-47ad-88df-b9d9e18a00fb`, all five
+composite indexes are `READY`, `INVITE_CODE_PEPPER` version 1 exists without
+its value being recorded, and all 29 Functions are active/Cloud Run ready.
+`scheduledResultSync` runs every 30 minutes on UTC time. Live Hosting was not
+deployed. See [release-checklist.md](docs/release-checklist.md) and
+[deployment.md](docs/deployment.md) for evidence and rollback identifiers.
+
+For any future guarded update, use only:
 
 ```bash
-flutter build web --release
-firebase hosting:channel:deploy mvp-review \
-  --project YOUR_AUTHORIZED_PROJECT_ID
+./scripts/release_firebase.sh rules-indexes
+./scripts/release_firebase.sh functions
+./scripts/release_firebase.sh preview
 ```
 
-Rules, indexes, Functions, and Hosting may be deployed only after the project,
-billing posture, secrets, and existing resources have been inspected. App Check
-enforcement remains in monitored mode until valid tokens have been observed on
-web, Android, and iOS. See [deployment.md](docs/deployment.md).
+The preview action deploys only the `connected-picker-flow` channel after source
+and fresh-build scans. The wrapper has no live Hosting action.
 
 ## Known limitations
 
-- A real Firebase project and Google provider registration were not selected.
-- Nothing was deployed to Firebase Hosting, Functions, Firestore, Auth, Secret
-  Manager, or another cloud resource.
-- The connected Flutter repository restores membership and streams the core
-  league/week/game/entry/pick/reveal/standing/history data, but it has not been
-  exercised as a full browser-to-emulator or live-cloud end-to-end test.
-- Some administrative callables are not surfaced in Flutter, notably explicit
-  next-week creation/assignment after finalization.
-- API-Sports coverage, fixture shape, and authenticated quota behavior could not
-  be validated without a pre-existing key. No live provider call was made.
-- Google sign-in, App Check tokens/enforcement, Analytics, and Crashlytics were
-  not validated against a real project.
-- `npm audit --omit=dev` reported 12 transitive production-dependency
-  advisories (5 high, 7 moderate, 0 critical). Including development tooling,
-  `npm audit` reported 27 (18 high, 8 moderate, 1 low, 0 critical). They were
-  not force-upgraded because compatibility needs review.
-- Legal pages require professional review.
-- Store submission, push notifications, chat, odds, payments, and AI predictions
-  are outside this MVP.
-- Android release signing and App Store/Play Store distribution are not
-  configured in source control.
-- Keyboard-only navigation, screen-reader output, text scaling, and physical
-  device layouts still need dedicated manual QA beyond the captured responsive
-  dashboard widths.
+- API-Sports has no authorized key or authenticated coverage/quota validation.
+- Production must remain manual-provider mode with neutral team badges.
+- TheSportsDB is proven only for the explicitly gated emulator/internal test
+  path and must remain disabled in `lukes-picks`.
+- Manual result handling is browser-proven; manual-game creation remains a
+  separate end-to-end validation item.
+- Production Google popup sign-in, reload/session/membership restoration,
+  explicit sign-out, and repeat sign-in passed. The automated repeat popup was
+  slow to settle, but a clean reload restored the authenticated arena with no
+  console warning or error.
+- App Check valid-token monitoring, Analytics/Crashlytics production operation,
+  and operational alerting remain deferred production gates.
+- Ownership transfer is not supported; an active owner is prevented from
+  leaving or deleting their account.
+- Accessibility, physical-device behavior, legal copy, release signing, and
+  store publication require separate review.
+- Two empty production smoke arenas created by the browser retries remain
+  intentionally in place for inspection. Each is manual-provider, Week 1
+  draft, one active owner, and has no selected games; deletion was not
+  authorized.
+- All Functions deployed successfully, but `gcf-artifacts` has no automatic
+  cleanup policy; the CLI’s resulting exit-1 retention warning is documented
+  separately from Function health.
+- Commit, push, and draft PR are pending.
 
-## Troubleshooting
-
-- If Functions report an unsupported runtime, use Node 22.
-- For Firestore emulator work, point `JAVA_HOME` and `PATH` at an installed
-  Java 21 runtime.
-- If `flutter build ios --simulator` attempts Swift Package Manager resolution,
-  confirm the project-specific `flutter.config.enable-swift-package-manager:
-  false` setting remains in `pubspec.yaml`, run `flutter pub get`, and use
-  CocoaPods. The deployment target must remain iOS 15 or newer for the current
-  Firebase packages.
-- If the app reports “Demo mode,” provide a complete authorized Firebase
-  configuration or run with the emulator defines above.
-- If a late offline pick fails, the server lock is authoritative; reopen the
-  slate to view the rejected local draft, but it cannot be counted.
-- If sports refresh is delayed, use cached schedules or commissioner manual
-  entry and inspect provider health before forcing another request.
-
-Further operating detail lives in [local development](docs/local-development.md),
-[testing](docs/testing.md), and the [admin runbook](docs/admin-runbook.md).
+No app-store build or live Hosting release is part of this workflow.

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/bootstrap.dart';
 import '../../core/domain/league_time.dart';
 import '../../core/responsive/breakpoints.dart';
 import '../../core/widgets/ui.dart';
@@ -14,7 +15,11 @@ class PicksScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.watch(appControllerProvider);
-    final games = controller.selectedGames;
+    final games = controller.isDemo
+        ? controller.selectedGames
+        : controller.slatePublished
+        ? controller.selectedWeekGames
+        : const <Game>[];
     final confirmed = games
         .where(
           (game) =>
@@ -28,7 +33,7 @@ class PicksScreen extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           PageHeader(
-            eyebrow: 'Week 9 · Your entry',
+            eyebrow: '${controller.weekLabel} · Your entry',
             title: 'Make your picks',
             description:
                 'Choose exactly one winner per game. You can edit any '
@@ -44,7 +49,7 @@ class PicksScreen extends ConsumerWidget {
             child: !controller.canMakePicks
                 ? const EmptyState(
                     icon: Icons.sports_rounded,
-                    title: 'You are this week’s picker',
+                    title: 'You’re this week’s picker.',
                     message:
                         'The picker is excluded from winner picks for this '
                         'week. Build the slate, then follow results here.',
@@ -73,9 +78,13 @@ class PicksScreen extends ConsumerWidget {
                         selection: controller.picks[game.id],
                         syncState: controller.syncStateFor(game.id),
                         locked: controller.isGameLocked(game),
+                        saving: controller.pickRequestInFlight(game.id),
+                        errorMessage: controller.pickErrorFor(game.id),
                         timezone: controller.leagueTimezone,
+                        logoPolicy: _logoPolicy(controller, game),
                         onChoose: (teamId) =>
                             controller.chooseTeam(game, teamId),
+                        onRetry: () => controller.retryPick(game),
                       );
                     },
                   ),
@@ -94,6 +103,18 @@ class PicksScreen extends ConsumerWidget {
           ],
         ],
       ),
+    );
+  }
+
+  TeamLogoPolicy _logoPolicy(AppController controller, Game game) {
+    if (controller.runtimeMode != AppRuntimeMode.firebaseEmulator ||
+        game.provider != 'theSportsDbTest') {
+      return const TeamLogoPolicy.disabled();
+    }
+    return const TeamLogoPolicy.provider(
+      provider: 'theSportsDbTest',
+      logoRightsVerified: true,
+      allowedHosts: {'r2.thesportsdb.com'},
     );
   }
 }
@@ -150,16 +171,24 @@ class _PickGameCard extends StatelessWidget {
     required this.selection,
     required this.syncState,
     required this.locked,
+    required this.saving,
+    required this.errorMessage,
     required this.timezone,
+    required this.logoPolicy,
     required this.onChoose,
+    required this.onRetry,
   });
 
   final Game game;
   final String? selection;
   final PickSyncState syncState;
   final bool locked;
+  final bool saving;
+  final String? errorMessage;
   final String timezone;
+  final TeamLogoPolicy logoPolicy;
   final ValueChanged<String> onChoose;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -209,14 +238,16 @@ class _PickGameCard extends StatelessWidget {
                 gameId: game.id,
                 team: game.awayTeam,
                 selected: selection == game.awayTeam.id,
-                enabled: !locked,
+                enabled: !locked && !saving,
+                logoPolicy: logoPolicy,
                 onTap: () => onChoose(game.awayTeam.id),
               );
               final home = _TeamChoice(
                 gameId: game.id,
                 team: game.homeTeam,
                 selected: selection == game.homeTeam.id,
-                enabled: !locked,
+                enabled: !locked && !saving,
+                logoPolicy: logoPolicy,
                 onTap: () => onChoose(game.homeTeam.id),
               );
               if (constraints.maxWidth < 580) {
@@ -265,7 +296,26 @@ class _PickGameCard extends StatelessWidget {
               tone: StatusTone.danger,
             )
           else
-            _SyncLabel(state: syncState, hasSelection: selection != null),
+            _SyncLabel(
+              state: syncState,
+              hasSelection: selection != null,
+              errorMessage: errorMessage,
+            ),
+          if (!locked &&
+              selection != null &&
+              (syncState == PickSyncState.offline ||
+                  syncState == PickSyncState.rejected)) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: Key('retry-pick-${game.id}'),
+                onPressed: saving ? null : onRetry,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Retry pick'),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -278,6 +328,7 @@ class _TeamChoice extends StatelessWidget {
     required this.team,
     required this.selected,
     required this.enabled,
+    required this.logoPolicy,
     required this.onTap,
   });
 
@@ -285,6 +336,7 @@ class _TeamChoice extends StatelessWidget {
   final Team team;
   final bool selected;
   final bool enabled;
+  final TeamLogoPolicy logoPolicy;
   final VoidCallback onTap;
 
   @override
@@ -320,7 +372,7 @@ class _TeamChoice extends StatelessWidget {
           ),
           child: Row(
             children: [
-              TeamBadge(team: team, size: 46),
+              TeamBadge(team: team, size: 46, logoPolicy: logoPolicy),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -354,10 +406,15 @@ class _TeamChoice extends StatelessWidget {
 }
 
 class _SyncLabel extends StatelessWidget {
-  const _SyncLabel({required this.state, required this.hasSelection});
+  const _SyncLabel({
+    required this.state,
+    required this.hasSelection,
+    required this.errorMessage,
+  });
 
   final PickSyncState state;
   final bool hasSelection;
+  final String? errorMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -383,8 +440,8 @@ class _SyncLabel extends StatelessWidget {
         icon: Icons.cloud_off_rounded,
         tone: StatusTone.warning,
       ),
-      PickSyncState.rejected => const StatusPill(
-        label: 'Not accepted · game locked',
+      PickSyncState.rejected => StatusPill(
+        label: errorMessage ?? 'Not accepted by the server',
         icon: Icons.error_outline_rounded,
         tone: StatusTone.danger,
       ),

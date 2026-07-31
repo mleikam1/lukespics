@@ -29,10 +29,26 @@ import {
   getFirestore as getAdminFirestore,
 } from "firebase-admin/firestore";
 import {afterAll, beforeAll, describe, expect, it} from "vitest";
+import {revealLockedPicks} from "../src/services/weeks.js";
 
 const projectId = "demo-lukes-picks-local";
 const apps: FirebaseApp[] = [];
 let requestSequence = 0;
+
+type RevealCallableResult = {
+  revealedGameCount: number;
+  processingGameCount: number;
+  revealsByGame: Record<
+    string,
+    Array<{uid: string; selectedTeamId: string}>
+  >;
+  revealPage: {
+    included: boolean;
+    truncated: boolean;
+    returnedPickCount: number;
+    nextCursor: {gameId: string; afterUid: string | null} | null;
+  };
+};
 
 function requestId(label: string): string {
   requestSequence += 1;
@@ -118,8 +134,25 @@ describe("emulator pick'em lifecycle", () => {
         inviteCode: created.inviteCode,
         nickname: "Member B",
       });
+      await expect(
+        httpsCallable(getFunctions(owner, "us-central1"), "leaveLeague")({
+          requestId: requestId("ownerleave"),
+          leagueId: created.leagueId,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        httpsCallable(
+          getFunctions(owner, "us-central1"),
+          "deleteOrAnonymizeAccount",
+        )({
+          requestId: requestId("ownerdelete"),
+          confirmation: "DELETE",
+        }),
+      ).rejects.toThrow();
 
-      const start = new Date(Date.now() + 24 * 60 * 60_000);
+      const start = new Date();
+      start.setUTCHours(0, 0, 0, 0);
+      start.setUTCDate(start.getUTCDate() + 1);
       const end = new Date(start.valueOf() + 7 * 24 * 60 * 60_000);
       const week = await call<{weekId: string; pickerUid: string}>(
         owner,
@@ -156,6 +189,7 @@ describe("emulator pick'em lifecycle", () => {
       }>(owner, "listSportsCatalog", {
         requestId: requestId("listgames"),
         leagueId: created.leagueId,
+        weekId: week.weekId,
         sportCode: "football",
         leagueCode: "demo-football",
         leagueIdForProvider: "demo-football",
@@ -170,6 +204,7 @@ describe("emulator pick'em lifecycle", () => {
       }>(owner, "listSportsCatalog", {
         requestId: requestId("cachedgames"),
         leagueId: created.leagueId,
+        weekId: week.weekId,
         sportCode: "football",
         leagueCode: "demo-football",
         leagueIdForProvider: "demo-football",
@@ -184,8 +219,26 @@ describe("emulator pick'em lifecycle", () => {
           getFunctions(memberA, "us-central1"),
           "listSportsCatalog",
         )({
+          requestId: requestId("membercatalog"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          sportCode: "football",
+          leagueCode: "demo-football",
+          leagueIdForProvider: "demo-football",
+          season: "demo",
+          from: day,
+          to: day,
+          forceRefresh: false,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        httpsCallable(
+          getFunctions(memberA, "us-central1"),
+          "listSportsCatalog",
+        )({
           requestId: requestId("memberforce"),
           leagueId: created.leagueId,
+          weekId: week.weekId,
           sportCode: "football",
           leagueCode: "demo-football",
           leagueIdForProvider: "demo-football",
@@ -314,14 +367,210 @@ describe("emulator pick'em lifecycle", () => {
       const gameReference = adminDb.doc(
         `leagues/${created.leagueId}/weeks/${week.weekId}/games/${gameId}`,
       );
-      await gameReference.update({
-        effectiveLockAtUtc: Timestamp.fromMillis(Date.now() - 60_000),
-      });
-      await call(owner, "revealLockedGamePicks", {
-        requestId: requestId("reveal"),
+      await call(owner, "overrideGameResult", {
+        requestId: requestId("future-override"),
         leagueId: created.leagueId,
         weekId: week.weekId,
+        gameId,
+        status: "final",
+        homeScore: 24,
+        awayScore: 17,
+        winnerTeamId: homeTeamId,
+        reason: "Future result privacy regression.",
       });
+      const [futureEntryA, futureEntryB, futureWeek, futurePickA] =
+        await Promise.all([
+          adminDb
+            .doc(
+              `leagues/${created.leagueId}/weeks/${week.weekId}/entries/${memberAUid}`,
+            )
+            .get(),
+          adminDb
+            .doc(
+              `leagues/${created.leagueId}/weeks/${week.weekId}/entries/${memberBUid}`,
+            )
+            .get(),
+          weekReference.get(),
+          adminDb
+            .doc(
+              `leagues/${created.leagueId}/weeks/${week.weekId}/entries/${memberAUid}/picks/${gameId}`,
+            )
+            .get(),
+        ]);
+      for (const entry of [futureEntryA, futureEntryB]) {
+        expect(entry.data()).toMatchObject({
+          gradedCount: 0,
+          correctCount: 0,
+          incorrectCount: 0,
+          voidCount: 0,
+          points: 0,
+          accuracy: null,
+          weeklyRank: null,
+          isWeeklyWinner: false,
+        });
+      }
+      expect(futureWeek.data()?.winnerUids).toEqual([]);
+      expect(futureWeek.data()?.highScore).toBeNull();
+      expect(futureWeek.data()?.resultMutationRequestId).toBeUndefined();
+      expect(futureWeek.data()?.gameResultsVersion).toBe(1);
+      expect(futurePickA.data()?.outcome).toBe("pending");
+      expect(futurePickA.data()?.points).toBe(0);
+      await weekReference.update({
+        finalizationRequestId: "active-finalization",
+        finalizationStartedAt: Timestamp.now(),
+      });
+      await expect(
+        httpsCallable(
+          getFunctions(owner, "us-central1"),
+          "overrideGameResult",
+        )({
+          requestId: requestId("override-during-finalize"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          gameId,
+          status: "final",
+          homeScore: 17,
+          awayScore: 24,
+          winnerTeamId: awayTeamId,
+          reason: "Must not cross a finalization claim.",
+        }),
+      ).rejects.toThrow();
+      await weekReference.update({
+        finalizationRequestId: FieldValue.delete(),
+        finalizationStartedAt: FieldValue.delete(),
+      });
+      expect((await gameReference.get()).data()?.winnerTeamId).toBe(homeTeamId);
+      const preexistingRevealReference = adminDb.doc(
+        `leagues/${created.leagueId}/weeks/${week.weekId}/reveals/${gameId}/picks/${memberAUid}`,
+      );
+      await Promise.all([
+        gameReference.update({
+          effectiveLockAtUtc: Timestamp.fromMillis(Date.now() - 60_000),
+          status: "final",
+          homeScore: 24,
+          awayScore: 17,
+          winnerTeamId: homeTeamId,
+          resultVersion: "integration-home-result",
+          pickRevealClaimId: "abandoned-reveal-claim",
+          pickRevealRequestId: "abandoned-reveal-request",
+          pickRevealStartedAt: Timestamp.fromMillis(Date.now() - 6 * 60_000),
+          pickRevealHeartbeatAt: Timestamp.fromMillis(Date.now() - 6 * 60_000),
+        }),
+        preexistingRevealReference.set({
+          uid: memberAUid,
+          selectedTeamId: homeTeamId,
+          displayName: "Member A",
+          outcome: "correct",
+          points: 1,
+          outcomeVersion: "integration-home-result",
+        }),
+      ]);
+      const concurrentReveals = await Promise.all([
+        call<RevealCallableResult>(owner, "revealLockedGamePicks", {
+          requestId: requestId("reveal-a"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+        }),
+        call<RevealCallableResult>(owner, "revealLockedGamePicks", {
+          requestId: requestId("reveal-b"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+        }),
+      ]);
+      expect(
+        concurrentReveals.reduce(
+          (count, result) => count + result.revealedGameCount,
+          0,
+        ),
+      ).toBe(1);
+      const hydratedReveal = concurrentReveals.find(
+        (result) => result.revealsByGame[gameId]?.length === 2,
+      );
+      expect(hydratedReveal).toBeDefined();
+      expect(
+        hydratedReveal?.revealsByGame[gameId]?.map(
+          (reveal) => reveal.selectedTeamId,
+        ),
+      ).toEqual(expect.arrayContaining([homeTeamId, awayTeamId]));
+      expect(hydratedReveal?.revealPage.returnedPickCount).toBeLessThanOrEqual(
+        200,
+      );
+      const preservedReveal = await preexistingRevealReference.get();
+      expect(preservedReveal.data()?.outcome).toBe("correct");
+      expect(preservedReveal.data()?.points).toBe(1);
+      expect(preservedReveal.data()?.outcomeVersion).toBe(
+        "integration-home-result",
+      );
+      const newlyGradedReveal = await adminDb
+        .doc(
+          `leagues/${created.leagueId}/weeks/${week.weekId}/reveals/${gameId}/picks/${memberBUid}`,
+        )
+        .get();
+      expect(newlyGradedReveal.data()?.outcome).toBe("incorrect");
+      expect(newlyGradedReveal.data()?.points).toBe(0);
+
+      const repeatedReveal = await call<RevealCallableResult>(
+        owner,
+        "revealLockedGamePicks",
+        {
+          requestId: requestId("reveal-repeat"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+        },
+      );
+      expect(repeatedReveal.revealedGameCount).toBe(0);
+      expect(repeatedReveal.revealsByGame[gameId]).toHaveLength(2);
+
+      const firstRevealPage = await call<RevealCallableResult>(
+        owner,
+        "revealLockedGamePicks",
+        {
+          requestId: requestId("reveal-page-one"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          revealPageSize: 1,
+        },
+      );
+      expect(firstRevealPage.revealPage.truncated).toBe(true);
+      expect(firstRevealPage.revealPage.returnedPickCount).toBe(1);
+      expect(firstRevealPage.revealPage.nextCursor).not.toBeNull();
+      const secondRevealPage = await call<RevealCallableResult>(
+        owner,
+        "revealLockedGamePicks",
+        {
+          requestId: requestId("reveal-page-two"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          revealPageSize: 1,
+          revealCursor: firstRevealPage.revealPage.nextCursor,
+        },
+      );
+      expect(secondRevealPage.revealPage.truncated).toBe(false);
+      expect(secondRevealPage.revealPage.returnedPickCount).toBe(1);
+      expect(
+        [
+          ...(firstRevealPage.revealsByGame[gameId] ?? []),
+          ...(secondRevealPage.revealsByGame[gameId] ?? []),
+        ].map((reveal) => reveal.uid),
+      ).toEqual(expect.arrayContaining([memberAUid, memberBUid]));
+
+      const scheduledReveal = await revealLockedPicks({
+        leagueId: created.leagueId,
+        weekId: week.weekId,
+        actorUid: "system",
+        requestId: requestId("scheduled-reveal"),
+        skipAuthorization: true,
+        includeRevealPayload: false,
+      });
+      expect(scheduledReveal.revealedGameCount).toBe(0);
+      expect(scheduledReveal.revealsByGame).toEqual({});
+      expect(scheduledReveal.revealPage.included).toBe(false);
+      const revealedGame = await gameReference.get();
+      expect(revealedGame.data()?.pickRevealCompletedAt).toBeInstanceOf(
+        Timestamp,
+      );
+      expect(revealedGame.data()?.pickRevealClaimId).toBeUndefined();
+      expect(revealedGame.data()?.pickRevealRequestId).toBeUndefined();
       await call(owner, "overrideGameResult", {
         requestId: requestId("overridehome"),
         leagueId: created.leagueId,
@@ -332,6 +581,27 @@ describe("emulator pick'em lifecycle", () => {
         awayScore: 17,
         winnerTeamId: homeTeamId,
         reason: "Integration final result.",
+      });
+      await weekReference.update({
+        resultMutationRequestId: "active-result-mutation",
+        resultMutationStartedAt: Timestamp.now(),
+        resultMutationHeartbeatAt: Timestamp.now(),
+      });
+      await expect(
+        httpsCallable(getFunctions(owner, "us-central1"), "finalizeWeek")({
+          requestId: requestId("finalize-during-results"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+        }),
+      ).rejects.toThrow();
+      const weekAfterBlockedFinalize = await weekReference.get();
+      expect(
+        weekAfterBlockedFinalize.data()?.finalizationRequestId,
+      ).toBeUndefined();
+      await weekReference.update({
+        resultMutationRequestId: FieldValue.delete(),
+        resultMutationStartedAt: FieldValue.delete(),
+        resultMutationHeartbeatAt: FieldValue.delete(),
       });
       const finalized = await call<{
         winnerUids: string[];
@@ -431,6 +701,160 @@ describe("emulator pick'em lifecycle", () => {
       expect(standingA.data()?.totalPoints).toBe(0);
       expect(standingB.data()?.totalPoints).toBe(1);
       expect(reveal.data()?.outcome).toBe("correct");
+      await deleteAdminApp(adminApp);
+    },
+    120_000,
+  );
+
+  it(
+    "keeps entry completion monotonic across concurrent game submissions",
+    async () => {
+      const owner = await createSignedInApp("concurrent-submit-owner");
+      const member = await createSignedInApp("concurrent-submit-member");
+      const memberUid = getAuth(member).currentUser?.uid;
+      expect(memberUid).toBeTruthy();
+      const adminApp = initializeAdminApp(
+        {projectId},
+        "concurrent-submit-admin",
+      );
+      const adminDb = getAdminFirestore(adminApp);
+
+      const created = await call<{leagueId: string; inviteCode: string}>(
+        owner,
+        "createLeague",
+        {
+          requestId: requestId("concurrent-create"),
+          name: "Concurrent Entry Arena",
+          timezone: "America/Chicago",
+          settings: {providerName: "mock"},
+        },
+      );
+      await call(member, "joinLeagueByCode", {
+        requestId: requestId("concurrent-join"),
+        inviteCode: created.inviteCode,
+        nickname: "Concurrent Member",
+      });
+      const start = new Date();
+      start.setUTCHours(0, 0, 0, 0);
+      start.setUTCDate(start.getUTCDate() + 1);
+      const end = new Date(start.valueOf() + 7 * 24 * 60 * 60_000);
+      const week = await call<{weekId: string}>(owner, "createDraftWeek", {
+        requestId: requestId("concurrent-week"),
+        leagueId: created.leagueId,
+        sequentialNumber: 1,
+        label: "Concurrent Week",
+        startAt: start.toISOString(),
+        endAt: end.toISOString(),
+      });
+      const day = start.toISOString().slice(0, 10);
+      const catalog = await call<{
+        games: Array<Record<string, unknown>>;
+      }>(owner, "listSportsCatalog", {
+        requestId: requestId("concurrent-catalog"),
+        leagueId: created.leagueId,
+        weekId: week.weekId,
+        sportCode: "football",
+        leagueCode: "demo-football",
+        leagueIdForProvider: "demo-football",
+        season: "demo",
+        from: day,
+        to: day,
+        forceRefresh: false,
+      });
+      const selectedGames = catalog.games.slice(0, 2);
+      expect(selectedGames).toHaveLength(2);
+      await call(owner, "saveDraftSlate", {
+        requestId: requestId("concurrent-save"),
+        leagueId: created.leagueId,
+        weekId: week.weekId,
+        chunkKey: requestId("concurrent-chunk"),
+        games: selectedGames,
+        removeGameIds: [],
+      });
+      await call(owner, "publishWeeklySlate", {
+        requestId: requestId("concurrent-publish"),
+        leagueId: created.leagueId,
+        weekId: week.weekId,
+      });
+
+      const firstGame = selectedGames[0] as {
+        id: string;
+        homeTeam: {id: string};
+      };
+      const secondGame = selectedGames[1] as {
+        id: string;
+        awayTeam: {id: string};
+      };
+      await Promise.all([
+        call(member, "submitOrConfirmEntry", {
+          requestId: requestId("concurrent-pick-a"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          picks: [
+            {
+              gameId: firstGame.id,
+              selectedTeamId: firstGame.homeTeam.id,
+            },
+          ],
+        }),
+        call(member, "submitOrConfirmEntry", {
+          requestId: requestId("concurrent-pick-b"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          picks: [
+            {
+              gameId: secondGame.id,
+              selectedTeamId: secondGame.awayTeam.id,
+            },
+          ],
+        }),
+      ]);
+
+      const entryReference = adminDb.doc(
+        `leagues/${created.leagueId}/weeks/${week.weekId}/entries/${memberUid}`,
+      );
+      const [entry, picks] = await Promise.all([
+        entryReference.get(),
+        entryReference.collection("picks").get(),
+      ]);
+      expect(picks.size).toBe(2);
+      expect(entry.data()).toMatchObject({
+        savedPickCount: 2,
+        totalRequiredPickCount: 2,
+        completionState: "complete",
+      });
+      expect(entry.data()?.submittedAt).toBeInstanceOf(Timestamp);
+
+      await Promise.all([
+        call(member, "submitOrConfirmEntry", {
+          requestId: requestId("duplicate-pick-a"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          picks: [
+            {
+              gameId: firstGame.id,
+              selectedTeamId: firstGame.homeTeam.id,
+            },
+          ],
+        }),
+        call(member, "submitOrConfirmEntry", {
+          requestId: requestId("duplicate-pick-b"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          picks: [
+            {
+              gameId: firstGame.id,
+              selectedTeamId: firstGame.homeTeam.id,
+            },
+          ],
+        }),
+      ]);
+      const afterDuplicates = await entryReference.get();
+      expect(afterDuplicates.data()).toMatchObject({
+        savedPickCount: 2,
+        totalRequiredPickCount: 2,
+        completionState: "complete",
+      });
       await deleteAdminApp(adminApp);
     },
     120_000,

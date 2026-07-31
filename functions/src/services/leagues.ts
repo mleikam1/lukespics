@@ -12,6 +12,7 @@ import {
   type AuthenticatedUser,
 } from "../authz.js";
 import {auth, db} from "../config.js";
+import {assertProviderAllowedForRuntime} from "../providers/policy.js";
 import type {LeagueSettings, MemberRole} from "../types.js";
 import {
   commitWritesInChunks,
@@ -31,7 +32,7 @@ const DEFAULT_SETTINGS: LeagueSettings = {
   enabledSports: [],
   enabledLeagues: [],
   manualFinalizationRequired: true,
-  providerName: "mock",
+  providerName: "manual",
 };
 
 export async function ensureProfile(
@@ -91,6 +92,7 @@ export async function createLeagueRecord(input: {
   const inviteCodeHash = opaqueHash(inviteCode, getInvitePepper());
   const invite = inviteReferences(inviteCodeHash, leagueId);
   const settings = {...DEFAULT_SETTINGS, ...input.settings};
+  assertProviderAllowedForRuntime(settings.providerName);
   const baseSlug = slugify(input.name);
   const slug = `${baseSlug}-${leagueId.slice(-6)}`;
 
@@ -326,7 +328,8 @@ export async function leaveLeagueRecord(input: {
   if (member.role === "owner") {
     throw new HttpsError(
       "failed-precondition",
-      "Transfer ownership before leaving this arena.",
+      "Owners cannot leave an active arena. Ownership transfer is not "
+        + "available in this release.",
     );
   }
   const reference = db
@@ -415,6 +418,9 @@ export async function updateSettings(input: {
   settings: Partial<LeagueSettings>;
 }): Promise<void> {
   await requireOwner(input.leagueId, input.actorUid);
+  if (input.settings.providerName !== undefined) {
+    assertProviderAllowedForRuntime(input.settings.providerName);
+  }
   const reference = db.collection("leagues").doc(input.leagueId);
   await db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(reference);
@@ -559,7 +565,8 @@ export async function anonymizeAccount(input: {
   ) {
     throw new HttpsError(
       "failed-precondition",
-      "Transfer ownership of active arenas before deleting your account.",
+      "Owners of active arenas cannot delete their account. Ownership "
+        + "transfer is not available in this release.",
     );
   }
   const alias = `Former member ${sha256(input.user.uid).slice(0, 6).toUpperCase()}`;

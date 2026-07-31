@@ -27,6 +27,25 @@ const inviteCodeHash = createHmac("sha256", pepper)
   .update(inviteCode)
   .digest("hex");
 const now = Date.now();
+const currentSeason = new Date(now).getUTCFullYear().toString();
+
+await db.collection("systemConfig").doc("theSportsDbTestCatalog").set({
+  internalOnly: true,
+  attribution: {
+    text: "Sports data and artwork from TheSportsDB",
+    url: "https://www.thesportsdb.com",
+  },
+  leagues: [
+    {
+      sportCode: "baseball",
+      leagueCode: "mlb",
+      leagueName: "Major League Baseball",
+      providerLeagueId: "4424",
+      season: currentSeason,
+    },
+  ],
+  seededAt: FieldValue.serverTimestamp(),
+});
 
 const members = [
   {uid: "demo-owner", displayName: "Casey", role: "owner"},

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/bootstrap.dart';
 import '../../core/domain/league_time.dart';
 import '../../core/responsive/breakpoints.dart';
 import '../../core/widgets/ui.dart';
@@ -19,11 +20,12 @@ class SlateReviewScreen extends ConsumerWidget {
       padding: AppBreakpoints.pagePadding(context),
       children: [
         PageHeader(
-          eyebrow: 'Week 9 · Draft',
+          eyebrow: '${controller.weekLabel} · Draft',
           title: 'Review and publish',
           description:
-              'Publishing opens this slate to 3 eligible participants. Future '
-              'edits require commissioner action.',
+              'Publishing opens this slate to '
+              '${controller.prospectiveEligibleMemberCount} eligible '
+              'participants. It cannot be silently changed afterward.',
           action: OutlinedButton.icon(
             onPressed: () => context.go('/catalog'),
             icon: const Icon(Icons.arrow_back_rounded),
@@ -44,12 +46,18 @@ class SlateReviewScreen extends ConsumerWidget {
             ),
           )
         else ...[
-          _RulesSummary(gameCount: games.length),
+          _RulesSummary(
+            gameCount: games.length,
+            participantCount: controller.prospectiveEligibleMemberCount,
+            lockPolicy: controller.weekLockPolicy,
+            pickerParticipates: controller.pickerParticipatesInCurrentWeek,
+          ),
           const SizedBox(height: 18),
           for (final game in games) ...[
             _ReviewGameCard(
               game: game,
               timezone: controller.leagueTimezone,
+              logoPolicy: _logoPolicy(controller, game),
               onRemove: controller.slatePublished
                   ? null
                   : () => controller.removeSlateGame(game.id),
@@ -82,10 +90,10 @@ class SlateReviewScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         icon: const Icon(Icons.sports_score_rounded),
-        title: const Text('Publish Week 9?'),
-        content: const Text(
-          'Members can begin making picks immediately. Each game locks at its '
-          'own effective start time.',
+        title: Text('Publish ${controller.weekLabel}?'),
+        content: Text(
+          'Members can begin making picks immediately. '
+          '${controller.weekLockPolicy == PickLockPolicy.perGame ? 'Each game locks at its own effective start time.' : 'Every game locks when the first selected game starts.'}',
         ),
         actions: [
           TextButton(
@@ -101,18 +109,53 @@ class SlateReviewScreen extends ConsumerWidget {
     );
     if (confirmed != true || !context.mounted) return;
     final published = await controller.publishSlate();
-    if (!context.mounted || !published) return;
+    if (!context.mounted) return;
+    if (!published) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            controller.errorMessage ??
+                'The slate could not be published. Review it and retry.',
+          ),
+        ),
+      );
+      return;
+    }
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Week 9 is published and open for picks.')),
+      SnackBar(
+        content: Text(
+          '${controller.weekLabel} is published and open for picks.',
+        ),
+      ),
     );
     context.go('/dashboard');
+  }
+
+  TeamLogoPolicy _logoPolicy(AppController controller, Game game) {
+    if (controller.runtimeMode != AppRuntimeMode.firebaseEmulator ||
+        game.provider != 'theSportsDbTest') {
+      return const TeamLogoPolicy.disabled();
+    }
+    return const TeamLogoPolicy.provider(
+      provider: 'theSportsDbTest',
+      logoRightsVerified: true,
+      allowedHosts: {'r2.thesportsdb.com'},
+    );
   }
 }
 
 class _RulesSummary extends StatelessWidget {
-  const _RulesSummary({required this.gameCount});
+  const _RulesSummary({
+    required this.gameCount,
+    required this.participantCount,
+    required this.lockPolicy,
+    required this.pickerParticipates,
+  });
 
   final int gameCount;
+  final int participantCount;
+  final PickLockPolicy lockPolicy;
+  final bool pickerParticipates;
 
   @override
   Widget build(BuildContext context) {
@@ -126,20 +169,22 @@ class _RulesSummary extends StatelessWidget {
             label: 'Games',
             value: '$gameCount selected',
           ),
-          const _RuleItem(
+          _RuleItem(
             icon: Icons.groups_rounded,
             label: 'Participants',
-            value: '3 eligible',
+            value: '$participantCount eligible',
           ),
-          const _RuleItem(
+          _RuleItem(
             icon: Icons.lock_clock_rounded,
             label: 'Lock policy',
-            value: 'Per game',
+            value: lockPolicy == PickLockPolicy.perGame
+                ? 'Per game'
+                : 'First game',
           ),
-          const _RuleItem(
+          _RuleItem(
             icon: Icons.person_off_outlined,
             label: 'Weekly picker',
-            value: 'Does not pick',
+            value: pickerParticipates ? 'Participates' : 'Does not pick',
           ),
         ],
       ),
@@ -191,11 +236,13 @@ class _ReviewGameCard extends StatelessWidget {
   const _ReviewGameCard({
     required this.game,
     required this.timezone,
+    required this.logoPolicy,
     this.onRemove,
   });
 
   final Game game;
   final String timezone;
+  final TeamLogoPolicy logoPolicy;
   final VoidCallback? onRemove;
 
   @override
@@ -204,7 +251,7 @@ class _ReviewGameCard extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       child: Row(
         children: [
-          TeamBadge(team: game.awayTeam, size: 42),
+          TeamBadge(team: game.awayTeam, size: 42, logoPolicy: logoPolicy),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -226,7 +273,7 @@ class _ReviewGameCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          TeamBadge(team: game.homeTeam, size: 42),
+          TeamBadge(team: game.homeTeam, size: 42, logoPolicy: logoPolicy),
           if (onRemove != null) ...[
             const SizedBox(width: 8),
             IconButton(

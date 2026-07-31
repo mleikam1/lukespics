@@ -38,8 +38,8 @@ class LegalScreen extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                'Starter notice · July 2026 · Review with qualified counsel '
-                'before a public commercial launch.',
+                'Pre-release notice · Review with qualified counsel before a '
+                'public commercial launch.',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -115,9 +115,10 @@ const _content = <String, _LegalContent>{
     (
       'Sports data',
       'Schedules, team identifiers, scores, and final results may be supplied '
-          'by API-Sports, another configured licensed provider, mock fixtures, '
-          'or manual commissioner entry. Cached data can be shown while a '
-          'provider refresh is delayed.',
+          'by a configured authorized provider or by manual commissioner '
+          'entry. Mock fixtures and internal test providers are testing-only '
+          'and are never represented as production data. Cached authorized '
+          'data can be shown while a provider refresh is delayed.',
     ),
     (
       'Independent product',
@@ -127,17 +128,19 @@ const _content = <String, _LegalContent>{
     ),
     (
       'Artwork',
-      'The Luke’s Picks shield and checkmark are original. Demo teams use '
-          'neutral generated initials. Provider team artwork should always '
-          'fall back to text when unavailable or blocked.',
+      'The Luke’s Picks shield and checkmark are original. Team artwork is '
+          'shown only when display rights are verified and the image host is '
+          'explicitly approved. Otherwise the product uses neutral text '
+          'initials. ESPN-hosted artwork is not displayed.',
     ),
   ]),
   'account-deletion': _LegalContent('Account deletion', [
     (
       'Requesting deletion',
       'Use the account controls in Settings or contact the operator. Before an '
-          'owner can leave, ownership must be transferred or the arena must be '
-          'closed through an authorized process.',
+          'owner can leave or delete their account, a supported ownership '
+          'transfer or arena-closure workflow must be available. This release '
+          'blocks both owner actions to preserve the arena and its history.',
     ),
     (
       'Historical integrity',

@@ -1,5 +1,5 @@
 import {z} from "zod";
-import {API_SPORTS_KEY, positiveIntegerSetting} from "../config.js";
+import {positiveIntegerSetting} from "../config.js";
 import type {
   GameStatus,
   NormalizedGame,
@@ -210,7 +210,7 @@ export class ApiSportsProvider implements SportsDataProvider {
     config: ApiSportsConfig,
     query: Record<string, string>,
   ): Promise<z.infer<typeof envelopeSchema>> {
-    const key = API_SPORTS_KEY.value().trim();
+    const key = process.env.API_SPORTS_KEY?.trim() ?? "";
     if (key.length === 0) {
       throw new Error("API-Sports secret is not configured.");
     }

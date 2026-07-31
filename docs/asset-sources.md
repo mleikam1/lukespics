@@ -5,8 +5,13 @@
 - Demo team shields and initials: original geometric placeholders generated for
   this repository.
 - Material icons: provided by Flutter under its applicable license.
-- Real team logo URLs, if enabled later, are identifying metadata returned by
-  the configured licensed provider and always have a text/initials fallback.
+- Neutral team initials badges are the production default.
+- A remote team-mark URL may be used only when it is returned by the configured
+  provider, uses HTTPS on an allowlisted host, and its publication rights have
+  been reviewed. Provider access alone is not a logo license.
+- TheSportsDB marks are internal-test-only, use an API-returned small/tiny URL,
+  retain aspect ratio, include attribution, and always fall back on load error.
 
-No ESPN, professional league, college league, or team asset is bundled as
-application branding.
+No ESPN-hosted image may be downloaded, proxied, cached, embedded, or hotlinked.
+No professional league, college league, or team asset is bundled as application
+branding. This file records provenance; it is not legal approval.

@@ -1,52 +1,243 @@
 # Testing
 
-## Test layers
+Until the handoff commit exists, test evidence must identify the reviewed tree
+and diff; afterward it must identify the exact commit. It must also record the
+exact command, runtime version, exit code, test count, warnings, and whether
+each warning blocks release.
 
-- Flutter unit (18 tests): scoring, missing/void picks, co-winners, weighted
-  accuracy, picker eligibility, rotation, retry/correction behavior, locks, and
-  Chicago DST.
-- Flutter widget (10 tests): auth/demo states, create/join, dashboard variants,
-  slate selection validation, exclusive team choices, sync/lock states,
-  standings breakpoints, co-winners, semantics, and route guards.
-- Functions unit (8 tests): authoritative scoring, eligibility, deterministic
-  retries, result-version normalization, tie review, deterministic mock
-  provider output, and stale/future catalog eligibility.
-- Firestore rules: unauthenticated/nonmember/cross-league denial, private pick
-  isolation, post-lock reveal, late/invalid pick denial, score/role manipulation,
-  picker/admin boundaries, and server-internal collection denial (9 tests).
-- Emulator integration (1 lifecycle test): create/join, cached catalog,
-  privileged refresh denial, private pre-lock pick denial, reveal, scoring,
-  duplicate finalization, correction, standings, and single rotation advance.
-- Seed smoke test: four Auth users plus a deterministic league, rotation,
-  finalized/draft weeks, and eight games.
-- Responsive visual QA: dashboard captures at 390, 768, and 1440 logical-pixel
-  widths were visually reviewed without visible overflow. This must not be
-  inferred from widget tests and does not replace accessibility/device QA. The
-  capture session browser console reported 0 warnings/errors.
+## Connected release evidence — 2026-07-30/31
 
-## Commands
+`./scripts/test_browser_e2e.sh` passed under Flutter 3.44.4 / Dart 3.12.2,
+Node 22.23.1, Java 21.0.9, Firebase CLI 15.24.0, and installed system Chrome.
+It exercised one complete connected lifecycle with three isolated browser users
+against Auth, Firestore, Functions, and Hosting emulators.
+
+The passing scenario covered create/join, explicit sign-out/re-sign-in and
+refresh restoration, a documented TheSportsDB internal schedule, exact draft
+addition/removal, publication, changed picks, picker exclusion by default,
+pre-lock privacy, server lock and late rejection, reveal, manual results,
+finalization, standings, a single rotation, next-week creation, and picker
+participation enabled in Week 2. Browser console, page, and local failed-response
+diagnostics were release assertions.
+
+The run also proved the settings-patch regression fix. Updating only
+`pickerParticipatesInPicks` no longer injects default values for omitted
+settings or resets provider policy; the Week 2 picker could still load the
+TheSportsDB internal catalog after the setting changed. A focused schema unit
+test covers the same patch behavior.
+
+The local backend manifest contains 29 Gen 2 exports: 28 callables and one
+scheduled Function. TheSportsDB fixture/policy coverage proves documented
+normalization, bounded provider behavior, attribution, the exact emulator/flag
+gate, and rejection in `lukes-picks`. Production remains `manual`.
+
+The documentation-stable final matrix passed: formatting checked 51 files with
+0 changes, analysis found no issues, Flutter passed 57/57 tests, Functions
+passed 25/25 unit/contract tests, rules passed 10/10, emulator integration
+passed 2/2, Android debug and iOS simulator builds passed, and a fresh connected
+web release passed the source/secret/public-artifact scans. Exact layers and
+historical audit evidence are recorded in
+[validation-report.md](validation-report.md).
+
+## Production preview smoke — 2026-07-31
+
+The guarded preview-only deployment targets only `lukes-picks`
+(`271408880910`) and is available at
+<https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app>. Firebase
+displayed expiry `2026-08-07 07:50:46`. The deployed `main.dart.js` SHA-256 is
+`e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`.
+
+The real-browser smoke verified production Google popup sign-in, reload with
+the same authenticated session and arena membership restored, arena/dashboard
+loading, production manual-catalog behavior, the corrected useful empty state,
+explicit sign-out, and repeat sign-in/session restoration. The repeat popup was
+slow to settle, but a clean reload restored the authenticated arena without a
+console warning or error. Two empty manual-provider smoke arenas created by the
+browser retries remain intentionally for inspection; deletion was not
+authorized.
+
+This was not a production sports-provider lifecycle test. Production remains
+`manual`, TheSportsDB remains emulator-only, API-Sports remains deferred, and
+neutral team badges remain required. Live Hosting was untouched and no mobile
+store build was published.
+
+## Baseline automated layers
+
+The 2026-07-27 committed baseline contained:
+
+- 18 Flutter domain/unit tests;
+- 12 Flutter widget/controller tests, all using demo state;
+- 8 Functions unit/contract tests;
+- 10 Firestore rules tests;
+- 1 direct SDK/callable emulator lifecycle test using three anonymous users;
+- an emulator seed smoke test;
+- demo dashboard screenshots at 390, 768, and 1440 pixels.
+
+The emulator lifecycle covers create/join, catalog caching, a privileged refresh
+denial, stale catalog rejection, save/publish contention, pre-lock privacy,
+reveal, manual result, scoring, duplicate finalization repair, correction,
+standings, and one rotation advance.
+
+It bypasses the Flutter UI. `integration_test/` was empty at the pre-release
+audit. The connected release candidate adds the local Playwright Core target
+described below; it launches an installed system Chrome and does not download a
+browser.
+
+## Required connected browser test
+
+Run Flutter web against Auth, Firestore, Functions, and Hosting emulators under
+`demo-lukes-picks-local` with at least three users:
+
+1. Owner creates an arena.
+2. Members join and membership restores after refresh.
+3. The designated picker opens a sanitized real-schedule test catalog.
+4. The picker selects multiple games and removes one.
+5. The exact desired slate is saved and published.
+6. A member sees only the final selected games.
+7. The member makes and changes an open pick.
+8. The picker is excluded when participation is disabled.
+9. Other users, including the owner, cannot read pre-lock choices.
+10. Authoritative emulator state advances past one lock.
+11. A late change is rejected while a later open game remains editable.
+12. Picks reveal.
+13. Results are applied and the week finalizes.
+14. Standings update and rotation advances once.
+15. The next week is created and assigned.
+16. Refresh, sign-out, and sign-in restore the same state.
+17. Repeat relevant assertions with picker participation enabled.
+
+Across the browser target plus the Flutter/controller, rules, and Functions
+integration suites, the combined matrix must also exercise optimistic rollback,
+duplicate taps, offline local draft/retry, exact draft removal, idempotent
+publish/finalize, and owner leave/account-deletion prevention.
+
+### Local Playwright Core target
+
+Run the connected browser lifecycle from the repository root:
 
 ```bash
+npm --prefix functions ci
+./scripts/test_browser_e2e.sh
+```
+
+The script requires Node 22, Java 21, Flutter, and system Chrome/Chromium
+(`CHROME_PATH` may select a nonstandard executable). It hard-gates
+`demo-lukes-picks-local` and the loopback Auth 9099, Firestore 8080, Functions
+5001, and Hosting 5002 ports. It builds an emulator-only Flutter web release,
+starts only those four emulators, seeds the internal provider configuration,
+and never invokes deployment. Because `build/web` then contains emulator
+defines, rebuild the production release before running the public-build scan or
+deploying.
+
+The browser drives three isolated contexts through sign-in, owner creation, two
+joins, explicit sign-out/re-sign-in and refresh restoration, live TheSportsDB
+catalog attribution and selection/save/removal/publish, member pick
+creation/change, default picker exclusion, reveal, manual void results,
+future-participation setting, finalize, standings, rotation, next-week creation,
+and an enabled picker publishing and submitting a Week 2 pick. Semantic
+role/name locators are used after enabling Flutter web accessibility.
+
+Two security assertions deliberately use the browser users' captured emulator
+ID tokens outside the rendered UI: Firestore REST proves owner/peer denial of a
+pre-lock private pick, and a direct callable proves authoritative late-pick
+rejection after the server lock. Firebase Admin is pointed only at the
+emulators; its writes are limited to advancing selected-game lock timestamps.
+Admin reads verify exact draft size, authoritative snapshots, standings,
+rotation, and Week 2 eligibility. Manual results, reveal, finalization, and
+next-week creation remain UI-driven.
+
+This target intentionally uses the documented current-season MLB test schedule
+from TheSportsDB, so outbound network access and at least three future games in
+the seven-day window are prerequisites. Fixture normalization remains covered
+by unit tests; there is no runtime fixture-injection path. Browser console/page
+errors and local failed responses fail the run. The only ignored request noise
+is a Firestore listen aborted by browser navigation and failed provider artwork
+that exercises the documented initials fallback.
+
+## Provider and logo tests
+
+Sanitized fixtures—not live calls—must cover:
+
+- TheSportsDB event/team normalization and malformed responses;
+- HTTPS and host allowlists;
+- schedule/team cache freshness and duplicate suppression;
+- timeout, bounded retry, rate limit, and raw-response hash;
+- production rejection of `mock` and `theSportsDbTest`;
+- API-Sports disabled behavior without a key;
+- missing, broken, and disallowed logos falling back to neutral initials;
+- production logo-rights gate and TheSportsDB attribution.
+
+No provider key or unrestricted provider payload belongs in a fixture.
+
+## Full local matrix
+
+Use Node 22 for Functions and Java 21 for emulators.
+
+```bash
+flutter doctor -v
+flutter pub get
 dart format --output=none --set-exit-if-changed .
 flutter analyze
 flutter test
-flutter build web --release
+flutter build apk --debug
+flutter build ios --simulator
+
 npm --prefix functions ci
 npm --prefix functions run lint
 npm --prefix functions run typecheck
 npm --prefix functions test
+npm --prefix functions run build
 npm --prefix functions run test:rules
 npm --prefix functions run test:integration
+npm audit --prefix functions --omit=dev
+npm audit --prefix functions
+
+./scripts/test_browser_e2e.sh
+
+flutter build web --release
+bash -n scripts/*.sh
+./scripts/check_public_source.sh
+./scripts/check_public_build.sh build/web
 ```
 
-Functions are configured for Node 22. The Firebase Emulator Suite was verified
-with Java 21; use that runtime for rules, integration, and seed commands. The
-iOS simulator build requires iOS 15 and the project’s CocoaPods fallback.
+Do not use `npm audit fix --force`.
 
-Provider tests use sanitized fixtures only. Test reports must distinguish a
-passed command from a command blocked by an unavailable browser/device/runtime.
-No authenticated provider contract test, real Firebase test, or cloud smoke test
-has been run.
+## Release scans
 
-See [validation-report.md](validation-report.md) for the dated command/result
-matrix, build artifacts, npm advisory count, and known limitations.
+`check_public_source.sh` verifies:
+
+- exact fail-closed aliases;
+- the authorized Flutter project/app number;
+- production and emulator bootstrap project checks;
+- no duplicate web Firebase initialization;
+- no Wingman or ESPN runtime host;
+- no likely tracked secret.
+
+`check_public_build.sh` requires a nonempty fresh web release, rejects source
+files newer than the main bundle, confirms the authorized project number,
+requires the connected-production compile-time attestation, and rejects a
+non-public attestation, active emulator/test flags, forbidden project or ESPN
+hosts, source maps, symbolic links, control-character paths, and likely secret
+markers. It scans every deployed regular file—including wasm, images, and
+fonts—rather than trusting file extensions. The preview wrapper scans before
+and after a metadata-preserving copy, then deploys the read-only staged bytes.
+The bootstrap pairs that attestation with a fail-closed invariant that prevents
+a public release from entering demo or emulator mode.
+
+Firebase client API keys in generated Flutter options are public identifiers,
+not server secrets. The scan intentionally permits them while rejecting
+service-account material, provider keys, invite peppers, and private keys.
+
+## CI
+
+Pull requests and pushes to `codex/lukes-picks-mvp` or
+`codex/connected-picker-flow` run:
+
+- Flutter dependency resolution, format, analysis, tests, web build, source
+  scan, and fresh public-build scan;
+- Node 22 / Java 21 Functions install, critical-threshold audit reporting,
+  lint, typecheck, unit tests, rules tests, emulator integration, and build.
+
+CI has no deployment credentials and performs no cloud write. Native builds and
+the browser-to-emulator test remain required local/release evidence unless a
+dedicated runner is added.

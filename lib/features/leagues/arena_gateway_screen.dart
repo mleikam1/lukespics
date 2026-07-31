@@ -155,13 +155,12 @@ class _ArenaGatewayScreenState extends ConsumerState<ArenaGatewayScreen> {
               ),
             ),
             const SizedBox(height: 14),
-            const TextField(
-              readOnly: true,
+            const InputDecorator(
               decoration: InputDecoration(
                 labelText: 'League timezone',
-                hintText: 'America/Chicago',
                 prefixIcon: Icon(Icons.schedule_rounded),
               ),
+              child: Text('America/Chicago'),
             ),
             const SizedBox(height: 14),
             SwitchListTile(
@@ -173,6 +172,16 @@ class _ArenaGatewayScreenState extends ConsumerState<ArenaGatewayScreen> {
               value: _pickerParticipates,
               onChanged: (value) => setState(() => _pickerParticipates = value),
             ),
+            if (controller.errorMessage != null) ...[
+              const SizedBox(height: 10),
+              Semantics(
+                liveRegion: true,
+                child: Text(
+                  controller.errorMessage!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            ],
             const SizedBox(height: 20),
             FilledButton(
               onPressed: _busy

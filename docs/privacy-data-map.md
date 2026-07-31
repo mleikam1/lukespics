@@ -11,14 +11,22 @@ Starter operational documentation; not attorney-approved.
 | Scores/statistics | entries/standings | Competition results | Active league members |
 | Audit events | audit logs | Integrity/admin review | Owner/commissioner |
 | Provider cache/usage | server collections | Schedule/results and quota safety | Backend |
-| Analytics events | Firebase Analytics | Product reliability/usage | Authorized operators |
+| Unconfirmed offline choice | Device memory/local app state | User-visible retry before lock | Current user only; never counted until server confirmation |
+| Team-mark URL | Normalized game/team metadata | Optional team identification | Members only when host/rights gate permits |
+| Analytics events | Firebase Analytics | Product reliability/usage when explicitly enabled | Authorized operators |
 
-Analytics never include raw email, invite code, API key, or private team choice.
-Logs use request/function/league/week/provider identifiers and safe error codes.
+Analytics collection is compile-time opt-in through `ENABLE_ANALYTICS` and is
+disabled by default. When enabled, events never include raw email, invite code,
+API key, or private team choice. Logs use
+request/function/league/week/provider identifiers and safe error codes.
 
 Account deletion removes private identity where possible and anonymizes
 historical identity where deletion would corrupt finalized league records. The
 UI explains this integrity-preserving behavior before confirmation.
+
+An active owner cannot leave or delete their account in this release because
+ownership transfer is not yet supported. Completion counts may be public to
+arena members, but pre-lock team choices are never analytics or audit fields.
 
 Data retention and formal deletion timelines require owner/legal approval before
 public launch.

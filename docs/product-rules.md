@@ -7,6 +7,8 @@ This document is authoritative for the MVP.
 - The arena uses explicit sequential weeks with UTC `startAt` and `endAt`
   timestamps and a league timezone (default `America/Chicago`).
 - One weekly picker selects at least one game. There is no product-level maximum.
+- Catalog candidates are not selected games. Members see only the picker’s
+  exact published week snapshots.
 - The picker is ineligible to make winner picks by default. The
   `pickerParticipatesInPicks` league setting can opt them in; the value is
   snapshotted on publication.
@@ -20,6 +22,8 @@ This document is authoritative for the MVP.
   or picks were revealed.
 - Picks are private before each game lock. Completion state is visible, choices
   are not. A server-generated reveal is readable by members after lock.
+- An offline choice is an unconfirmed local draft. Arrival after lock is
+  rejected.
 
 ## Results and ranking
 
@@ -41,8 +45,13 @@ This document is authoritative for the MVP.
 - Rotation is explicitly ordered and skips inactive members.
 - New members append to the end and normally become eligible the next week if
   the current slate is already published.
-- Finalization advances the picker only when manual finalization is complete.
+- Finalization advances the picker exactly once when manual finalization is
+  complete.
+- An authorized administrator creates the next sequential week and assigns the
+  proposed rotated picker.
 - Leaving/inactivation preserves historical results.
+- An owner cannot leave or delete their account while still owning an active
+  arena.
 
 ## Roles
 
@@ -52,6 +61,15 @@ This document is authoritative for the MVP.
   ownership transfer/deletion.
 - Member: own eligible picks and member-visible results.
 - Weekly picker: a temporary week responsibility; can edit only the draft slate.
+
+## Provider and team-mark rules
+
+- Production uses manual schedules/results until a production provider passes
+  coverage, quota, terms, and publication-rights review.
+- Mock and TheSportsDB test schedules are emulator/internal-test-only.
+- No ESPN scraping, internal endpoints, or image hotlinking.
+- Team marks require permitted rights and an allowlisted HTTPS host; otherwise
+  the UI uses a neutral initials badge.
 
 ## Explicit exclusions
 

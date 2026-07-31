@@ -15,13 +15,33 @@ export type GradeableGame = {
   status: string;
   winnerTeamId: string | null;
   resultVersion: string;
-  revealed?: boolean;
+  revealed: boolean;
 };
 
 export type PickForScoring = {
   gameId: string;
   selectedTeamId: string;
 };
+
+export type GameResultVersionSnapshot = {
+  id: string;
+  resultVersion: string;
+};
+
+export function gameResultVersionsAreStable(
+  claimed: GameResultVersionSnapshot[],
+  current: GameResultVersionSnapshot[],
+): boolean {
+  const currentById = new Map(
+    current.map((game) => [game.id, game.resultVersion]),
+  );
+  return (
+    claimed.length === currentById.size &&
+    claimed.every(
+      (game) => currentById.get(game.id) === game.resultVersion,
+    )
+  );
+}
 
 export function scoreEntry(
   uid: string,
@@ -47,6 +67,9 @@ export function scoreEntry(
   let voidCount = 0;
 
   for (const game of games) {
+    if (!game.revealed) {
+      continue;
+    }
     if (game.status === "void" || game.status === "cancelled") {
       voidCount += 1;
       continue;
@@ -76,7 +99,7 @@ export function scoreEntry(
 
 function competitionRanks(scores: EntryScore[]): Map<string, number> {
   const sorted = [...scores]
-    .filter((score) => score.eligible)
+    .filter((score) => score.eligible && score.gradedCount > 0)
     .sort((left, right) => right.points - left.points);
   const ranks = new Map<string, number>();
   let previousPoints: number | null = null;
@@ -161,7 +184,9 @@ export async function gradeWeek(
       if (game === undefined) continue;
       let outcome: "pending" | "correct" | "incorrect" | "void" = "pending";
       let points = 0;
-      if (game.status === "void" || game.status === "cancelled") {
+      if (!game.revealed) {
+        outcome = "pending";
+      } else if (game.status === "void" || game.status === "cancelled") {
         outcome = "void";
       } else if (game.status === "final" && game.winnerTeamId !== null) {
         outcome =
@@ -185,7 +210,7 @@ export async function gradeWeek(
           },
         });
       }
-      if (game.revealed === true) {
+      if (game.revealed) {
         const revealReference = weekReference
           .collection("reveals")
           .doc(game.id)
@@ -565,13 +590,18 @@ export async function finalizeWeekAuthoritatively(input: {
     return finalizedResponse(initialData);
   }
 
-  const claimed = await db.runTransaction(async (transaction) => {
+  const claim = await db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(weekReference);
     const data = snapshot.data();
     if (data === undefined) {
       throw new HttpsError("not-found", "Week not found.");
     }
-    if (data.status === "finalized") return false;
+    if (data.status === "finalized") {
+      return {
+        claimed: false,
+        gameResultsVersion: Number(data.gameResultsVersion ?? 0),
+      };
+    }
     if (
       !["open", "inProgress", "review", "reopened"].includes(
         String(data.status),
@@ -597,14 +627,35 @@ export async function finalizeWeekAuthoritatively(input: {
         "This week is already being finalized.",
       );
     }
+    const resultMutationStartedAt =
+      data.resultMutationHeartbeatAt instanceof Timestamp
+        ? data.resultMutationHeartbeatAt
+        : data.resultMutationStartedAt;
+    const activeResultMutation =
+      typeof data.resultMutationRequestId === "string" &&
+      resultMutationStartedAt instanceof Timestamp &&
+      resultMutationStartedAt.toMillis() > Date.now() - 5 * 60_000;
+    if (activeResultMutation) {
+      throw new HttpsError(
+        "aborted",
+        "Game results are currently being updated.",
+      );
+    }
     transaction.update(weekReference, {
       finalizationRequestId: input.requestId,
       finalizationStartedAt: FieldValue.serverTimestamp(),
+      resultMutationRequestId: FieldValue.delete(),
+      resultMutationClaimId: FieldValue.delete(),
+      resultMutationStartedAt: FieldValue.delete(),
+      resultMutationHeartbeatAt: FieldValue.delete(),
     });
-    return true;
+    return {
+      claimed: true,
+      gameResultsVersion: Number(data.gameResultsVersion ?? 0),
+    };
   });
 
-  if (!claimed) {
+  if (!claim.claimed) {
     const finalizedWeek = await weekReference.get();
     return finalizedResponse(finalizedWeek.data() ?? {});
   }
@@ -612,6 +663,10 @@ export async function finalizeWeekAuthoritatively(input: {
   let result: Awaited<ReturnType<typeof gradeWeek>>;
   try {
     const games = await weekReference.collection("games").get();
+    const claimedGameResultVersions = games.docs.map((game) => ({
+      id: game.id,
+      resultVersion: String(game.data().resultVersion ?? "unversioned"),
+    }));
     if (
       games.empty ||
       games.docs.some((game) =>
@@ -647,7 +702,10 @@ export async function finalizeWeekAuthoritatively(input: {
     }
     result = await gradeWeek(input.leagueId, input.weekId);
     await db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(weekReference);
+      const [snapshot, currentGames] = await Promise.all([
+        transaction.get(weekReference),
+        transaction.get(weekReference.collection("games")),
+      ]);
       const data = snapshot.data();
       if (
         data?.status === "finalized" &&
@@ -665,6 +723,24 @@ export async function finalizeWeekAuthoritatively(input: {
         throw new HttpsError(
           "aborted",
           "Week state changed during finalization.",
+        );
+      }
+      const stableGameResultVersions = gameResultVersionsAreStable(
+        claimedGameResultVersions,
+        currentGames.docs.map((game) => ({
+          id: game.id,
+          resultVersion: String(game.data().resultVersion ?? "unversioned"),
+        })),
+      );
+      if (
+        typeof data.resultMutationRequestId === "string" ||
+        typeof data.resultMutationClaimId === "string" ||
+        Number(data.gameResultsVersion ?? 0) !== claim.gameResultsVersion ||
+        !stableGameResultVersions
+      ) {
+        throw new HttpsError(
+          "aborted",
+          "Game results changed during finalization.",
         );
       }
       transaction.update(weekReference, {
@@ -704,26 +780,26 @@ export async function advanceRotationOnce(
   finalizedWeekId: string,
 ): Promise<string | null> {
   const leagueReference = db.collection("leagues").doc(leagueId);
-  const members = await leagueReference
+  const activeMembersQuery = leagueReference
     .collection("members")
-    .where("status", "==", "active")
-    .get();
-  const ordered = members.docs
-    .map((member) => ({
-      uid: member.id,
-      rotationOrder: Number(member.data().rotationOrder ?? 0),
-    }))
-    .sort((left, right) => left.rotationOrder - right.rotationOrder);
-  if (ordered.length === 0) return null;
+    .where("status", "==", "active");
 
   return db.runTransaction(async (transaction) => {
     const finalizedWeekReference = leagueReference
       .collection("weeks")
       .doc(finalizedWeekId);
-    const [leagueSnapshot, finalizedWeek] = await Promise.all([
+    const [leagueSnapshot, finalizedWeek, members] = await Promise.all([
       transaction.get(leagueReference),
       transaction.get(finalizedWeekReference),
+      transaction.get(activeMembersQuery),
     ]);
+    const ordered = members.docs
+      .map((member) => ({
+        uid: member.id,
+        rotationOrder: Number(member.data().rotationOrder ?? 0),
+      }))
+      .sort((left, right) => left.rotationOrder - right.rotationOrder);
+    if (ordered.length === 0) return null;
     const league = leagueSnapshot.data();
     if (league === undefined) {
       throw new HttpsError("not-found", "Arena not found.");

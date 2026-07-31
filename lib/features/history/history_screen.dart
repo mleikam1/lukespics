@@ -188,6 +188,31 @@ class HistoryDetailScreen extends ConsumerWidget {
     final controller = ref.watch(appControllerProvider);
     final matches = controller.historyWeeks.where((week) => week.id == weekId);
     final liveWeek = matches.isEmpty ? null : matches.first;
+    if (liveWeek == null && !controller.isDemo) {
+      return ListView(
+        padding: AppBreakpoints.pagePadding(context),
+        children: [
+          PageHeader(
+            eyebrow: 'Finalized snapshot',
+            title: 'Week not found',
+            description:
+                'This finalized week is unavailable or you no longer have '
+                'access to its arena.',
+            action: OutlinedButton.icon(
+              onPressed: () => context.go('/history'),
+              icon: const Icon(Icons.arrow_back_rounded),
+              label: const Text('All weeks'),
+            ),
+          ),
+          const SizedBox(height: 22),
+          const EmptyState(
+            icon: Icons.search_off_rounded,
+            title: 'No connected snapshot',
+            message: 'No demo winner, picker, or score has been substituted.',
+          ),
+        ],
+      );
+    }
     final label = liveWeek?.label ?? weekId.replaceAll('week-', 'Week ');
     final pickerName = liveWeek == null
         ? 'Luke Carter'

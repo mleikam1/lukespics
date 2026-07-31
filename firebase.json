@@ -68,7 +68,7 @@
         "headers": [
           {
             "key": "Cache-Control",
-            "value": "public,max-age=31536000,immutable"
+            "value": "public,max-age=3600,must-revalidate"
           }
         ]
       }
@@ -85,12 +85,26 @@
       "port": 8080
     },
     "hosting": {
-      "port": 5000
+      "port": 5002
     },
     "ui": {
       "enabled": true,
       "port": 4000
     },
     "singleProjectMode": true
+  },
+  "flutter": {
+    "platforms": {
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "lukes-picks",
+          "configurations": {
+            "android": "1:271408880910:android:a99dd01fb4d5bb8114cb5f",
+            "ios": "1:271408880910:ios:dd22577f5d50ef1f14cb5f",
+            "web": "1:271408880910:web:b7e8b5aa9d2cbc1314cb5f"
+          }
+        }
+      }
+    }
   }
 }

@@ -4,14 +4,17 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../core/widgets/brand_mark.dart';
 import '../core/firebase/firebase_bootstrap.dart';
+import '../firebase_options.dart';
 import 'app.dart';
+import 'build_profile.dart';
 import 'theme/app_theme.dart';
 
-enum AppRuntimeMode { demo, firebaseEmulator, firebase }
+enum AppRuntimeMode { demo, firebaseEmulator, firebase, configurationError }
 
 final class BootstrapResult {
   const BootstrapResult({required this.mode, this.message});
@@ -24,59 +27,66 @@ final class AppBootstrap {
   const AppBootstrap._();
 
   static Future<BootstrapResult> initialize() async {
-    const useFirebase = bool.fromEnvironment('USE_FIREBASE');
-    const useEmulators = bool.fromEnvironment('USE_FIREBASE_EMULATORS');
-    if (useEmulators) {
-      return _initializeEmulators();
+    if (requestedPublicRelease && !isConnectedPublicRelease) {
+      return const BootstrapResult(
+        mode: AppRuntimeMode.configurationError,
+        message:
+            'A public release must be a release build with demo, Firebase '
+            'emulator, and browser-test authentication disabled.',
+      );
     }
-    if (!useFirebase) {
+    if (!requestedPublicRelease && !useDemoRuntime && !useFirebaseEmulators) {
+      return const BootstrapResult(
+        mode: AppRuntimeMode.configurationError,
+        message:
+            'A non-public build must explicitly select demo or Firebase '
+            'emulator mode.',
+      );
+    }
+    if (useDemoRuntime && useFirebaseEmulators) {
+      return const BootstrapResult(
+        mode: AppRuntimeMode.configurationError,
+        message:
+            'Conflicting runtime flags were supplied. Choose either the '
+            'explicit demo or Firebase emulator runtime.',
+      );
+    }
+    if (useDemoRuntime) {
       return const BootstrapResult(mode: AppRuntimeMode.demo);
     }
-
-    const apiKey = String.fromEnvironment('FIREBASE_API_KEY');
-    const appId = String.fromEnvironment('FIREBASE_APP_ID');
-    const messagingSenderId = String.fromEnvironment(
-      'FIREBASE_MESSAGING_SENDER_ID',
-    );
-    const projectId = String.fromEnvironment('FIREBASE_PROJECT_ID');
-    const authDomain = String.fromEnvironment('FIREBASE_AUTH_DOMAIN');
-    const storageBucket = String.fromEnvironment('FIREBASE_STORAGE_BUCKET');
-    const measurementId = String.fromEnvironment('FIREBASE_MEASUREMENT_ID');
-
-    if ([
-      apiKey,
-      appId,
-      messagingSenderId,
-      projectId,
-    ].any((value) => value.isEmpty)) {
-      return const BootstrapResult(
-        mode: AppRuntimeMode.demo,
-        message:
-            'Firebase was requested but required compile-time values are '
-            'missing. Safe demo mode is active.',
-      );
+    if (useFirebaseEmulators) {
+      return _initializeEmulators();
     }
 
     try {
+      final options = DefaultFirebaseOptions.currentPlatform;
+      if (options.projectId != 'lukes-picks') {
+        return const BootstrapResult(
+          mode: AppRuntimeMode.configurationError,
+          message:
+              'This build is not configured for the authorized Luke’s Picks '
+              'Firebase project.',
+        );
+      }
       await Firebase.initializeApp(
-        options: const FirebaseOptions(
-          apiKey: apiKey,
-          appId: appId,
-          messagingSenderId: messagingSenderId,
-          projectId: projectId,
-          authDomain: authDomain,
-          storageBucket: storageBucket,
-          measurementId: measurementId,
-        ),
+        options: options,
       ).timeout(const Duration(seconds: 6));
+      if (Firebase.app().options.projectId != 'lukes-picks') {
+        return const BootstrapResult(
+          mode: AppRuntimeMode.configurationError,
+          message:
+              'Firebase initialized with an unexpected project. No app data '
+              'was loaded.',
+        );
+      }
       await FirebaseServiceBootstrap.configureProductionServices();
       return const BootstrapResult(mode: AppRuntimeMode.firebase);
     } on Object {
       return const BootstrapResult(
-        mode: AppRuntimeMode.demo,
+        mode: AppRuntimeMode.configurationError,
         message:
-            'Firebase could not be initialized. Your session is using safe '
-            'demo data.',
+            'Luke’s Picks could not connect to Firebase. Check your network '
+            'and retry. Demo data has not been loaded.',
       );
     }
   }
@@ -84,7 +94,7 @@ final class AppBootstrap {
   static Future<BootstrapResult> _initializeEmulators() async {
     const projectId = String.fromEnvironment(
       'FIREBASE_PROJECT_ID',
-      defaultValue: 'lukespics-demo',
+      defaultValue: 'demo-lukes-picks-local',
     );
     const host = String.fromEnvironment(
       'FIREBASE_EMULATOR_HOST',
@@ -102,6 +112,14 @@ final class AppBootstrap {
       'FIREBASE_FUNCTIONS_EMULATOR_PORT',
       defaultValue: 5001,
     );
+    if (projectId != 'demo-lukes-picks-local') {
+      return const BootstrapResult(
+        mode: AppRuntimeMode.configurationError,
+        message:
+            'Firebase emulators must use the isolated '
+            'demo-lukes-picks-local project.',
+      );
+    }
     try {
       await Firebase.initializeApp(
         options: const FirebaseOptions(
@@ -113,15 +131,24 @@ final class AppBootstrap {
         ),
       ).timeout(const Duration(seconds: 6));
       await FirebaseAuth.instance.useAuthEmulator(host, authPort);
+      if (kIsWeb) {
+        // Normal emulator sessions mirror production's durable browser
+        // identity. The strict browser-E2E build uses its own loopback-only
+        // session marker and NONE here: restoring a dummy-key LOCAL Firebase
+        // session can contact Identity Toolkit before useAuthEmulator applies.
+        await FirebaseAuth.instance.setPersistence(
+          enableBrowserE2eAuth ? Persistence.NONE : Persistence.LOCAL,
+        );
+      }
       FirebaseFirestore.instance.useFirestoreEmulator(host, firestorePort);
       FirebaseFunctions.instance.useFunctionsEmulator(host, functionsPort);
       return const BootstrapResult(mode: AppRuntimeMode.firebaseEmulator);
     } on Object {
       return const BootstrapResult(
-        mode: AppRuntimeMode.demo,
+        mode: AppRuntimeMode.configurationError,
         message:
-            'The Firebase emulators were unavailable. Safe demo mode is '
-            'active so the app remains usable.',
+            'The isolated Firebase emulators are unavailable. Start them and '
+            'retry; demo data has not been loaded.',
       );
     }
   }
@@ -135,7 +162,13 @@ class LukesPicksBootstrap extends StatefulWidget {
 }
 
 class _LukesPicksBootstrapState extends State<LukesPicksBootstrap> {
-  late final Future<BootstrapResult> _bootstrap = AppBootstrap.initialize();
+  late Future<BootstrapResult> _bootstrap = AppBootstrap.initialize();
+
+  void _retry() {
+    setState(() {
+      _bootstrap = AppBootstrap.initialize();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -143,7 +176,14 @@ class _LukesPicksBootstrapState extends State<LukesPicksBootstrap> {
       future: _bootstrap,
       builder: (context, snapshot) {
         if (snapshot.hasData) {
-          return LukesPicksApp(bootstrap: snapshot.data!);
+          final result = snapshot.data!;
+          if (result.mode == AppRuntimeMode.configurationError) {
+            return _ConfigurationErrorApp(
+              message: result.message ?? 'Firebase configuration failed.',
+              onRetry: _retry,
+            );
+          }
+          return LukesPicksApp(bootstrap: result);
         }
         return MaterialApp(
           debugShowCheckedModeBanner: false,
@@ -153,6 +193,56 @@ class _LukesPicksBootstrapState extends State<LukesPicksBootstrap> {
           home: const _SplashScreen(),
         );
       },
+    );
+  }
+}
+
+class _ConfigurationErrorApp extends StatelessWidget {
+  const _ConfigurationErrorApp({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Luke’s Picks',
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      home: Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const BrandMark(size: 88, showWordmark: false),
+                    const SizedBox(height: 24),
+                    Text(
+                      'Connection required',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(message, textAlign: TextAlign.center),
+                    const SizedBox(height: 20),
+                    FilledButton.icon(
+                      key: const Key('firebase-bootstrap-retry'),
+                      onPressed: onRetry,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('Retry connection'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

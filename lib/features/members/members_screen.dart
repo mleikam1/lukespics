@@ -42,21 +42,30 @@ class MembersScreen extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: 18),
-        for (var index = 0; index < members.length; index += 1) ...[
-          _MemberCard(
-            member: members[index],
-            position: index,
-            total: members.length,
-            isCurrentPicker: members[index].uid == controller.currentPickerId,
-            canManage: controller.canAdmin,
-            timezone: controller.leagueTimezone,
-            onMove: (direction) =>
-                controller.moveMember(members[index].uid, direction),
-            onToggleStatus: () =>
-                controller.toggleMemberStatus(members[index].uid),
-          ),
-          const SizedBox(height: 12),
-        ],
+        if (members.isEmpty)
+          const EmptyState(
+            icon: Icons.group_off_outlined,
+            title: 'No members loaded',
+            message:
+                'Member records will appear here after the arena membership '
+                'subscription is available.',
+          )
+        else
+          for (var index = 0; index < members.length; index += 1) ...[
+            _MemberCard(
+              member: members[index],
+              position: index,
+              total: members.length,
+              isCurrentPicker: members[index].uid == controller.currentPickerId,
+              canManage: controller.canAdmin,
+              timezone: controller.leagueTimezone,
+              onMove: (direction) =>
+                  controller.moveMember(members[index].uid, direction),
+              onToggleStatus: () =>
+                  controller.toggleMemberStatus(members[index].uid),
+            ),
+            const SizedBox(height: 12),
+          ],
       ],
     );
   }
@@ -180,8 +189,17 @@ class _MemberCard extends StatelessWidget {
   }
 }
 
-String _initials(String name) =>
-    name.split(' ').take(2).map((part) => part[0]).join();
+String _initials(String name) {
+  final parts = name
+      .trim()
+      .split(RegExp(r'\s+'))
+      .where((part) => part.isNotEmpty);
+  final initials = parts
+      .take(2)
+      .map((part) => part.characters.first.toUpperCase())
+      .join();
+  return initials.isEmpty ? '?' : initials;
+}
 
 String _roleLabel(LeagueRole role) => switch (role) {
   LeagueRole.owner => 'Owner',

@@ -1,5 +1,6 @@
 {
   "projects": {
-    "default": "demo-lukes-picks-local"
+    "default": "demo-lukes-picks-local",
+    "prod": "lukes-picks"
   }
 }
