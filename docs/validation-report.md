@@ -89,7 +89,7 @@ audit evidence remains valid and is preserved in the dated sections below.
 | Live Hosting | Untouched; no live deployment |
 | Production browser smoke | Google sign-in, reload/session/membership restore, arena/dashboard, manual catalog, corrected empty state, explicit sign-out, and repeat sign-in passed |
 | Production smoke data | Two empty manual-provider arenas, each with one draft week, one active owner, and no selected games, retained because deletion was not authorized |
-| Final commit, push, and draft pull request | Pending |
+| Final commit, push, and draft pull request | Implementation commit `9df0d38` pushed; [draft PR #1](https://github.com/mleikam1/lukespics/pull/1) opened against `codex/lukes-picks-mvp` |
 
 The Functions deployment command returned exit 1 solely because the CLI could
 not configure an automatic Artifact Registry cleanup policy after all 29
@@ -104,8 +104,8 @@ as passed. The full picker lifecycle remains proven in the isolated
 browser/emulator test because production sports mode intentionally remains
 `manual`.
 
-The only pending handoff item is commit, push, and draft pull request. Deferred
-public production and store gates still include App Check valid-token
+The repository handoff is complete in draft PR #1. Deferred public production
+and store gates still include App Check valid-token
 monitoring/enforcement, production sports-data and logo rights, accessibility,
 physical devices, legal review, operational alerting, release signing, and app
 store publication. Ownership transfer also remains unsupported; the backend

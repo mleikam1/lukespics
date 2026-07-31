@@ -11,8 +11,9 @@ overall standings.
 > `connected-picker-flow` preview were verified; live Hosting was untouched.
 > Production Google sign-in, reload/session/membership restoration, the arena
 > dashboard, and the manual-catalog empty state passed a real-browser smoke
-> test. Commit, push, and draft pull request remain explicitly pending. This is
-> not a public production or app-store readiness claim.
+> test. The branch is pushed and tracked in
+> [draft PR #1](https://github.com/mleikam1/lukespics/pull/1). This is not a
+> public production or app-store readiness claim.
 
 ## Product contract
 
@@ -278,6 +279,8 @@ and fresh-build scans. The wrapper has no live Hosting action.
 - All Functions deployed successfully, but `gcf-artifacts` has no automatic
   cleanup policy; the CLI’s resulting exit-1 retention warning is documented
   separately from Function health.
-- Commit, push, and draft PR are pending.
+- Implementation commit `9df0d38` is pushed on
+  `codex/connected-picker-flow`; handoff is tracked in
+  [draft PR #1](https://github.com/mleikam1/lukespics/pull/1).
 
 No app-store build or live Hosting release is part of this workflow.

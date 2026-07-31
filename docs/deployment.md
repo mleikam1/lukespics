@@ -31,9 +31,9 @@ Recorded release state:
 | Preview expiry | Firebase output: `2026-08-07 07:50:46` |
 | Preview bundle | `main.dart.js` SHA-256 `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da` |
 | Live Hosting | Untouched |
-| Browser smoke | Google sign-in, reload/session/membership restore, arena/dashboard, manual catalog, empty-state fix, and explicit sign-out passed |
+| Browser smoke | Google sign-in, reload/session/membership restore, arena/dashboard, manual catalog, empty-state fix, explicit sign-out, and repeat sign-in passed |
 | Firestore rollback input | Prior ruleset `projects/lukes-picks/rulesets/5628e0a8-ee8b-4dd9-b8c2-5fbac9fd3213` |
-| Commit, push, and draft PR | Pending |
+| Commit, push, and draft PR | Implementation commit `9df0d38` pushed; [draft PR #1](https://github.com/mleikam1/lukespics/pull/1) opened against `codex/lukes-picks-mvp` |
 
 The Functions CLI returned exit 1 only because it could not configure an
 automatic cleanup policy after every Function deployment had succeeded. The

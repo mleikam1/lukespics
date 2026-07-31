@@ -105,12 +105,12 @@ the passing connected-flow and guarded-preview evidence.
       `projects/lukes-picks/rulesets/5628e0a8-ee8b-4dd9-b8c2-5fbac9fd3213`
 - [x] Documentation and validation report match observed results
 - [x] Complete diff and secret scan reviewed
-- [ ] Intentional commit pushed and draft PR created
+- [x] Implementation commit `9df0d38` pushed and
+      [draft PR #1](https://github.com/mleikam1/lukespics/pull/1) opened
 - [x] No Android/iOS store build published
 
-## Remaining handoff item and operational follow-up
+## Operational follow-up
 
-- Final commit, push, and draft pull request.
 - Review the two empty manual-provider production smoke arenas before any
   separately authorized cleanup; deletion is intentionally not part of this
   release.

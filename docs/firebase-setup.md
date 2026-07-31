@@ -78,7 +78,7 @@ That snapshot is retained for provenance and was superseded by the guarded
 | `connected-picker-flow` preview | <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app> |
 | Preview expiry | Firebase output: `2026-08-07 07:50:46` |
 | Preview bundle | `main.dart.js` SHA-256 `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da` |
-| Preview browser smoke | Google sign-in, reload/session/membership restoration, arena/dashboard, manual catalog, corrected empty state, and explicit sign-out passed |
+| Preview browser smoke | Google sign-in, reload/session/membership restoration, arena/dashboard, manual catalog, corrected empty state, explicit sign-out, and repeat sign-in passed |
 | Live Hosting | Untouched; no live deployment |
 
 Live Hosting remained untouched. The Functions CLI returned exit 1 solely for
