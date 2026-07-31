@@ -79,22 +79,35 @@ That snapshot is retained for provenance and was superseded by the guarded
 | Preview expiry | Firebase output: `2026-08-07 07:50:46` |
 | Preview bundle | `main.dart.js` SHA-256 `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da` |
 | Preview browser smoke | Google sign-in, reload/session/membership restoration, arena/dashboard, manual catalog, corrected empty state, explicit sign-out, and repeat sign-in passed |
-| Live Hosting | Untouched; no live deployment |
+| Live promotion | Exact preview channel cloned to `lukes-picks:live` at Firebase CLI time `18:10:14` on 2026-07-31 |
+| Permanent live URLs | <https://lukes-picks.web.app> and <https://lukes-picks.firebaseapp.com>; both HTTP 200 |
+| Live bundle and source | Preview-identical SHA-256 `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`; source commit `c38136070082a0895c6cca0f118841bb0972520e` |
+| Live response verification | CSP, COOP `same-origin-allow-popups`, HSTS, `nosniff`, `SAMEORIGIN`, Permissions Policy, and Referrer Policy present; no preview `noindex` header |
+| Live browser smoke | Desktop and `390x844` phone-size sign-in screen rendered; Privacy, Terms, and Data sources passed; zero warning/error console logs |
 
-Live Hosting remained untouched. The Functions CLI returned exit 1 solely for
-its post-deployment cleanup-policy prompt after all 29 Functions had deployed
-successfully. Artifact Registry repository `gcf-artifacts` has no automatic
-cleanup policy; that retention/cost warning should be handled separately and
-must not be “fixed” by deleting unreviewed images.
+The exact preview artifact was promoted to live as recorded above. The
+Functions CLI returned exit 1 solely for its post-deployment cleanup-policy
+prompt after all 29 Functions had deployed successfully. Artifact Registry
+repository `gcf-artifacts` has no automatic cleanup policy; that retention/cost
+warning should be handled separately and must not be “fixed” by deleting
+unreviewed images.
 
 ## Authentication and platform status
 
 Google sign-in is enabled with the Luke’s Picks public name and configured
-support email. A production popup sign-in succeeded on the preview, and reload
-restored the authenticated session and arena membership. Explicit sign-out and
-repeat sign-in also passed. The automated repeat popup was slow to settle, but a
-clean reload restored the authenticated arena without a console warning or
-error.
+support email. An authenticated popup sign-in succeeded on the preview, and
+reload restored the authenticated session and arena membership. Explicit
+sign-out and repeat sign-in also passed. The automated repeat popup was slow to
+settle, but a clean reload restored the authenticated arena without a console
+warning or error.
+
+For live, Firebase configuration was independently verified: authorized domains
+include both `lukes-picks.web.app` and `lukes-picks.firebaseapp.com`, the Google
+provider is enabled/configured, and the auth handlers return HTTP 200. The
+automated in-app browser could not complete the live Google popup. Manual Google
+sign-in on a permanent live URL remains the user handoff check; live
+authenticated smoke is not claimed. The authenticated preview smoke remains
+relevant because the live bundle digest is identical.
 
 The Android debug SHA-1 is registered. The Firebase app IDs and native
 package/bundle identifiers match the checked-in Flutter configuration. Add only

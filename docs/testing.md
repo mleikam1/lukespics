@@ -1,9 +1,9 @@
 # Testing
 
-Until the handoff commit exists, test evidence must identify the reviewed tree
-and diff; afterward it must identify the exact commit. It must also record the
-exact command, runtime version, exit code, test count, warnings, and whether
-each warning blocks release.
+Test evidence must identify the exact reviewed tree or commit and record the
+command, runtime version, exit code, test count, warnings, and whether each
+warning blocks release. The live web artifact records source commit
+`c38136070082a0895c6cca0f118841bb0972520e`.
 
 ## Connected release evidence — 2026-07-30/31
 
@@ -39,7 +39,7 @@ web release passed the source/secret/public-artifact scans. Exact layers and
 historical audit evidence are recorded in
 [validation-report.md](validation-report.md).
 
-## Production preview smoke — 2026-07-31
+## Authenticated production preview smoke — 2026-07-31
 
 The guarded preview-only deployment targets only `lukes-picks`
 (`271408880910`) and is available at
@@ -58,8 +58,33 @@ authorized.
 
 This was not a production sports-provider lifecycle test. Production remains
 `manual`, TheSportsDB remains emulator-only, API-Sports remains deferred, and
-neutral team badges remain required. Live Hosting was untouched and no mobile
-store build was published.
+neutral team badges remain required. This exact artifact was later cloned to
+live, so its authenticated preview evidence remains relevant because the bundle
+digest is identical. No mobile store build was published.
+
+## Live Hosting smoke — 2026-07-31
+
+At Firebase CLI time `18:10:14`, the exact `connected-picker-flow` preview
+channel was cloned to `lukes-picks:live`. Both permanent URLs,
+<https://lukes-picks.web.app> and <https://lukes-picks.firebaseapp.com>,
+returned HTTP 200. The live `main.dart.js` SHA-256 is
+`e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`,
+identical to the authenticated, browser-tested preview, from source commit
+`c38136070082a0895c6cca0f118841bb0972520e`.
+
+Live responses verified Content Security Policy, COOP
+`same-origin-allow-popups`, HSTS, `nosniff`, `SAMEORIGIN`, Permissions Policy,
+and Referrer Policy. The preview-only `noindex` header is absent on live. The
+sign-in screen rendered on desktop and a `390x844` phone-size viewport;
+Privacy, Terms, and Data sources passed; and the console recorded zero warnings
+or errors.
+
+Firebase configuration was independently verified: both permanent domains are
+authorized, the Google provider is enabled/configured, and the auth handlers
+return HTTP 200. The automated in-app browser could not complete the live Google
+popup, so this is not a live authenticated-smoke claim. Manual Google sign-in
+on a permanent live URL remains the user handoff check. Authenticated preview
+smoke passed on the identical artifact.
 
 ## Baseline automated layers
 

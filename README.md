@@ -5,15 +5,29 @@ designated picker chooses the slate, eligible arena members choose straight-up
 winners, picks stay private until lock, and final results update weekly and
 overall standings.
 
-> Status as of 2026-07-31: the guarded backend release and Hosting preview are
-> deployed only to the authorized `lukes-picks` project
-> (`271408880910`). Firestore rules/indexes, 29 Gen 2 Functions, and the
-> `connected-picker-flow` preview were verified; live Hosting was untouched.
-> Production Google sign-in, reload/session/membership restoration, the arena
-> dashboard, and the manual-catalog empty state passed a real-browser smoke
-> test. The branch is pushed and tracked in
-> [draft PR #1](https://github.com/mleikam1/lukespics/pull/1). This is not a
-> public production or app-store readiness claim.
+> Status as of 2026-07-31: the guarded backend release and
+> `connected-picker-flow` Hosting preview were deployed only to the authorized
+> `lukes-picks` project (`271408880910`), and that exact preview channel was
+> cloned to `lukes-picks:live` at Firebase CLI time `18:10:14`. Both permanent
+> URLs, <https://lukes-picks.web.app> and
+> <https://lukes-picks.firebaseapp.com>, returned HTTP 200. The live
+> `main.dart.js` SHA-256 is
+> `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`,
+> identical to the browser-tested preview, from source commit
+> `c38136070082a0895c6cca0f118841bb0972520e`.
+>
+> Authenticated Google sign-in, reload/session/membership restoration, the
+> arena dashboard, and the manual-catalog empty state passed on the identical
+> preview artifact. Live unauthenticated browser smoke passed on desktop and a
+> `390x844` phone-size viewport, including Privacy, Terms, and Data sources,
+> with zero warning/error console logs. Google Auth is independently verified
+> as enabled/configured, both permanent domains are authorized, and the auth
+> handlers return HTTP 200. The automated in-app browser could not complete the
+> live Google popup, so manual Google sign-in on a permanent live URL remains a
+> user handoff check; live authenticated smoke is not claimed. The implementation
+> was merged in [PR #1](https://github.com/mleikam1/lukespics/pull/1) as commit
+> `c38136070082a0895c6cca0f118841bb0972520e`.
+> This web release is not an app-store or full production-readiness claim.
 
 ## Product contract
 
@@ -227,7 +241,8 @@ does not deploy.
 ## Deployment
 
 The connected implementation has passed its three-user browser-to-emulator
-release gate and its guarded Firebase preview release. The active preview is:
+release gate, its guarded Firebase preview release, and the authorized clone of
+that exact preview artifact to live. The preview record is:
 
 - URL:
   <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app>
@@ -239,8 +254,13 @@ The active Firestore ruleset is
 `projects/lukes-picks/rulesets/93614c6a-add3-47ad-88df-b9d9e18a00fb`, all five
 composite indexes are `READY`, `INVITE_CODE_PEPPER` version 1 exists without
 its value being recorded, and all 29 Functions are active/Cloud Run ready.
-`scheduledResultSync` runs every 30 minutes on UTC time. Live Hosting was not
-deployed. See [release-checklist.md](docs/release-checklist.md) and
+`scheduledResultSync` runs every 30 minutes on UTC time. At Firebase CLI time
+`18:10:14` on 2026-07-31, the exact `connected-picker-flow` preview channel was
+cloned to `lukes-picks:live`. Both <https://lukes-picks.web.app> and
+<https://lukes-picks.firebaseapp.com> returned HTTP 200, and the live bundle
+digest matches the preview digest above. The live artifact records source
+commit `c38136070082a0895c6cca0f118841bb0972520e`. See
+[release-checklist.md](docs/release-checklist.md) and
 [deployment.md](docs/deployment.md) for evidence and rollback identifiers.
 
 For any future guarded update, use only:
@@ -252,7 +272,9 @@ For any future guarded update, use only:
 ```
 
 The preview action deploys only the `connected-picker-flow` channel after source
-and fresh-build scans. The wrapper has no live Hosting action.
+and fresh-build scans. The wrapper has no general live Hosting action. The
+recorded live clone was a separately authorized one-time promotion; future live
+writes still require explicit authorization and the project guard.
 
 ## Known limitations
 
@@ -262,10 +284,15 @@ and fresh-build scans. The wrapper has no live Hosting action.
   path and must remain disabled in `lukes-picks`.
 - Manual result handling is browser-proven; manual-game creation remains a
   separate end-to-end validation item.
-- Production Google popup sign-in, reload/session/membership restoration,
-  explicit sign-out, and repeat sign-in passed. The automated repeat popup was
-  slow to settle, but a clean reload restored the authenticated arena with no
-  console warning or error.
+- Authenticated preview Google popup sign-in, reload/session/membership
+  restoration, explicit sign-out, and repeat sign-in passed. The automated
+  repeat popup was slow to settle, but a clean reload restored the
+  authenticated arena with no console warning or error.
+- Live unauthenticated smoke passed on desktop and a `390x844` phone-size
+  viewport, including Privacy, Terms, and Data sources, with zero warning/error
+  console logs. The automated in-app browser could not complete the live Google
+  popup, so manual Google sign-in on a permanent live URL remains required; do
+  not treat the preview auth pass as a completed live authenticated smoke.
 - App Check valid-token monitoring, Analytics/Crashlytics production operation,
   and operational alerting remain deferred production gates.
 - Ownership transfer is not supported; an active owner is prevented from
@@ -279,8 +306,10 @@ and fresh-build scans. The wrapper has no live Hosting action.
 - All Functions deployed successfully, but `gcf-artifacts` has no automatic
   cleanup policy; the CLI’s resulting exit-1 retention warning is documented
   separately from Function health.
-- Implementation commit `9df0d38` is pushed on
-  `codex/connected-picker-flow`; handoff is tracked in
-  [draft PR #1](https://github.com/mleikam1/lukespics/pull/1).
+- Implementation commit `9df0d38` was merged from
+  `codex/connected-picker-flow` by
+  [PR #1](https://github.com/mleikam1/lukespics/pull/1); the default branch
+  records merge commit `c38136070082a0895c6cca0f118841bb0972520e`.
 
-No app-store build or live Hosting release is part of this workflow.
+No app-store build was published. The live web promotion does not satisfy the
+deferred legal, provider-rights, physical-device, signing, or store gates.

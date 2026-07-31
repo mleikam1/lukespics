@@ -2,13 +2,14 @@
 
 Baseline validation date: 2026-07-27
 
-Connected preview release record updated: 2026-07-31
+Connected preview and live web release record updated: 2026-07-31
 
 This report separates local/emulator evidence, the guarded connected-preview
-release, and still-deferred provider/store behavior. A passing preview is not a
-claim that the connected product is ready for live Hosting or app stores.
+and live web release, and still-deferred provider/store behavior. A passing
+live web smoke is not a claim of live authenticated smoke, production sports
+provider readiness, or app-store readiness.
 
-## Connected-flow release and preview — 2026-07-30/31
+## Connected-flow release, preview, and live web — 2026-07-30/31
 
 ### Current identity and runtimes
 
@@ -86,10 +87,16 @@ audit evidence remains valid and is preserved in the dated sections below.
 | `connected-picker-flow` Hosting preview | <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app> |
 | Preview expiry | Firebase output: `2026-08-07 07:50:46` |
 | Preview bundle | `main.dart.js` SHA-256 `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da` |
-| Live Hosting | Untouched; no live deployment |
-| Production browser smoke | Google sign-in, reload/session/membership restore, arena/dashboard, manual catalog, corrected empty state, explicit sign-out, and repeat sign-in passed |
+| Live promotion | Exact preview channel cloned to `lukes-picks:live` at Firebase CLI time `18:10:14` on 2026-07-31 |
+| Permanent live URLs | <https://lukes-picks.web.app> and <https://lukes-picks.firebaseapp.com>; both HTTP 200 |
+| Live bundle and source | Preview-identical SHA-256 `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`; source commit `c38136070082a0895c6cca0f118841bb0972520e` |
+| Live headers and indexing | CSP, COOP `same-origin-allow-popups`, HSTS, `nosniff`, `SAMEORIGIN`, Permissions Policy, and Referrer Policy verified; no preview `noindex` header |
+| Live unauthenticated browser smoke | Desktop and `390x844` phone-size sign-in screen rendered; Privacy, Terms, and Data sources passed; zero warning/error console logs |
+| Live Auth configuration | Both permanent domains authorized; Google provider enabled/configured; auth handlers HTTP 200 |
+| Live authenticated smoke | Not claimed; manual Google sign-in remains the user handoff check because the automated in-app browser could not complete the popup |
+| Authenticated preview browser smoke | Google sign-in, reload/session/membership restore, arena/dashboard, manual catalog, corrected empty state, explicit sign-out, and repeat sign-in passed on the identical artifact |
 | Production smoke data | Two empty manual-provider arenas, each with one draft week, one active owner, and no selected games, retained because deletion was not authorized |
-| Final commit, push, and draft pull request | Implementation commit `9df0d38` pushed; [draft PR #1](https://github.com/mleikam1/lukespics/pull/1) opened against `codex/lukes-picks-mvp` |
+| Repository handoff | Implementation commit `9df0d38` merged by [PR #1](https://github.com/mleikam1/lukespics/pull/1) into `codex/lukes-picks-mvp`; merge commit `c38136070082a0895c6cca0f118841bb0972520e` |
 
 The Functions deployment command returned exit 1 solely because the CLI could
 not configure an automatic Artifact Registry cleanup policy after all 29
@@ -97,14 +104,18 @@ Functions had succeeded. Repository `gcf-artifacts` currently has no automatic
 cleanup policy. The functions themselves are active/Run ready; cleanup remains
 an operational retention/cost warning.
 
-The successful production smoke had no console warning or error. The automated
+The authenticated preview smoke had no console warning or error. Its automated
 repeat popup was slow to settle, but a clean reload restored the authenticated
 arena, so explicit sign-out and repeat sign-in/session restoration are recorded
-as passed. The full picker lifecycle remains proven in the isolated
-browser/emulator test because production sports mode intentionally remains
-`manual`.
+as passed for preview. The live unauthenticated smoke separately passed its
+desktop, phone-size, and legal/data-page checks with zero warning/error console
+logs. Live Google configuration is independently verified, but the automated
+in-app browser could not complete the popup; manual Google sign-in on a
+permanent live URL remains required. The full picker lifecycle remains proven
+in the isolated browser/emulator test because production sports mode
+intentionally remains `manual`.
 
-The repository handoff is complete in draft PR #1. Deferred public production
+The repository handoff is complete in merged PR #1. Deferred public production
 and store gates still include App Check valid-token
 monitoring/enforcement, production sports-data and logo rights, accessibility,
 physical devices, legal review, operational alerting, release signing, and app
@@ -112,8 +123,9 @@ store publication. Ownership transfer also remains unsupported; the backend
 prevents an active owner from leaving or deleting their account.
 
 No deployment targeted `demo-lukes-picks-local`; no access or modification was
-made to `wingman-interactive-live`; ESPN was not scraped or hotlinked; no live
-Hosting or app-store build was published; and no secret value is included here.
+made to `wingman-interactive-live`; ESPN was not scraped or hotlinked; the only
+live Hosting action was the recorded exact-channel clone; no app-store build
+was published; and no secret value is included here.
 
 ## Historical pre-release read-only audit — 2026-07-30
 

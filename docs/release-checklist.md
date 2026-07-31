@@ -1,8 +1,9 @@
 # Release checklist
 
-Checked items are verified release/preview facts as of 2026-07-31. Unchecked
-handoff or production/store items remain pending or deferred and do not erase
-the passing connected-flow and guarded-preview evidence.
+Checked items are verified preview/live release facts as of 2026-07-31.
+Unchecked handoff or production/store items remain pending or deferred and do
+not erase the passing connected-flow, authenticated-preview, and live
+unauthenticated-smoke evidence.
 
 ## Project isolation
 
@@ -71,10 +72,11 @@ the passing connected-flow and guarded-preview evidence.
 - [x] Fresh public-build scan
 - [x] Responsive UI at approximately 390, 768, and 1440 pixels
 
-## Cloud preview readiness
+## Cloud release readiness
 
 - [x] Google Auth provider and registered app identities verified
-- [x] Preview popup sign-in, reload/session, and membership restoration verified
+- [x] Authenticated preview popup sign-in, reload/session, and membership
+      restoration verified
 - [x] Functions, Secret Manager, Run, Build, Artifact Registry, Eventarc,
       Pub/Sub, and Scheduler state verified
 - [x] `INVITE_CODE_PEPPER` version 1 stored without printing its value
@@ -86,31 +88,53 @@ the passing connected-flow and guarded-preview evidence.
 - [x] Unexpected Function/resource deletion check completed; 29 Functions are
       `ACTIVE`/Cloud Run ready and `scheduledResultSync` runs every 30m UTC
 
-## Preview and handoff
+## Preview, live promotion, and handoff
 
 - [x] Rules/indexes deployed through the restricted wrapper
 - [x] Functions deployed through the restricted wrapper; CLI exit 1 was solely
       the post-success cleanup-policy warning, and `gcf-artifacts` has no
       automatic cleanup policy
-- [x] `connected-picker-flow` preview deployed; live Hosting untouched
+- [x] `connected-picker-flow` preview deployed
 - [x] Preview smoke-tested in a real browser at
       <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app>
 - [x] Preview expiry recorded as Firebase output `2026-08-07 07:50:46`
 - [x] Deployed `main.dart.js` SHA-256 recorded as
       `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`
-- [x] Google sign-in/reload, explicit sign-out, and repeat sign-in passed; the
-      slow repeat popup settled after a clean reload with no console warning or
-      error
+- [x] Authenticated preview Google sign-in/reload, explicit sign-out, and repeat
+      sign-in passed; the slow repeat popup settled after a clean reload with
+      no console warning or error
+- [x] Exact `connected-picker-flow` preview channel cloned to
+      `lukes-picks:live` at Firebase CLI time `18:10:14` on 2026-07-31
+- [x] <https://lukes-picks.web.app> and
+      <https://lukes-picks.firebaseapp.com> both returned HTTP 200
+- [x] Live `main.dart.js` SHA-256 matches the browser-tested preview:
+      `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`
+- [x] Live artifact source commit recorded as
+      `c38136070082a0895c6cca0f118841bb0972520e`
+- [x] Live CSP, COOP `same-origin-allow-popups`, HSTS, `nosniff`, `SAMEORIGIN`,
+      Permissions Policy, and Referrer Policy verified; preview `noindex` is
+      absent on live
+- [x] Live desktop and `390x844` phone-size sign-in screen rendered; Privacy,
+      Terms, and Data sources passed with zero warning/error console logs
+- [x] Live Firebase Auth configuration independently verified: both permanent
+      domains authorized, Google provider enabled/configured, auth handlers
+      HTTP 200
 - [x] Rollback inputs recorded, including prior ruleset
       `projects/lukes-picks/rulesets/5628e0a8-ee8b-4dd9-b8c2-5fbac9fd3213`
 - [x] Documentation and validation report match observed results
 - [x] Complete diff and secret scan reviewed
-- [x] Implementation commit `9df0d38` pushed and
-      [draft PR #1](https://github.com/mleikam1/lukespics/pull/1) opened
+- [x] Implementation commit `9df0d38` merged by
+      [PR #1](https://github.com/mleikam1/lukespics/pull/1) into
+      `codex/lukes-picks-mvp` as merge commit
+      `c38136070082a0895c6cca0f118841bb0972520e`
 - [x] No Android/iOS store build published
 
 ## Operational follow-up
 
+- [ ] Complete a manual Google sign-in on a permanent live URL. The automated
+      in-app browser could not complete the popup, so live authenticated smoke
+      is not claimed; the authenticated preview smoke passed on the identical
+      artifact.
 - Review the two empty manual-provider production smoke arenas before any
   separately authorized cleanup; deletion is intentionally not part of this
   release.
