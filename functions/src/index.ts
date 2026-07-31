@@ -1,7 +1,7 @@
 import {logger} from "firebase-functions";
 import {onSchedule} from "firebase-functions/v2/scheduler";
 import {callable} from "./callable.js";
-import {API_SPORTS_KEY, INVITE_CODE_PEPPER} from "./config.js";
+import {INVITE_CODE_PEPPER} from "./config.js";
 import {
   assignPickerSchema,
   createDraftWeekSchema,
@@ -16,6 +16,7 @@ import {
   overrideGameSchema,
   publishSlateSchema,
   reasonSchema,
+  revealLockedPicksSchema,
   reorderRotationSchema,
   rotateInviteCodeSchema,
   saveDraftSlateSchema,
@@ -40,13 +41,13 @@ import {
 } from "./services/leagues.js";
 import {
   finalizeWeekAuthoritatively,
-  gradeWeek,
   rebuildLeagueStandings,
 } from "./services/scoring.js";
 import {
   advanceRotation,
   assignPicker,
   createDraftWeekRecord,
+  gradeWeekWithResultClaim,
   listCatalog,
   manualGame,
   overrideResult,
@@ -254,6 +255,7 @@ export const listSportsCatalog = callable(
     const user = requireUser(request);
     return listCatalog({
       leagueId: input.leagueId,
+      weekId: input.weekId,
       actorUid: user.uid,
       query: {
         sportCode: input.sportCode,
@@ -266,7 +268,6 @@ export const listSportsCatalog = callable(
       },
     });
   },
-  {secrets: [API_SPORTS_KEY]},
 );
 
 export const saveDraftSlate = callable(
@@ -328,7 +329,6 @@ function refreshCallable(functionName: string) {
         forceRefresh: input.forceRefresh,
       });
     },
-    {secrets: [API_SPORTS_KEY]},
   );
 }
 
@@ -339,7 +339,7 @@ export const syncSelectedGameResults = refreshCallable(
 
 export const revealLockedGamePicks = callable(
   "revealLockedGamePicks",
-  weekMutationSchema,
+  revealLockedPicksSchema,
   async (input, request, requestId) => {
     const user = requireUser(request);
     return revealLockedPicks({
@@ -347,6 +347,8 @@ export const revealLockedGamePicks = callable(
       weekId: input.weekId,
       actorUid: user.uid,
       requestId,
+      revealCursor: input.revealCursor,
+      revealPageSize: input.revealPageSize,
     });
   },
 );
@@ -354,10 +356,14 @@ export const revealLockedGamePicks = callable(
 export const calculateProvisionalWeekResults = callable(
   "calculateProvisionalWeekResults",
   weekMutationSchema,
-  async (input, request) => {
+  async (input, request, requestId) => {
     const user = requireUser(request);
     await requireAdmin(input.leagueId, user.uid);
-    return gradeWeek(input.leagueId, input.weekId);
+    return gradeWeekWithResultClaim({
+      leagueId: input.leagueId,
+      weekId: input.weekId,
+      requestId,
+    });
   },
 );
 
@@ -502,7 +508,6 @@ export const scheduledResultSync = onSchedule(
     schedule: "every 30 minutes",
     timeZone: "UTC",
     retryCount: 0,
-    secrets: [API_SPORTS_KEY],
   },
   async () => {
     const startedAt = Date.now();

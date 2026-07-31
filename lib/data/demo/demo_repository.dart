@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/bootstrap.dart';
+import '../../core/firebase/browser_e2e_location.dart';
 import '../../core/firebase/app_telemetry.dart';
 import '../models/game.dart';
 import '../models/member.dart';
@@ -22,60 +23,105 @@ final appControllerProvider = ChangeNotifierProvider<AppController>(
 
 enum PickSyncState { idle, saving, synced, offline, rejected }
 
+enum DraftSyncState { pristine, dirty, saving, saved, error }
+
 final class AppController extends ChangeNotifier {
   AppController.demo({
-    this.runtimeMode = AppRuntimeMode.demo,
     this.bootstrapMessage,
     bool signedIn = false,
     bool hasLeague = false,
     bool offline = false,
-  }) : _signedIn = signedIn,
+  }) : runtimeMode = AppRuntimeMode.demo,
+       _signedIn = signedIn,
        _hasLeague = hasLeague,
        _offline = offline,
-       _repository = runtimeMode == AppRuntimeMode.demo
-           ? null
-           : FirebaseLeagueRepository(),
+       _repository = null,
+       _auth = null,
+       _browserE2eAlias = null,
+       _telemetry = AppTelemetry(enabled: false) {
+    _seed();
+    if (_hasLeague) _inviteCode = 'DEMO-7H3K';
+  }
+
+  AppController.connected({
+    required this.runtimeMode,
+    this.bootstrapMessage,
+    LeagueRepository? repository,
+    FirebaseAuth? auth,
+  }) : assert(
+         runtimeMode == AppRuntimeMode.firebase ||
+             runtimeMode == AppRuntimeMode.firebaseEmulator,
+       ),
+       _signedIn = false,
+       _hasLeague = false,
+       _offline = false,
+       _repository = repository ?? FirebaseLeagueRepository(),
+       _auth = auth ?? FirebaseAuth.instance,
+       _browserE2eAlias = _resolveBrowserE2eAlias(runtimeMode),
        _telemetry = AppTelemetry(
          enabled: runtimeMode == AppRuntimeMode.firebase,
        ) {
-    _seed();
-    if (_hasLeague && isDemo) _inviteCode = 'DEMO-7H3K';
-    if (_repository != null) {
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser != null) {
-        _signedIn = true;
-        _currentUserId = currentUser.uid;
-        _displayName = currentUser.displayName ?? _displayName;
-        unawaited(_resumeExistingSession());
-      }
-      _authSubscription = FirebaseAuth.instance.authStateChanges().listen(
-        _handleAuthStateChange,
-      );
+    final currentUser = _auth!.currentUser;
+    if (currentUser != null) {
+      _signedIn = true;
+      _currentUserId = currentUser.uid;
+      _displayName = _connectedDisplayName(currentUser.displayName);
+      unawaited(_resumeExistingSession());
+    }
+    _authSubscription = _auth.authStateChanges().listen(_handleAuthStateChange);
+    final browserE2eAlias = _browserE2eAlias;
+    if (currentUser == null &&
+        browserE2eAlias != null &&
+        browserE2eSessionMatches(browserE2eAlias)) {
+      unawaited(_restoreBrowserE2eSession(browserE2eAlias));
     }
   }
 
   final AppRuntimeMode runtimeMode;
   final String? bootstrapMessage;
   final LeagueRepository? _repository;
+  final FirebaseAuth? _auth;
+  final String? _browserE2eAlias;
   final AppTelemetry _telemetry;
 
   bool _signedIn;
   bool _hasLeague;
   bool _authBusy = false;
+  bool _browserE2eAccountCreated = false;
   bool _offline;
   bool _slatePublished = false;
   bool _demoReviewReady = false;
   bool _weekFinalized = false;
   bool _restoringSession = false;
   bool _pickerParticipatesInPicks = false;
+  PickLockPolicy _pickLockPolicy = PickLockPolicy.perGame;
+  bool _weekPickerParticipatesInPicks = false;
+  PickLockPolicy _weekLockPolicy = PickLockPolicy.perGame;
+  bool _catalogLoading = false;
+  bool _draftSaving = false;
   ThemeMode _themeMode = ThemeMode.system;
-  String _displayName = 'Alex Morgan';
-  String _currentUserId = 'alex';
-  String _currentPickerId = 'luke';
+  String _displayName = 'Member';
+  String _currentUserId = '';
+  String _currentPickerId = '';
   String _leagueName = 'Luke’s Picks Arena';
-  String _leagueTimezone = 'America/Chicago';
-  String _weekLabel = 'Week 9';
-  String _weekStatus = 'open';
+  String _leagueTimezone = 'UTC';
+  String _weekLabel = 'Current week';
+  String _weekStatus = 'draft';
+  int _weekSequentialNumber = 0;
+  int _eligibleMemberCount = 0;
+  String _catalogProvider = 'manual';
+  bool _catalogCacheHit = false;
+  bool _catalogStale = false;
+  bool _catalogDelayed = false;
+  DateTime? _catalogCachedAt;
+  String? _catalogError;
+  DateTime? _lastCatalogRefreshAt;
+  DraftSyncState _draftSyncState = DraftSyncState.pristine;
+  String? _draftOperationId;
+  String? _manualGameOperationKey;
+  String? _manualGameRequestId;
+  String? _publishRequestId;
+  String? _lastNextPickerUid;
   String? _errorMessage;
   String? _activeLeagueId;
   String? _activeWeekId;
@@ -93,22 +139,62 @@ final class AppController extends ChangeNotifier {
   _revealSubscriptions = {};
 
   final Set<String> _selectedGameIds = {};
+  final Set<String> _serverDraftGameIds = {};
   final Map<String, String> _pickTeamIds = {};
+  final Map<String, String> _confirmedPickTeamIds = {};
   final Map<String, PickSyncState> _pickSyncStates = {};
+  final Map<String, String> _pickErrors = {};
+  final Set<String> _pickRequestsInFlight = {};
   final Map<String, String> _overrideReasons = {};
   final Map<String, List<RevealedPick>> _revealedPicks = {};
   final List<EntrySummary> _entries = [];
   final List<WeekSummary> _historyWeeks = [];
-  late final List<Game> _games;
-  late final List<LeagueMember> _members;
-  late final List<Standing> _standings;
+  final List<Game> _catalogGames = [];
+  final List<Game> _selectedWeekGames = [];
+  final List<LeagueMember> _members = [];
+  final List<Standing> _standings = [];
 
   bool get signedIn => _signedIn;
   bool get hasLeague => _hasLeague;
   bool get authBusy => _authBusy;
   bool get offline => _offline;
   bool get slatePublished => _slatePublished;
+  bool get catalogLoading => _catalogLoading;
+  String? get catalogError => _catalogError;
+  String get catalogProvider => _catalogProvider;
+  bool get catalogCacheHit => _catalogCacheHit;
+  bool get catalogStale => _catalogStale;
+  bool get catalogDelayed => _catalogDelayed;
+  DateTime? get catalogCachedAt => _catalogCachedAt;
+  DraftSyncState get draftSyncState => _draftSyncState;
+  bool get draftSaving => _draftSaving;
+  int get eligibleMemberCount => _eligibleMemberCount;
+  int get prospectiveEligibleMemberCount {
+    if (_eligibleMemberCount > 0) return _eligibleMemberCount;
+    final active = _members.where((member) => member.isActive).length;
+    return _weekPickerParticipatesInPicks
+        ? active
+        : (active - 1).clamp(0, active);
+  }
+
+  int get weekSequentialNumber => _weekSequentialNumber;
+  PickLockPolicy get weekLockPolicy => _weekLockPolicy;
+  PickLockPolicy get futureWeekLockPolicy => _pickLockPolicy;
+  bool get pickerParticipatesInFutureWeeks => _pickerParticipatesInPicks;
+  bool get pickerParticipatesInCurrentWeek => _weekPickerParticipatesInPicks;
   bool get demoReviewReady => _demoReviewReady;
+  bool get canFinalizeWeek {
+    if (isDemo) return _demoReviewReady;
+    if (_selectedWeekGames.isEmpty || _weekFinalized) return false;
+    return _selectedWeekGames.every(
+      (game) =>
+          game.pickRevealCompletedAt != null &&
+          (game.isVoid ||
+              (game.status == GameStatus.finalStatus &&
+                  game.winnerTeamId != null)),
+    );
+  }
+
   bool get weekFinalized => _weekFinalized;
   ThemeMode get themeMode => _themeMode;
   String get displayName => _displayName;
@@ -128,21 +214,58 @@ final class AppController extends ChangeNotifier {
     return matches.isEmpty ? 'Weekly picker' : matches.first.displayName;
   }
 
+  LeagueMember? get proposedNextPicker =>
+      PickerRotation(_members).nextAfter(_currentPickerId);
+
+  String? get lastNextPickerName {
+    final uid = _lastNextPickerUid;
+    if (uid == null) return null;
+    final matches = _members.where((member) => member.uid == uid);
+    return matches.isEmpty
+        ? 'the next active member'
+        : matches.first.displayName;
+  }
+
   LeagueMember get currentMember => _members.firstWhere(
     (member) => member.uid == _currentUserId,
-    orElse: () => _members.first,
+    orElse: () => LeagueMember(
+      uid: _currentUserId,
+      displayName: _displayName,
+      role: LeagueRole.member,
+      status: MemberStatus.active,
+      rotationOrder: _members.length,
+      joinedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    ),
   );
   LeagueRole get currentRole => currentMember.role;
   bool get canAdmin =>
       currentRole == LeagueRole.owner || currentRole == LeagueRole.commissioner;
   bool get isCurrentUserPicker => _currentUserId == currentPickerId;
-  bool get canDraftSlate => isCurrentUserPicker;
-  bool get canMakePicks => !isCurrentUserPicker || _pickerParticipatesInPicks;
+  bool get canDraftSlate => isCurrentUserPicker || canAdmin;
+  bool get canMakePicks =>
+      !isCurrentUserPicker ||
+      (_activeWeekId == null
+          ? _pickerParticipatesInPicks
+          : _weekPickerParticipatesInPicks);
 
-  List<Game> get games => List.unmodifiable(_games);
-  List<Game> get selectedGames =>
-      _games.where((game) => _selectedGameIds.contains(game.id)).toList()
+  List<Game> get games => List.unmodifiable(_catalogGames);
+  List<Game> get catalogGames => List.unmodifiable(_catalogGames);
+  List<Game> get selectedWeekGames => List.unmodifiable(_selectedWeekGames);
+  List<Game> get selectedGames {
+    if (_slatePublished) {
+      return List<Game>.of(_selectedWeekGames)
         ..sort((a, b) => a.scheduledAtUtc.compareTo(b.scheduledAtUtc));
+    }
+    final byId = <String, Game>{
+      for (final game in _catalogGames) game.id: game,
+      for (final game in _selectedWeekGames) game.id: game,
+    };
+    return [
+      for (final id in _selectedGameIds)
+        if (byId[id] != null) byId[id]!,
+    ]..sort((a, b) => a.scheduledAtUtc.compareTo(b.scheduledAtUtc));
+  }
+
   Set<String> get selectedGameIds => Set.unmodifiable(_selectedGameIds);
   Map<String, String> get picks => Map.unmodifiable(_pickTeamIds);
   List<LeagueMember> get members => List.unmodifiable(_members);
@@ -194,10 +317,18 @@ final class AppController extends ChangeNotifier {
 
   PickSyncState syncStateFor(String gameId) =>
       _pickSyncStates[gameId] ?? PickSyncState.idle;
+  String? pickErrorFor(String gameId) => _pickErrors[gameId];
+  bool pickRequestInFlight(String gameId) =>
+      _pickRequestsInFlight.contains(gameId);
 
   bool isGameLocked(Game game) => _isLocked(game);
 
   bool _isLocked(Game game) => game.isLockedAt(DateTime.now().toUtc());
+
+  static String _connectedDisplayName(String? value) {
+    final trimmed = value?.trim() ?? '';
+    return trimmed.isEmpty ? 'Member' : trimmed;
+  }
 
   Future<void> signIn() async {
     if (_authBusy) return;
@@ -208,16 +339,23 @@ final class AppController extends ChangeNotifier {
       if (runtimeMode == AppRuntimeMode.firebase) {
         final provider = GoogleAuthProvider();
         final credential = kIsWeb
-            ? await FirebaseAuth.instance.signInWithPopup(provider)
-            : await FirebaseAuth.instance.signInWithProvider(provider);
+            ? await _auth!.signInWithPopup(provider)
+            : await _auth!.signInWithProvider(provider);
         _displayName = credential.user?.displayName?.trim().isNotEmpty == true
             ? credential.user!.displayName!.trim()
             : _displayName;
         await _repository?.ensureUserProfile(displayName: _displayName);
       } else if (runtimeMode == AppRuntimeMode.firebaseEmulator) {
-        final credential = await FirebaseAuth.instance.signInAnonymously();
+        final alias = _browserE2eAlias;
+        final credential = alias == null
+            ? await _auth!.signInAnonymously()
+            : await _signInBrowserE2eUser(alias);
+        if (alias != null) {
+          _displayName = _browserE2eDisplayName(alias);
+        }
         await credential.user?.updateDisplayName(_displayName);
         await _repository?.ensureUserProfile(displayName: _displayName);
+        if (alias != null) browserE2eRememberSession(alias);
       } else {
         await Future<void>.delayed(const Duration(milliseconds: 180));
       }
@@ -235,15 +373,115 @@ final class AppController extends ChangeNotifier {
     }
   }
 
+  static String? _resolveBrowserE2eAlias(AppRuntimeMode runtimeMode) {
+    const enabled = bool.fromEnvironment('ENABLE_BROWSER_E2E_AUTH');
+    if (!enabled || runtimeMode != AppRuntimeMode.firebaseEmulator) return null;
+    if (!kIsWeb) {
+      throw StateError('Browser E2E auth is web-only.');
+    }
+    final base = browserE2eDocumentUri();
+    if (base.scheme != 'http' ||
+        base.host != '127.0.0.1' ||
+        base.port != 5002) {
+      throw StateError(
+        'Browser E2E auth requires the loopback Hosting emulator.',
+      );
+    }
+    final alias = base.queryParameters['e2eUser'] ?? browserE2eStoredAlias();
+    if (!const {'owner', 'member-a', 'member-b'}.contains(alias)) {
+      throw StateError('Browser E2E auth requires an approved user alias.');
+    }
+    return alias;
+  }
+
+  Future<UserCredential> _signInBrowserE2eUser(String alias) async {
+    if (_browserE2eAccountCreated) {
+      return _auth!.signInWithEmailAndPassword(
+        email: _browserE2eEmail(alias),
+        password: _browserE2ePassword,
+      );
+    }
+    try {
+      final credential = await _auth!.createUserWithEmailAndPassword(
+        email: _browserE2eEmail(alias),
+        password: _browserE2ePassword,
+      );
+      _browserE2eAccountCreated = true;
+      return credential;
+    } on FirebaseAuthException catch (error) {
+      if (error.code != 'email-already-in-use') rethrow;
+      _browserE2eAccountCreated = true;
+      return _auth!.signInWithEmailAndPassword(
+        email: _browserE2eEmail(alias),
+        password: _browserE2ePassword,
+      );
+    }
+  }
+
+  Future<void> _restoreBrowserE2eSession(String alias) async {
+    try {
+      // Firebase Auth finishes its IndexedDB initialization asynchronously on
+      // a full Flutter web reload. Let the normal LOCAL session win first;
+      // only use the deterministic emulator credential if it is still absent.
+      await Future<void>.delayed(const Duration(milliseconds: 750));
+      if (_auth!.currentUser != null) return;
+      // Persistence was already configured during emulator bootstrap. Calling
+      // setPersistence again while Firebase Auth is restoring its initial
+      // state can race the credential request in Flutter web, so this strict
+      // test-only fallback performs only the deterministic re-authentication.
+      await _auth.signInWithEmailAndPassword(
+        email: _browserE2eEmail(alias),
+        password: _browserE2ePassword,
+      );
+      _browserE2eAccountCreated = true;
+      _displayName = _browserE2eDisplayName(alias);
+    } on FirebaseAuthException catch (error) {
+      browserE2eForgetSession();
+      _errorMessage =
+          'The browser E2E session could not be restored (${error.code}).';
+      notifyListeners();
+    } on Object catch (error) {
+      browserE2eForgetSession();
+      _errorMessage =
+          'The browser E2E session could not be restored '
+          '(${error.runtimeType}).';
+      notifyListeners();
+    }
+  }
+
+  static String _browserE2eEmail(String alias) =>
+      'browser-e2e-$alias@demo-lukes-picks-local.test';
+
+  static const _browserE2ePassword = 'Browser-E2E-Emulator-Only-2026!';
+
+  static String _browserE2eDisplayName(String alias) => switch (alias) {
+    'owner' => 'Browser Owner',
+    'member-a' => 'Browser Member A',
+    'member-b' => 'Browser Member B',
+    _ => throw StateError('Unsupported browser E2E user alias.'),
+  };
+
   Future<void> signOut() async {
+    if (_browserE2eAlias != null) browserE2eForgetSession();
     if (_repository != null) {
-      await FirebaseAuth.instance.signOut();
+      await _auth!.signOut();
     }
     await _cancelLeagueSubscriptions();
     _signedIn = false;
     _hasLeague = false;
     _activeLeagueId = null;
     _activeWeekId = null;
+    _catalogGames.clear();
+    _selectedWeekGames.clear();
+    _selectedGameIds.clear();
+    _serverDraftGameIds.clear();
+    _pickTeamIds.clear();
+    _confirmedPickTeamIds.clear();
+    _pickSyncStates.clear();
+    _members.clear();
+    _standings.clear();
+    _entries.clear();
+    _historyWeeks.clear();
     notifyListeners();
   }
 
@@ -266,11 +504,14 @@ final class AppController extends ChangeNotifier {
             'weekStartDay': 1,
             'weekStartTime': '00:00',
             'manualFinalizationRequired': true,
-            'providerName': 'mock',
+            'providerName': runtimeMode == AppRuntimeMode.firebaseEmulator
+                ? 'theSportsDbTest'
+                : 'manual',
           },
         );
         _activeLeagueId = created.leagueId;
         _inviteCode = created.inviteCode;
+        _hasLeague = true;
         final now = DateTime.now().toUtc();
         final week = await _repository.createDraftWeek(
           leagueId: created.leagueId,
@@ -281,41 +522,20 @@ final class AppController extends ChangeNotifier {
         );
         _activeWeekId = week.weekId;
         _currentPickerId = week.pickerUid;
-        final currentIndex = _members.indexWhere(
-          (member) => member.uid == _currentUserId,
-        );
-        if (currentIndex >= 0) {
-          final member = _members[currentIndex];
-          _members[currentIndex] = LeagueMember(
-            uid: member.uid,
-            displayName: member.displayName,
-            role: LeagueRole.owner,
-            status: member.status,
-            rotationOrder: member.rotationOrder,
-            joinedAt: member.joinedAt,
-            photoUrl: member.photoUrl,
-            eligibleFromWeekId: member.eligibleFromWeekId,
-          );
-        }
-        final catalog = await _repository.listSportsCatalog(
-          leagueId: created.leagueId,
-          query: CatalogQuery(
-            sportCode: 'football',
-            leagueCode: 'demo-football',
-            providerLeagueId: 'demo-football',
-            season: 'demo',
-            from: now,
-            to: now.add(const Duration(days: 7)),
-          ),
-        );
-        _games
-          ..clear()
-          ..addAll(catalog.games);
+        _weekSequentialNumber = 1;
+        _weekLabel = 'Week 1';
+        _weekStatus = 'draft';
+        _weekPickerParticipatesInPicks = pickerParticipatesInPicks;
+        _catalogGames.clear();
+        _selectedWeekGames.clear();
         _selectedGameIds.clear();
+        _serverDraftGameIds.clear();
         _pickTeamIds.clear();
+        _confirmedPickTeamIds.clear();
         _pickSyncStates.clear();
         await _hydrateMembersAndStandings(created.leagueId);
         await _startLeagueSubscriptions(created.leagueId);
+        await loadCatalog();
       }
       _hasLeague = true;
       unawaited(_telemetry.log('league_created'));
@@ -361,17 +581,192 @@ final class AppController extends ChangeNotifier {
   }
 
   void toggleSlateGame(String gameId) {
-    if (_slatePublished) return;
-    if (!_selectedGameIds.remove(gameId)) {
-      _selectedGameIds.add(gameId);
+    if (_slatePublished || !canDraftSlate) return;
+    if (_selectedGameIds.remove(gameId)) {
+      _markDraftDirty();
+      notifyListeners();
+      return;
     }
+    final matches = _catalogGames.where((game) => game.id == gameId);
+    if (matches.isEmpty || !isCatalogGameSelectable(matches.first)) return;
+    _selectedGameIds.add(gameId);
+    _markDraftDirty();
     notifyListeners();
   }
 
   void removeSlateGame(String gameId) {
-    if (_slatePublished) return;
-    _selectedGameIds.remove(gameId);
+    if (_slatePublished || !canDraftSlate) return;
+    if (_selectedGameIds.remove(gameId)) _markDraftDirty();
     notifyListeners();
+  }
+
+  bool isCatalogGameSelectable(Game game) {
+    if (_slatePublished || !canDraftSlate || _draftSaving) return false;
+    if (!game.scheduledAtUtc.isAfter(DateTime.now().toUtc())) return false;
+    return game.status == GameStatus.scheduled ||
+        game.status == GameStatus.delayed;
+  }
+
+  void _markDraftDirty() {
+    _draftSyncState = DraftSyncState.dirty;
+    _draftOperationId = null;
+  }
+
+  Future<void> loadCatalog({
+    bool forceRefresh = false,
+    String? sportCode,
+    String? leagueCode,
+    String? providerLeagueId,
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    if (_repository == null || !canDraftSlate || _slatePublished) return;
+    final leagueId = _activeLeagueId;
+    final weekId = _activeWeekId;
+    if (leagueId == null || weekId == null || _catalogLoading) return;
+    final now = DateTime.now().toUtc();
+    if (forceRefresh &&
+        _lastCatalogRefreshAt != null &&
+        now.difference(_lastCatalogRefreshAt!) < const Duration(seconds: 15)) {
+      _catalogError =
+          'A catalog refresh just ran. Wait a few seconds before retrying.';
+      notifyListeners();
+      return;
+    }
+    _catalogLoading = true;
+    _catalogError = null;
+    if (forceRefresh) _lastCatalogRefreshAt = now;
+    notifyListeners();
+    try {
+      final start = from?.toUtc() ?? now;
+      // The provider gateway accepts an inclusive range of at most seven
+      // days. MLB is the deterministic in-season default for the internal
+      // emulator path; production remains manual until a provider is approved.
+      final internalSportsTest = runtimeMode == AppRuntimeMode.firebaseEmulator;
+      final effectiveSportCode =
+          sportCode ?? (internalSportsTest ? 'baseball' : 'football');
+      final effectiveLeagueCode =
+          leagueCode ?? (internalSportsTest ? 'mlb' : 'nfl');
+      final effectiveProviderLeagueId =
+          providerLeagueId ?? (internalSportsTest ? '4424' : '4391');
+      final end = to?.toUtc() ?? now.add(const Duration(days: 6));
+      final result = await _repository.listSportsCatalog(
+        leagueId: leagueId,
+        weekId: weekId,
+        query: CatalogQuery(
+          sportCode: effectiveSportCode,
+          leagueCode: effectiveLeagueCode,
+          providerLeagueId: effectiveProviderLeagueId,
+          season: '${start.year}',
+          from: start,
+          to: end,
+          forceRefresh: forceRefresh,
+        ),
+      );
+      final unique = <String, Game>{};
+      for (final game in result.games) {
+        unique[game.id] = game;
+      }
+      _catalogGames
+        ..clear()
+        ..addAll(unique.values);
+      _catalogProvider = result.provider;
+      _catalogCacheHit = result.cacheHit;
+      _catalogStale = result.stale;
+      _catalogDelayed = result.delayed;
+      _catalogCachedAt = result.cachedAt;
+      _offline = false;
+    } on RepositoryException catch (error) {
+      _catalogError = error.safeMessage;
+    } on Object {
+      _catalogError = 'The sports schedule could not be loaded. Try again.';
+    } finally {
+      _catalogLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> saveDraftSlate() async {
+    if (_draftSaving) return false;
+    if (_repository == null) {
+      _serverDraftGameIds
+        ..clear()
+        ..addAll(_selectedGameIds);
+      _draftSyncState = DraftSyncState.saved;
+      notifyListeners();
+      return true;
+    }
+    final leagueId = _activeLeagueId;
+    if (leagueId == null) return false;
+    final weekId = _requireWeekId();
+    _draftSaving = true;
+    _draftSyncState = DraftSyncState.saving;
+    _errorMessage = null;
+    _draftOperationId ??=
+        'draft_${weekId}_${DateTime.now().microsecondsSinceEpoch}';
+    final operationId = _draftOperationId!;
+    notifyListeners();
+    try {
+      const chunkSize = 75;
+      final byId = <String, Game>{
+        for (final game in _catalogGames) game.id: game,
+        for (final game in _selectedWeekGames) game.id: game,
+      };
+      final additions = _selectedGameIds
+          .difference(_serverDraftGameIds)
+          .map((id) => byId[id])
+          .whereType<Game>()
+          .toList(growable: false);
+      final removals = _serverDraftGameIds
+          .difference(_selectedGameIds)
+          .toList(growable: false);
+      var chunk = 0;
+      for (var offset = 0; offset < additions.length; offset += chunkSize) {
+        final end = (offset + chunkSize).clamp(0, additions.length);
+        final values = additions.sublist(offset, end);
+        await _repository.saveDraftSlate(
+          leagueId: leagueId,
+          weekId: weekId,
+          chunkKey: '${operationId}_add_$chunk',
+          games: values,
+          removeGameIds: const [],
+          requestId: '${operationId}_add_$chunk',
+        );
+        _serverDraftGameIds.addAll(values.map((game) => game.id));
+        chunk += 1;
+      }
+      chunk = 0;
+      for (var offset = 0; offset < removals.length; offset += chunkSize) {
+        final end = (offset + chunkSize).clamp(0, removals.length);
+        final values = removals.sublist(offset, end);
+        await _repository.saveDraftSlate(
+          leagueId: leagueId,
+          weekId: weekId,
+          chunkKey: '${operationId}_remove_$chunk',
+          games: const [],
+          removeGameIds: values,
+          requestId: '${operationId}_remove_$chunk',
+        );
+        _serverDraftGameIds.removeAll(values);
+        chunk += 1;
+      }
+      if (additions.isEmpty && removals.isEmpty) {
+        _serverDraftGameIds
+          ..clear()
+          ..addAll(_selectedGameIds);
+      }
+      _draftSyncState = DraftSyncState.saved;
+      _draftOperationId = null;
+      unawaited(_telemetry.log('slate_draft_saved'));
+      return true;
+    } on RepositoryException catch (error) {
+      _draftSyncState = DraftSyncState.error;
+      _errorMessage = error.safeMessage;
+      return false;
+    } finally {
+      _draftSaving = false;
+      notifyListeners();
+    }
   }
 
   Future<bool> publishSlate() async {
@@ -386,25 +781,18 @@ final class AppController extends ChangeNotifier {
             'Open or create an arena before publishing.',
           );
         }
-        const chunkSize = 100;
-        final selected = selectedGames;
-        for (var offset = 0; offset < selected.length; offset += chunkSize) {
-          final end = offset + chunkSize < selected.length
-              ? offset + chunkSize
-              : selected.length;
-          await _repository.saveDraftSlate(
-            leagueId: leagueId,
-            weekId: _requireWeekId(),
-            chunkKey: 'games-${offset ~/ chunkSize}',
-            games: selected.sublist(offset, end),
-          );
-        }
+        if (!await saveDraftSlate()) return false;
+        _publishRequestId ??=
+            'publish_${_requireWeekId()}_'
+            '${DateTime.now().microsecondsSinceEpoch}';
         await _repository.publishWeeklySlate(
           leagueId: leagueId,
           weekId: _requireWeekId(),
+          requestId: _publishRequestId,
         );
       }
       _slatePublished = true;
+      _publishRequestId = null;
       unawaited(_telemetry.log('slate_published'));
       notifyListeners();
       return true;
@@ -466,12 +854,35 @@ final class AppController extends ChangeNotifier {
           resultVersion: 1,
           sourcePayloadHash: 'manual-demo-$id',
         );
-        _games.add(game);
+        _catalogGames.add(game);
+        _selectedWeekGames.add(game);
         _selectedGameIds.add(game.id);
+        _serverDraftGameIds.add(game.id);
+        _draftSyncState = DraftSyncState.saved;
       } else {
+        final leagueId = _activeLeagueId!;
+        final weekId = _requireWeekId();
+        final normalizedVenue = venueName?.trim();
+        final operationKey = [
+          leagueId,
+          weekId,
+          _slug(sportCode),
+          _slug(trimmedLeague),
+          trimmedLeague,
+          scheduledAt.toUtc().toIso8601String(),
+          home.id,
+          away.id,
+          normalizedVenue ?? '',
+        ].join('\u001f');
+        if (_manualGameOperationKey != operationKey) {
+          _manualGameOperationKey = operationKey;
+          _manualGameRequestId =
+              'manual_${_requestIdSegment(weekId)}_'
+              '${DateTime.now().microsecondsSinceEpoch}';
+        }
         await _repository.createManualGame(
-          leagueId: _activeLeagueId!,
-          weekId: _requireWeekId(),
+          leagueId: leagueId,
+          weekId: weekId,
           sportCode: _slug(sportCode),
           leagueCode: _slug(trimmedLeague),
           leagueName: trimmedLeague,
@@ -479,8 +890,13 @@ final class AppController extends ChangeNotifier {
           scheduledAt: scheduledAt,
           homeTeam: home,
           awayTeam: away,
-          venueName: venueName,
+          venueName: normalizedVenue,
+          neutralSite: false,
+          requestId: _manualGameRequestId,
         );
+        _manualGameOperationKey = null;
+        _manualGameRequestId = null;
+        _draftSyncState = DraftSyncState.saved;
       }
       _errorMessage = null;
       unawaited(_telemetry.log('slate_draft_saved'));
@@ -494,13 +910,19 @@ final class AppController extends ChangeNotifier {
   }
 
   Future<void> chooseTeam(Game game, String teamId) async {
-    if (_isLocked(game) || !game.acceptsTeam(teamId)) return;
+    if (_isLocked(game) ||
+        !game.acceptsTeam(teamId) ||
+        _pickRequestsInFlight.contains(game.id)) {
+      return;
+    }
     _pickTeamIds[game.id] = teamId;
+    _pickErrors.remove(game.id);
     if (_offline) {
       _pickSyncStates[game.id] = PickSyncState.offline;
       notifyListeners();
       return;
     }
+    _pickRequestsInFlight.add(game.id);
     _pickSyncStates[game.id] = PickSyncState.saving;
     notifyListeners();
     try {
@@ -517,22 +939,74 @@ final class AppController extends ChangeNotifier {
         await _repository.submitOrConfirmEntry(
           leagueId: leagueId,
           weekId: _requireWeekId(),
-          picks: _pickTeamIds,
+          picks: {game.id: teamId},
+          requestId:
+              'pick_${_requestIdSegment(game.id)}_'
+              '${DateTime.now().microsecondsSinceEpoch}',
         );
       }
     } on RepositoryException catch (error) {
       _errorMessage = error.safeMessage;
+      _pickErrors[game.id] = error.safeMessage;
+      if (_isRetryableRepositoryError(error.code)) {
+        _pickSyncStates[game.id] = PickSyncState.offline;
+        _offline = true;
+      } else {
+        final confirmed = _confirmedPickTeamIds[game.id];
+        if (confirmed == null) {
+          _pickTeamIds.remove(game.id);
+        } else {
+          _pickTeamIds[game.id] = confirmed;
+        }
+        _pickSyncStates[game.id] = PickSyncState.rejected;
+      }
+      _pickRequestsInFlight.remove(game.id);
+      notifyListeners();
+      return;
+    } on Object {
+      _pickErrors[game.id] =
+          'The pick is still a local draft. Retry while the game is open.';
+      _pickSyncStates[game.id] = PickSyncState.offline;
+      _offline = true;
+      _pickRequestsInFlight.remove(game.id);
+      notifyListeners();
+      return;
+    }
+    _confirmedPickTeamIds[game.id] = teamId;
+    _pickTeamIds[game.id] = teamId;
+    _pickSyncStates[game.id] = PickSyncState.synced;
+    _pickRequestsInFlight.remove(game.id);
+    _offline = false;
+    unawaited(_telemetry.log('pick_saved'));
+    notifyListeners();
+  }
+
+  String _requestIdSegment(String value) {
+    final safe = value.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    return safe.length <= 64 ? safe : safe.substring(0, 64);
+  }
+
+  bool _isRetryableRepositoryError(String code) => const {
+    'aborted',
+    'cancelled',
+    'deadline-exceeded',
+    'internal',
+    'resource-exhausted',
+    'unavailable',
+    'unknown',
+  }.contains(code);
+
+  Future<void> retryPick(Game game) async {
+    final teamId = _pickTeamIds[game.id];
+    if (teamId == null || _isLocked(game)) {
+      _pickErrors[game.id] =
+          'This game is locked. The local draft was not accepted.';
       _pickSyncStates[game.id] = PickSyncState.rejected;
       notifyListeners();
       return;
     }
-    if (_isLocked(game)) {
-      _pickSyncStates[game.id] = PickSyncState.rejected;
-    } else {
-      _pickSyncStates[game.id] = PickSyncState.synced;
-      unawaited(_telemetry.log('pick_saved'));
-    }
-    notifyListeners();
+    _offline = false;
+    await chooseTeam(game, teamId);
   }
 
   void setOffline(bool value) {
@@ -631,6 +1105,15 @@ final class AppController extends ChangeNotifier {
         leagueId: leagueId,
         settings: settings,
       );
+      if (settings['pickerParticipatesInPicks'] case final bool value) {
+        _pickerParticipatesInPicks = value;
+      }
+      if (settings['pickLockPolicy'] case final String value) {
+        _pickLockPolicy = value == 'firstGame'
+            ? PickLockPolicy.firstGame
+            : PickLockPolicy.perGame;
+      }
+      notifyListeners();
       return true;
     } on RepositoryException catch (error) {
       _errorMessage = error.safeMessage;
@@ -640,37 +1123,99 @@ final class AppController extends ChangeNotifier {
   }
 
   Future<void> simulateFinalResults() async {
+    if (!isDemo) {
+      await refreshWeekResults();
+      return;
+    }
+    _errorMessage = null;
+    _demoReviewReady = true;
+    notifyListeners();
+  }
+
+  Future<bool> refreshWeekResults() async {
+    final leagueId = _activeLeagueId;
+    if (_repository == null || leagueId == null) return false;
     _errorMessage = null;
     try {
-      if (_repository != null && _activeLeagueId != null) {
-        await _repository.refreshSelectedGames(
-          leagueId: _activeLeagueId!,
-          weekId: _requireWeekId(),
-          forceRefresh: true,
-        );
-      }
-      _demoReviewReady = true;
+      await _repository.refreshSelectedGames(
+        leagueId: leagueId,
+        weekId: _requireWeekId(),
+        forceRefresh: true,
+      );
+      return true;
     } on RepositoryException catch (error) {
       _errorMessage = error.safeMessage;
+      return false;
     } finally {
       notifyListeners();
     }
   }
 
-  Future<bool> recordOverride(String gameId, String reason) async {
+  Future<bool> processLockedPicks() async {
+    final leagueId = _activeLeagueId;
+    if (_repository == null || leagueId == null) return isDemo;
+    _errorMessage = null;
+    notifyListeners();
+    try {
+      final weekId = _requireWeekId();
+      final result = await _repository.revealLockedGamePicks(
+        leagueId: leagueId,
+        weekId: weekId,
+      );
+      for (final entry in result.revealsByGame.entries) {
+        _revealedPicks[entry.key] = entry.value;
+      }
+      _errorMessage = null;
+      notifyListeners();
+      return true;
+    } on RepositoryException catch (error) {
+      _errorMessage = error.safeMessage;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> calculateProvisionalResults() async {
+    final leagueId = _activeLeagueId;
+    if (_repository == null || leagueId == null) {
+      _demoReviewReady = true;
+      notifyListeners();
+      return true;
+    }
+    try {
+      await _repository.calculateProvisionalWeekResults(
+        leagueId: leagueId,
+        weekId: _requireWeekId(),
+      );
+      return true;
+    } on RepositoryException catch (error) {
+      _errorMessage = error.safeMessage;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> recordOverride(
+    String gameId,
+    String reason, {
+    GameStatus status = GameStatus.voided,
+    int? homeScore,
+    int? awayScore,
+    String? winnerTeamId,
+  }) async {
     final trimmed = reason.trim();
     if (trimmed.length < 10) return false;
-    final game = _games.firstWhere((item) => item.id == gameId);
+    final game = selectedGames.firstWhere((item) => item.id == gameId);
     try {
       if (_repository != null && _activeLeagueId != null) {
         await _repository.overrideGameResult(
           leagueId: _activeLeagueId!,
           weekId: _requireWeekId(),
           gameId: gameId,
-          status: GameStatus.voided,
-          homeScore: game.homeScore,
-          awayScore: game.awayScore,
-          winnerTeamId: null,
+          status: status,
+          homeScore: homeScore ?? game.homeScore,
+          awayScore: awayScore ?? game.awayScore,
+          winnerTeamId: winnerTeamId,
           reason: trimmed,
         );
       }
@@ -685,17 +1230,76 @@ final class AppController extends ChangeNotifier {
   }
 
   Future<bool> finalizeWeek() async {
-    if (!_demoReviewReady) return false;
+    if (isDemo && !_demoReviewReady) return false;
     try {
       if (_repository != null && _activeLeagueId != null) {
-        await _repository.finalizeWeek(
+        final result = await _repository.finalizeWeek(
           leagueId: _activeLeagueId!,
           weekId: _requireWeekId(),
         );
+        _lastNextPickerUid = result.nextPickerUid;
       }
       _weekFinalized = true;
       unawaited(_telemetry.log('week_finalized'));
       notifyListeners();
+      return true;
+    } on RepositoryException catch (error) {
+      _errorMessage = error.safeMessage;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> assignCurrentWeekPicker(String pickerUid) async {
+    final leagueId = _activeLeagueId;
+    if (_repository == null || leagueId == null) return false;
+    try {
+      await _repository.assignWeeklyPicker(
+        leagueId: leagueId,
+        weekId: _requireWeekId(),
+        pickerUid: pickerUid,
+      );
+      return true;
+    } on RepositoryException catch (error) {
+      _errorMessage = error.safeMessage;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> createNextWeek() async {
+    final leagueId = _activeLeagueId;
+    if (!_weekFinalized || _repository == null || leagueId == null) {
+      return false;
+    }
+    final nextNumber = _weekSequentialNumber + 1;
+    final start = DateTime.now().toUtc();
+    try {
+      final created = await _repository.createNextWeek(
+        leagueId: leagueId,
+        sequentialNumber: nextNumber,
+        label: 'Week $nextNumber',
+        startAt: start,
+        endAt: start.add(const Duration(days: 7)),
+        pickerUid: _lastNextPickerUid ?? proposedNextPicker?.uid,
+        requestId:
+            'next_${leagueId}_$nextNumber'
+            '_${DateTime.now().microsecondsSinceEpoch}',
+      );
+      _activeWeekId = created.weekId;
+      _currentPickerId = created.pickerUid;
+      _weekSequentialNumber = nextNumber;
+      _weekLabel = 'Week $nextNumber';
+      _weekStatus = 'draft';
+      _weekFinalized = false;
+      _slatePublished = false;
+      _catalogGames.clear();
+      _selectedWeekGames.clear();
+      _selectedGameIds.clear();
+      _serverDraftGameIds.clear();
+      _draftSyncState = DraftSyncState.pristine;
+      await _startWeekSubscriptions(leagueId, created.weekId);
+      await loadCatalog();
       return true;
     } on RepositoryException catch (error) {
       _errorMessage = error.safeMessage;
@@ -747,7 +1351,7 @@ final class AppController extends ChangeNotifier {
   Future<bool> deleteAccount() async {
     try {
       await _repository?.deleteOrAnonymizeAccount();
-      if (_repository != null) await FirebaseAuth.instance.signOut();
+      if (_repository != null) await _auth!.signOut();
       await _cancelLeagueSubscriptions();
       _signedIn = false;
       _hasLeague = false;
@@ -791,6 +1395,16 @@ final class AppController extends ChangeNotifier {
       _hasLeague = false;
       _activeLeagueId = null;
       _activeWeekId = null;
+      _catalogGames.clear();
+      _selectedWeekGames.clear();
+      _selectedGameIds.clear();
+      _serverDraftGameIds.clear();
+      _pickTeamIds.clear();
+      _confirmedPickTeamIds.clear();
+      _pickSyncStates.clear();
+      _members.clear();
+      _standings.clear();
+      _entries.clear();
       unawaited(_cancelLeagueSubscriptions());
       notifyListeners();
       return;
@@ -847,6 +1461,7 @@ final class AppController extends ChangeNotifier {
       _leagueName = league.name;
       _leagueTimezone = league.timezone;
       _pickerParticipatesInPicks = league.pickerParticipatesInPicks;
+      _pickLockPolicy = league.pickLockPolicy;
       if (league.currentPickerUid != null) {
         _currentPickerId = league.currentPickerUid!;
       }
@@ -854,6 +1469,12 @@ final class AppController extends ChangeNotifier {
       if (nextWeekId != null && nextWeekId != _activeWeekId) {
         _activeWeekId = nextWeekId;
         unawaited(_startWeekSubscriptions(leagueId, nextWeekId));
+      }
+      if (canDraftSlate &&
+          !_slatePublished &&
+          _catalogGames.isEmpty &&
+          !_catalogLoading) {
+        unawaited(loadCatalog());
       }
       notifyListeners();
     }, onError: _handleLiveStreamError);
@@ -864,6 +1485,12 @@ final class AppController extends ChangeNotifier {
       final current = members.where((member) => member.uid == _currentUserId);
       if (current.isNotEmpty) {
         _displayName = current.first.displayName;
+      }
+      if (canDraftSlate &&
+          !_slatePublished &&
+          _catalogGames.isEmpty &&
+          !_catalogLoading) {
+        unawaited(loadCatalog());
       }
       notifyListeners();
     }, onError: _handleLiveStreamError);
@@ -897,6 +1524,10 @@ final class AppController extends ChangeNotifier {
       if (week == null) return;
       _weekLabel = week.label;
       _weekStatus = week.status;
+      _weekSequentialNumber = week.sequentialNumber;
+      _eligibleMemberCount = week.eligibleMemberCount;
+      _weekPickerParticipatesInPicks = week.pickerParticipatesInPicks;
+      _weekLockPolicy = week.lockPolicy;
       _weekFinalized = week.isFinalized;
       _slatePublished = week.status != 'draft';
       if (week.pickerUid.isNotEmpty) _currentPickerId = week.pickerUid;
@@ -905,12 +1536,20 @@ final class AppController extends ChangeNotifier {
     _gamesSubscription = repository.watchWeekGames(leagueId, weekId).listen((
       games,
     ) {
-      _games
+      _selectedWeekGames
         ..clear()
         ..addAll(games);
-      _selectedGameIds
+      _serverDraftGameIds
         ..clear()
         ..addAll(games.map((game) => game.id));
+      if (_draftSyncState != DraftSyncState.dirty &&
+          _draftSyncState != DraftSyncState.error &&
+          !_draftSaving) {
+        _selectedGameIds
+          ..clear()
+          ..addAll(_serverDraftGameIds);
+        _draftSyncState = DraftSyncState.saved;
+      }
       _syncRevealSubscriptions(leagueId, weekId, games);
       notifyListeners();
     }, onError: _handleLiveStreamError);
@@ -925,23 +1564,28 @@ final class AppController extends ChangeNotifier {
     _ownPicksSubscription = repository
         .watchOwnPrivatePicks(leagueId, weekId)
         .listen((picks) {
-          _pickTeamIds
-            ..clear()
-            ..addEntries(
-              picks.map((pick) => MapEntry(pick.gameId, pick.selectedTeamId)),
-            );
-          _pickSyncStates
-            ..clear()
-            ..addEntries(
-              picks.map(
-                (pick) => MapEntry(
-                  pick.gameId,
-                  pick.serverConfirmedAt == null
-                      ? PickSyncState.saving
-                      : PickSyncState.synced,
-                ),
-              ),
-            );
+          final serverIds = <String>{};
+          for (final pick in picks) {
+            serverIds.add(pick.gameId);
+            _confirmedPickTeamIds[pick.gameId] = pick.selectedTeamId;
+            if (!_pickRequestsInFlight.contains(pick.gameId) &&
+                _pickSyncStates[pick.gameId] != PickSyncState.offline) {
+              _pickTeamIds[pick.gameId] = pick.selectedTeamId;
+              _pickSyncStates[pick.gameId] = pick.serverConfirmedAt == null
+                  ? PickSyncState.saving
+                  : PickSyncState.synced;
+            }
+          }
+          for (final gameId in _confirmedPickTeamIds.keys.toList()) {
+            if (serverIds.contains(gameId)) continue;
+            _confirmedPickTeamIds.remove(gameId);
+            if (!_pickRequestsInFlight.contains(gameId) &&
+                _pickSyncStates[gameId] != PickSyncState.offline) {
+              _pickTeamIds.remove(gameId);
+              _pickSyncStates.remove(gameId);
+            }
+          }
+          _offline = false;
           notifyListeners();
         }, onError: _handleLiveStreamError);
   }
@@ -1024,6 +1668,7 @@ final class AppController extends ChangeNotifier {
       _leagueName = league.name;
       _leagueTimezone = league.timezone;
       _pickerParticipatesInPicks = league.pickerParticipatesInPicks;
+      _pickLockPolicy = league.pickLockPolicy;
     }
     _activeWeekId = league?.currentWeekId;
     if (league?.currentPickerUid != null) {
@@ -1037,12 +1682,16 @@ final class AppController extends ChangeNotifier {
           .first
           .timeout(const Duration(seconds: 6));
       if (liveGames != null) {
-        _games
+        _selectedWeekGames
           ..clear()
           ..addAll(liveGames);
-        _selectedGameIds
+        _serverDraftGameIds
           ..clear()
           ..addAll(liveGames.map((game) => game.id));
+        _selectedGameIds
+          ..clear()
+          ..addAll(_serverDraftGameIds);
+        _draftSyncState = DraftSyncState.saved;
       }
     }
   }
@@ -1056,7 +1705,7 @@ final class AppController extends ChangeNotifier {
       _members
         ..clear()
         ..addAll(liveMembers);
-      final authUid = FirebaseAuth.instance.currentUser?.uid;
+      final authUid = _auth?.currentUser?.uid;
       final current = liveMembers.where((member) => member.uid == authUid);
       if (current.isNotEmpty) {
         _currentUserId = current.first.uid;
@@ -1115,6 +1764,17 @@ final class AppController extends ChangeNotifier {
 
   void _seed() {
     final now = DateTime.now().toUtc();
+    _displayName = 'Alex Morgan';
+    _currentUserId = 'alex';
+    _currentPickerId = 'luke';
+    _leagueName = 'Luke’s Picks Arena';
+    _leagueTimezone = 'America/Chicago';
+    _weekLabel = 'Week 9';
+    _weekStatus = 'open';
+    _weekSequentialNumber = 9;
+    _eligibleMemberCount = 3;
+    _weekPickerParticipatesInPicks = false;
+    _catalogProvider = 'mock';
     Team team(String id, String name, String abbreviation) => Team(
       id: id,
       name: name,
@@ -1163,7 +1823,7 @@ final class AppController extends ChangeNotifier {
       );
     }
 
-    _games = [
+    _catalogGames.addAll([
       game(
         id: 'football-1',
         sport: 'Football',
@@ -1240,7 +1900,7 @@ final class AppController extends ChangeNotifier {
         startOffset: const Duration(days: -2),
         status: GameStatus.voided,
       ),
-    ];
+    ]);
     _selectedGameIds.addAll([
       'football-1',
       'football-2',
@@ -1250,15 +1910,18 @@ final class AppController extends ChangeNotifier {
       'baseball-2',
       'basketball-3',
     ]);
+    _serverDraftGameIds.addAll(_selectedGameIds);
+    _draftSyncState = DraftSyncState.saved;
     _pickTeamIds
       ..['basketball-2'] = 'forge'
       ..['hockey-1'] = 'bears';
+    _confirmedPickTeamIds.addAll(_pickTeamIds);
     _pickSyncStates
       ..['basketball-2'] = PickSyncState.synced
       ..['hockey-1'] = PickSyncState.synced;
 
     final joined = now.subtract(const Duration(days: 180));
-    _members = [
+    _members.addAll([
       LeagueMember(
         uid: 'luke',
         displayName: 'Luke Carter',
@@ -1299,8 +1962,8 @@ final class AppController extends ChangeNotifier {
         rotationOrder: 4,
         joinedAt: joined.add(const Duration(days: 10)),
       ),
-    ];
-    _standings = const [
+    ]);
+    _standings.addAll(const [
       Standing(
         uid: 'mia',
         displayName: 'Mia Flores',
@@ -1357,6 +2020,6 @@ final class AppController extends ChangeNotifier {
         bestWeekPoints: 6,
         currentRank: 4,
       ),
-    ];
+    ]);
   }
 }

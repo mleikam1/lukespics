@@ -1,10 +1,46 @@
 # Sports provider validation
 
-Validation date: 2026-07-27
+API-Sports research date: 2026-07-27.
+
+TheSportsDB internal-path validation date: 2026-07-30.
 
 Status: official documentation validation is complete. Authenticated live
 coverage validation is blocked because no existing provider key was available.
 No current league ID, live entitlement, fixture, or observed quota is asserted.
+
+## Release policy update — 2026-07-30
+
+Production provider mode for `lukes-picks` is `manual` until a provider passes
+every production gate. `mock` is emulator/test-only. The TheSportsDB adapter is
+implemented only as `theSportsDbTest`, with sanitized fixtures and a runtime
+policy gate. Its fixture/policy suites and connected three-user browser
+lifecycle pass under the isolated emulator project.
+
+TheSportsDB is restricted to Firebase emulator/internal validation. Its official
+API documentation and terms were revalidated before implementation. The
+documented paths used or permitted by this adapter are:
+
+- `eventsday.php`
+- `eventsnextleague.php`
+- `eventsseason.php`
+- `lookupteam.php`
+- `search_all_teams.php`
+
+Requirements:
+
+- official API responses only, never website scraping;
+- server-side calls or a fixture importer, never direct Flutter calls;
+- `ALLOW_THESPORTSDB_TEST_PROVIDER=true` plus an emulator/internal condition;
+- unconditional rejection when the project ID is `lukes-picks`;
+- normalized provider/event/team IDs;
+- HTTPS, allowlisted hosts, timeout, bounded retry, and quota headroom;
+- schedule/team caches, validation, duplicate suppression, timestamps, and a
+  raw-response hash;
+- sanitized fixtures instead of unrestricted raw payload storage;
+- visible attribution and internal-test-only team badges with neutral fallback.
+
+The documented test key mentioned in the task is not production permission. Do
+not enable TheSportsDB in a public preview or store build.
 
 ## API-Sports product mapping
 
@@ -95,7 +131,7 @@ mandatory.
 No CFBD key was available. Unauthenticated info/usage/games requests returned
 HTTP 401. A key request requires the user’s email flow; no account was created.
 
-## Exact blocker
+## API-Sports production gate
 
 A pre-existing API-Sports key, supplied only through Firebase Functions secret
 configuration, is required to:
@@ -108,18 +144,24 @@ configuration, is required to:
 6. save sanitized test fixtures.
 
 If API-Sports fails NCAA football coverage, a separate CFBD bearer key is then
-required. Until then, mock/manual modes are the supported backend fallback.
-The deterministic mock lifecycle is emulator-tested; full mock/manual operation
-through the connected Flutter client is still pending.
+required. Until then, manual mode is the production fallback and mock mode is
+the emulator/automated-test fallback. The connected browser scenario passed
+manual result handling, but did not exercise manual game creation; manual-game
+entry remains a separate validation item.
 
 ## Fallback behavior
 
 - Disable unvalidated targets in real-provider mode.
-- Continue with mock/manual schedules and results.
+- Continue with manual schedules/results in production and mock fixtures only
+  in emulators/tests.
 - Serve cached data through quota/provider failures.
 - Permit commissioner manual games and results with audit reasons.
 - Never fall back to undocumented ESPN endpoints or scraping.
 - Never expose provider credentials to Flutter clients.
+
+The optional CollegeFootballData research in this document is not a current
+application provider mode and has no authorized key. It must not weaken the
+manual-production or TheSportsDB-internal gates above.
 
 ## Remaining authenticated validation
 
@@ -130,9 +172,15 @@ through the connected Flutter client is still pending.
 - [ ] Confirm timestamps, statuses, team metadata, scores, and winner logic
 - [ ] Add redacted contract fixtures and adapter tests
 - [ ] Evaluate CFBD only if NCAA football remains unsupported
+- [x] Revalidate TheSportsDB documentation and terms for internal testing
+- [x] Add sanitized TheSportsDB schedule/team fixtures
+- [x] Prove the emulator-only flag and `lukes-picks` rejection
+- [x] Verify test badge hosts, fallbacks, and attribution
 
 ## Official sources
 
+- [TheSportsDB API guide](https://www.thesportsdb.com/docs_api_guide)
+- [TheSportsDB terms of use](https://www.thesportsdb.com/docs_terms_of_use.php)
 - [API-Sports home and free plan](https://api-sports.io/)
 - [API-Sports terms and quota behavior](https://api-sports.io/terms)
 - [NFL & NCAA coverage](https://api-sports.io/sports/nfl)

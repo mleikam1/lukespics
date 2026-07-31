@@ -1,5 +1,5 @@
 import {z} from "zod";
-import {GAME_STATUSES, MEMBER_ROLES} from "./types.js";
+import {GAME_STATUSES, MEMBER_ROLES, PROVIDER_NAMES} from "./types.js";
 
 export const idSchema = z
   .string()
@@ -32,7 +32,7 @@ export const teamSchema = z.object({
 export const normalizedGameSchema = z
   .object({
     id: idSchema,
-    provider: z.enum(["mock", "manual", "apiSports"]),
+    provider: z.enum(PROVIDER_NAMES),
     providerGameId: idSchema,
     sportCode: idSchema,
     leagueCode: idSchema,
@@ -79,19 +79,34 @@ export const normalizedGameSchema = z
     }
   });
 
-export const leagueSettingsSchema = z.object({
-  pickerParticipatesInPicks: z.boolean().default(false),
-  pickLockPolicy: z.enum(["perGame", "firstGame"]).default("perGame"),
-  weekStartDay: z.number().int().min(0).max(6).default(1),
-  weekStartTime: z
-    .string()
-    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
-    .default("09:00"),
-  enabledSports: z.array(idSchema).default([]),
-  enabledLeagues: z.array(idSchema).default([]),
-  manualFinalizationRequired: z.boolean().default(true),
-  providerName: z.enum(["mock", "manual", "apiSports"]).default("mock"),
-});
+const leagueSettingsPatchSchema = z
+  .object({
+    pickerParticipatesInPicks: z.boolean(),
+    pickLockPolicy: z.enum(["perGame", "firstGame"]),
+    weekStartDay: z.number().int().min(0).max(6),
+    weekStartTime: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    enabledSports: z.array(idSchema),
+    enabledLeagues: z.array(idSchema),
+    manualFinalizationRequired: z.boolean(),
+    providerName: z.enum(PROVIDER_NAMES),
+  })
+  .partial();
+
+export const leagueSettingsSchema = leagueSettingsPatchSchema.transform(
+  (settings) => ({
+    pickerParticipatesInPicks: false,
+    pickLockPolicy: "perGame" as const,
+    weekStartDay: 1,
+    weekStartTime: "09:00",
+    enabledSports: [] as string[],
+    enabledLeagues: [] as string[],
+    manualFinalizationRequired: true,
+    providerName: "manual" as const,
+    ...settings,
+  }),
+);
 
 export const ensureUserProfileSchema = mutationBaseSchema.extend({
   displayName: z.string().trim().min(1).max(80).optional(),
@@ -101,7 +116,7 @@ export const ensureUserProfileSchema = mutationBaseSchema.extend({
 export const createLeagueSchema = mutationBaseSchema.extend({
   name: z.string().trim().min(2).max(80).default("Luke's Picks Arena"),
   timezone: z.string().trim().min(1).max(80).default("America/Chicago"),
-  settings: leagueSettingsSchema.partial().default({}),
+  settings: leagueSettingsPatchSchema.default({}),
 });
 
 export const joinLeagueSchema = mutationBaseSchema.extend({
@@ -126,7 +141,7 @@ export const rotateInviteCodeSchema = leagueMutationSchema.extend({
 });
 
 export const updateLeagueSettingsSchema = leagueMutationSchema.extend({
-  settings: leagueSettingsSchema.partial().refine(
+  settings: leagueSettingsPatchSchema.refine(
     (value) => Object.keys(value).length > 0,
     "At least one setting is required.",
   ),
@@ -163,6 +178,23 @@ export const weekMutationSchema = leagueMutationSchema.extend({
   weekId: idSchema,
 });
 
+const revealCursorUidSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .refine((value) => !value.includes("/"), "Cursor uid cannot contain a slash.");
+
+export const revealLockedPicksSchema = weekMutationSchema.extend({
+  revealCursor: z
+    .object({
+      gameId: idSchema,
+      afterUid: revealCursorUidSchema.nullable().default(null),
+    })
+    .nullable()
+    .default(null),
+  revealPageSize: z.number().int().min(1).max(200).default(200),
+});
+
 export const assignPickerSchema = weekMutationSchema.extend({
   pickerUid: idSchema,
 });
@@ -194,7 +226,31 @@ export const providerQuerySchema = leagueMutationSchema.extend({
   forceRefresh: z.boolean().default(false),
 });
 
-export const sportsCatalogSchema = providerQuerySchema;
+const MAX_CATALOG_RANGE_DAYS = 7;
+
+export const sportsCatalogSchema = providerQuerySchema
+  .extend({
+    weekId: idSchema,
+  })
+  .superRefine((value, context) => {
+    const from = new Date(`${value.from}T00:00:00.000Z`);
+    const to = new Date(`${value.to}T00:00:00.000Z`);
+    const rangeDays =
+      Math.floor((to.valueOf() - from.valueOf()) / 86_400_000) + 1;
+    if (rangeDays < 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["to"],
+        message: "Catalog end date must be on or after its start date.",
+      });
+    } else if (rangeDays > MAX_CATALOG_RANGE_DAYS) {
+      context.addIssue({
+        code: "custom",
+        path: ["to"],
+        message: `Catalog date range cannot exceed ${MAX_CATALOG_RANGE_DAYS} days.`,
+      });
+    }
+  });
 
 export const selectedGamesSchema = weekMutationSchema.extend({
   forceRefresh: z.boolean().default(false),

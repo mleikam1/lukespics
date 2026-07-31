@@ -84,12 +84,15 @@ void main() {
       find.byKey(const Key('review-slate-button')),
     );
     expect(review.onPressed, isNull);
+    expect(
+      tester
+          .widget<OutlinedButton>(find.byKey(const Key('save-draft-button')))
+          .onPressed,
+      isNotNull,
+    );
 
-    final checkbox = find.byKey(const Key('catalog-checkbox-basketball-3'));
-    expect(checkbox, findsOneWidget);
-    final semantics = tester.getSemantics(checkbox);
-    expect(semantics.label, contains('Include'));
-
+    final checkbox = find.byKey(const Key('catalog-checkbox-football-1'));
+    expect(find.byKey(const Key('catalog-game-list')), findsOneWidget);
     await tester.scrollUntilVisible(
       checkbox,
       240,
@@ -98,9 +101,12 @@ void main() {
         matching: find.byType(Scrollable),
       ),
     );
+    expect(checkbox, findsOneWidget);
+    final semantics = tester.getSemantics(checkbox);
+    expect(semantics.label, contains('Include'));
     await tester.tap(checkbox);
     await tester.pump();
-    expect(controller.selectedGameIds, contains('basketball-3'));
+    expect(controller.selectedGameIds, contains('football-1'));
     expect(
       tester
           .widget<FilledButton>(find.byKey(const Key('review-slate-button')))
@@ -194,7 +200,7 @@ void main() {
       ..assumeDemoPersona('luke');
     await pumpApp(tester, controller: controller, initialLocation: '/picks');
 
-    expect(find.text('You are this week’s picker'), findsOneWidget);
+    expect(find.text('You’re this week’s picker.'), findsOneWidget);
     expect(find.byKey(const Key('pick-game-list')), findsNothing);
   });
 

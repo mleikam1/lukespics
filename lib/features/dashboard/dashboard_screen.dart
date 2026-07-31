@@ -576,6 +576,15 @@ class _RecentWeek extends StatelessWidget {
     final liveWeek = controller.historyWeeks.isEmpty
         ? null
         : controller.historyWeeks.first;
+    if (liveWeek == null && !controller.isDemo) {
+      return const EmptyState(
+        icon: Icons.history_toggle_off_rounded,
+        title: 'No finalized week yet',
+        message:
+            'A recap will appear after the first week is finalized. Connected '
+            'sessions never substitute demo winners or scores.',
+      );
+    }
     final label = liveWeek?.label ?? 'Week 8';
     final winnerNames = liveWeek == null
         ? 'Mia & Alex'

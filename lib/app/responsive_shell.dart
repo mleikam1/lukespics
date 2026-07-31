@@ -135,6 +135,7 @@ class ResponsiveShell extends ConsumerWidget {
                   Expanded(
                     child: NavigationRail(
                       extended: extended,
+                      scrollable: true,
                       minWidth: 80,
                       minExtendedWidth: 248,
                       backgroundColor: Colors.transparent,
@@ -173,7 +174,7 @@ class ResponsiveShell extends ConsumerWidget {
                               subtitle: Text(
                                 controller.isCurrentUserPicker
                                     ? 'Weekly picker'
-                                    : controller.currentRole.name,
+                                    : _roleLabel(controller.currentRole.name),
                               ),
                               onTap: () => context.go('/settings'),
                             ),
@@ -271,6 +272,16 @@ class _DemoPersonaMenu extends StatelessWidget {
 }
 
 String _initials(String name) {
-  final parts = name.trim().split(RegExp(r'\s+'));
-  return parts.take(2).map((part) => part[0].toUpperCase()).join();
+  final parts = name
+      .trim()
+      .split(RegExp(r'\s+'))
+      .where((part) => part.isNotEmpty);
+  final initials = parts
+      .take(2)
+      .map((part) => part.characters.first.toUpperCase())
+      .join();
+  return initials.isEmpty ? '?' : initials;
 }
+
+String _roleLabel(String role) =>
+    role.isEmpty ? 'Member' : '${role[0].toUpperCase()}${role.substring(1)}';

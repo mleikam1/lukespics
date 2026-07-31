@@ -6,6 +6,7 @@ import {
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
 import {
+  collection,
   collectionGroup,
   doc,
   getDoc,
@@ -231,6 +232,14 @@ describe("Firestore security boundary", () => {
         doc(
           other,
           "leagues/alpha/weeks/week-0001/entries/other/picks/future",
+        ),
+      ),
+    );
+    await assertSucceeds(
+      getDocs(
+        collection(
+          member,
+          "leagues/alpha/weeks/week-0001/reveals/past/picks",
         ),
       ),
     );

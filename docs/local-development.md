@@ -1,78 +1,127 @@
 # Local development
 
-## Verified toolchain
+## Toolchain
 
-The 2026-07-27 validation used Flutter 3.44.4/Dart 3.12.2, Node
-22.23.1, npm 11.9.0, Firebase CLI 15.9.0, and Java 21.0.9 for the
-Firebase emulators. The host default was Node 24 and Java 17, so Functions and
-emulator checks explicitly selected the repository runtimes.
+Use Flutter 3.44.4 / Dart 3.12.2, Node 22.23.1, npm 11.9.0, and Java
+21.0.9 for the Firebase emulators. Use the repository Firebase CLI 15.24.0. The
+audited host defaulted to Node 24 and Java 17, so do not rely on shell defaults.
 
-The iOS build used Xcode 26.3, CocoaPods 1.16.2, and an iOS 15.0
-minimum deployment target. Flutter Swift Package Manager is disabled for this
-project in `pubspec.yaml`; the CocoaPods fallback avoids invalid local package
-symlinks observed with Flutter 3.44.4 after `flutter clean`.
+The Apple build uses Xcode 26.3, CocoaPods 1.16.2, iOS 15.0, and the
+project-specific CocoaPods fallback configured in `pubspec.yaml`.
 
-## Flutter-only demo
+## Explicit demo
 
 ```bash
 flutter pub get
-flutter run -d chrome
+flutter run -d chrome \
+  --dart-define=LUKE_PICKS_PUBLIC_RELEASE=false \
+  --dart-define=USE_DEMO=true
 ```
 
-The default is deterministic in-memory demo mode and requires no external
-state. It is intended for screen and persona review, not connected Firebase
-validation.
+Demo mode is a local UI fixture, not a Firebase fallback. Normal builds are
+connected builds; a Firebase error must remain visible and retryable.
 
-## Full local stack
+## Full emulator stack
 
-Use Node 22 for Functions. On a machine whose default is a different Node
-version, a temporary Node 22 runner keeps the global installation unchanged:
+Install and compile Functions under Node 22:
 
 ```bash
 npx --yes --package=node@22 --call \
   'npm --prefix functions ci && npm --prefix functions run build'
 ```
 
-Use Java 21 for the Emulator Suite, then start the local-only synthetic project:
+Select Java 21, then start only the isolated project:
 
 ```bash
-firebase emulators:start --project demo-lukes-picks-local
+ALLOW_THESPORTSDB_TEST_PROVIDER=true firebase emulators:start \
+  --project demo-lukes-picks-local \
+  --only auth,firestore,functions,hosting
 ```
 
-Seed only the emulator:
+Seed from another terminal:
 
 ```bash
 npx --yes --package=node@22 --call 'npm --prefix functions run seed'
 ```
 
-Run the app with emulator compile-time defines shown in the README. Never point
-the seed command at a non-`demo-` project ID. If Java 21 is not the machine
-default, set `JAVA_HOME` and prepend its `bin` directory to `PATH` for each
-emulator command.
+Run Flutter:
 
-## Configuration
+```bash
+flutter run -d chrome \
+  --dart-define=LUKE_PICKS_PUBLIC_RELEASE=false \
+  --dart-define=USE_FIREBASE_EMULATORS=true \
+  --dart-define=FIREBASE_PROJECT_ID=demo-lukes-picks-local
+```
 
-`.env.example` lists secret names without values. Local ignored values are for
-emulator adapter development only. Provider contract tests use sanitized
-fixtures only. `INVITE_CODE_PEPPER` is required in a production deployment;
-`API_SPORTS_KEY` is required only for real API-Sports mode; the optional CFBD
-adapter has its own key.
+Both the client and seed path must refuse another project ID. Never deploy the
+synthetic project.
 
-No real Firebase project or provider credential was selected during
-implementation. `demo-lukes-picks-local` is an emulator-only project ID, not a
-deployment target.
+## Browser-to-emulator lifecycle
 
-## Code quality
+After installing Functions dependencies, run the actual Flutter UI through the
+three-user emulator lifecycle:
 
-Run formatter, Flutter analysis/tests, Functions lint/typecheck/tests, and rules
-tests before committing. Direct Firebase/Firestore access belongs in
-repositories; business rules belong in testable domain services.
+```bash
+npm --prefix functions ci
+./scripts/test_browser_e2e.sh
+```
 
-The production Functions dependency graph currently reports 12 transitive npm
-advisories under `npm audit --omit=dev` (5 high, 7 moderate, 0 critical).
-Including development tooling, `npm audit` reports 27 (18 high, 8 moderate,
-1 low, 0 critical). Do not use a forced major upgrade as a substitute for
-compatibility review and regression testing.
+The harness verifies refresh and explicit sign-out/re-sign-in restoration. It
+builds `build/web` with emulator defines, so that artifact is never suitable for
+a public preview. Rebuild with `flutter build web --release` before running
+`check_public_build.sh` or any preview deployment.
 
-See [validation-report.md](validation-report.md) for the exact verified command
-matrix and the current connected-client limitations.
+## Provider development
+
+- `mock`: deterministic emulator/automated-test data only.
+- `manual`: trustworthy commissioner-entered production fallback.
+- `theSportsDbTest`: implemented for internal/emulator use only. It requires
+  the explicit allow flag, documented endpoints, attribution, and sanitized
+  fixtures.
+- `apiSports`: server-only and disabled until an existing key and full
+  production gate are available.
+
+Do not make live provider calls in CI. Never use ESPN pages or undocumented
+endpoints.
+
+## Source and build checks
+
+```bash
+bash -n scripts/*.sh
+./scripts/check_public_source.sh
+flutter build web --release
+./scripts/check_public_build.sh build/web
+```
+
+The build scan requires the compile-time connected-production attestation and
+rejects a non-public runtime attestation, active emulator/test flags, forbidden
+hosts/projects, and likely secrets. Dart may retain unreachable strings from
+shared local fixtures in a minified bundle, so the attestation is paired with a
+fail-closed bootstrap invariant: a public release cannot enter demo or emulator
+mode. Generated Firebase client API keys are public app identifiers;
+service-account files, provider keys, private keys, and invite peppers remain
+prohibited.
+
+## Cloud safety
+
+Local development does not need production access. If a read-only cloud check
+is necessary, always include `--project lukes-picks` and never enumerate or
+target unrelated projects.
+
+Only [release_firebase.sh](../scripts/release_firebase.sh) is approved for
+rules/indexes, Functions, and Hosting-preview deployments. It is not a
+development convenience command. A separately authorized prerequisite mutation,
+such as enabling a reviewed API or setting `INVITE_CODE_PEPPER`, must run
+`assert_firebase_project.sh lukes-picks` immediately before its own explicit
+project-targeted write.
+
+## Historical dependency-advisory snapshot
+
+The pre-release 2026-07-30 audit recorded:
+
+- production graph: 12 advisories (5 high, 7 moderate, 0 critical);
+- complete graph: 27 advisories (18 high, 8 moderate, 1 low, 0 critical).
+
+Review compatibility before upgrades and rerun the complete suite. Do not use
+`npm audit fix --force`. Current release-candidate audit results belong in
+[validation-report.md](validation-report.md).

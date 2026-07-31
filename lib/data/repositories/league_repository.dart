@@ -59,6 +59,7 @@ abstract interface class LeagueRepository {
 
   Future<SportsCatalogResult> listSportsCatalog({
     required String leagueId,
+    required String weekId,
     required CatalogQuery query,
   });
 
@@ -68,11 +69,13 @@ abstract interface class LeagueRepository {
     required String chunkKey,
     required List<Game> games,
     List<String> removeGameIds,
+    String? requestId,
   });
 
   Future<PublishSlateResult> publishWeeklySlate({
     required String leagueId,
     required String weekId,
+    String? requestId,
   });
 
   Future<String> createManualGame({
@@ -86,13 +89,41 @@ abstract interface class LeagueRepository {
     required Team homeTeam,
     required Team awayTeam,
     String? venueName,
-    bool neutralSite,
+    bool neutralSite = false,
+    String? requestId,
   });
 
   Future<EntrySaveResult> submitOrConfirmEntry({
     required String leagueId,
     required String weekId,
     required Map<String, String> picks,
+    String? requestId,
+  });
+
+  Future<CreatedWeek> createNextWeek({
+    required String leagueId,
+    required int sequentialNumber,
+    required String label,
+    required DateTime startAt,
+    required DateTime endAt,
+    String? pickerUid,
+    String? requestId,
+  });
+
+  Future<void> assignWeeklyPicker({
+    required String leagueId,
+    required String weekId,
+    required String pickerUid,
+  });
+
+  Future<RevealResult> revealLockedGamePicks({
+    required String leagueId,
+    required String weekId,
+  });
+
+  Future<int> calculateProvisionalWeekResults({
+    required String leagueId,
+    required String weekId,
   });
 
   Future<RefreshResult> refreshSelectedGames({
@@ -249,6 +280,7 @@ final class LeagueSummary {
     required this.currentWeekId,
     required this.currentPickerUid,
     required this.pickerParticipatesInPicks,
+    required this.pickLockPolicy,
   });
 
   final String id;
@@ -257,6 +289,7 @@ final class LeagueSummary {
   final String? currentWeekId;
   final String? currentPickerUid;
   final bool pickerParticipatesInPicks;
+  final PickLockPolicy pickLockPolicy;
 }
 
 final class WeekSummary {
@@ -271,6 +304,10 @@ final class WeekSummary {
     required this.finalizedAt,
     required this.winnerUids,
     required this.highScore,
+    required this.pickerParticipatesInPicks,
+    required this.lockPolicy,
+    required this.selectedGameCount,
+    required this.eligibleMemberCount,
   });
 
   final String id;
@@ -283,6 +320,10 @@ final class WeekSummary {
   final DateTime? finalizedAt;
   final List<String> winnerUids;
   final int? highScore;
+  final bool pickerParticipatesInPicks;
+  final PickLockPolicy lockPolicy;
+  final int selectedGameCount;
+  final int eligibleMemberCount;
 
   bool get isFinalized => status == 'finalized';
 }
@@ -329,6 +370,18 @@ final class RevealedPick {
   final String selectedTeamId;
   final PickOutcome outcome;
   final int points;
+}
+
+final class RevealResult {
+  const RevealResult({
+    required this.revealedGameCount,
+    required this.revealsByGame,
+    this.payloadTruncated = false,
+  });
+
+  final int revealedGameCount;
+  final Map<String, List<RevealedPick>> revealsByGame;
+  final bool payloadTruncated;
 }
 
 final class RepositoryException implements Exception {

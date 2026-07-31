@@ -25,14 +25,23 @@ class StandingsScreen extends ConsumerWidget {
         const SizedBox(height: 20),
         const _ScoringInfo(),
         const SizedBox(height: 16),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            if (constraints.maxWidth >= 800) {
-              return _DesktopStandings(standings: standings);
-            }
-            return _MobileStandings(standings: standings);
-          },
-        ),
+        if (standings.isEmpty)
+          const EmptyState(
+            icon: Icons.leaderboard_outlined,
+            title: 'No standings yet',
+            message:
+                'Standings appear after the arena has finalized its first '
+                'graded week.',
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (constraints.maxWidth >= 800) {
+                return _DesktopStandings(standings: standings);
+              }
+              return _MobileStandings(standings: standings);
+            },
+          ),
       ],
     );
   }
@@ -163,6 +172,8 @@ class _MobileStandings extends StatelessWidget {
                     Expanded(
                       child: Text(
                         standing.displayName,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                     ),
@@ -235,5 +246,14 @@ String _accuracy(Standing standing) {
   return value == null ? '—' : '${(value * 100).toStringAsFixed(1)}%';
 }
 
-String _initials(String name) =>
-    name.split(' ').take(2).map((part) => part[0]).join();
+String _initials(String name) {
+  final parts = name
+      .trim()
+      .split(RegExp(r'\s+'))
+      .where((part) => part.isNotEmpty);
+  final initials = parts
+      .take(2)
+      .map((part) => part.characters.first.toUpperCase())
+      .join();
+  return initials.isEmpty ? '?' : initials;
+}

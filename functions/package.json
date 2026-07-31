@@ -17,6 +17,7 @@
     "test:rules:direct": "vitest run test/firestore.rules.test.ts",
     "test:integration": "npm run build && cd .. && firebase emulators:exec --project demo-lukes-picks-local --only auth,firestore,functions \"npm --prefix functions run test:integration:direct\"",
     "test:integration:direct": "vitest run test/emulator.integration.test.ts",
+    "test:browser": "tsx test/browser-emulator.e2e.ts",
     "seed": "tsx scripts/seed-emulator.ts"
   },
   "dependencies": {
@@ -31,6 +32,7 @@
     "eslint": "9.39.2",
     "firebase": "12.9.0",
     "firebase-tools": "15.24.0",
+    "playwright-core": "1.62.1",
     "tsx": "4.21.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.65.0",

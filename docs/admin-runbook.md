@@ -1,22 +1,29 @@
 # Commissioner runbook
 
-This is the intended operating contract. The callable backend supports these
-operations, and Flutter surfaces the core manual weekly flow. Explicit
-next-week creation/assignment and some recovery operations remain backend-only,
-and the connected flow has not had browser-to-emulator end-to-end validation.
-Track release readiness in [validation-report.md](validation-report.md).
+This is the intended operating contract. It is not evidence that every action
+is currently surfaced or browser-validated. Track observed readiness in
+[validation-report.md](validation-report.md) and the full state model in
+[connected-weekly-picker.md](connected-weekly-picker.md).
 
 ## Weekly operation
 
-1. Confirm the draft week boundaries and designated picker.
-2. Picker selects at least one game and reviews lock/participation snapshots.
-3. Publish the slate; members receive the open pick experience.
-4. Monitor completion counts, not private team choices.
-5. Refresh results only when cache/quota health permits.
-6. Resolve `reviewRequired`, postponed, or suspended games. Manual overrides
+1. Confirm the next sequential draft, boundaries, timezone, and designated
+   picker.
+2. Confirm production provider mode is `manual` unless API-Sports has passed
+   its separate production gate.
+3. Picker queries the catalog or enters a trustworthy manual game, selects at
+   least one game, removes unwanted games, and reviews the exact saved set.
+4. Publish once; participant and picker-participation settings are snapshotted.
+5. Monitor completion counts, never private pre-lock team choices.
+6. Refresh results only when cache/quota health permits.
+7. Resolve `reviewRequired`, postponed, or suspended games. Manual overrides
    require a reason.
-7. When every game is final or void, review provisional scores and finalize.
-8. Confirm winner/co-winners, aggregate standings, and next active picker.
+8. When every game is final or void, review provisional scores and finalize.
+9. Confirm winner/co-winners, standings, and exactly one rotation advance.
+10. Create the next sequential week and assign the proposed rotated picker.
+
+The picker may not silently edit a published slate. A member’s local/offline
+choice is not accepted until the server confirms it before lock.
 
 ## Provider delay
 
@@ -39,3 +46,17 @@ finalize again. Repeating the same calculation version is a no-op.
 - Member deactivation: preserves history and skips future rotation
 
 Never modify score or standing documents manually in production.
+
+## Membership and ownership
+
+Deactivating or removing a member preserves finalized history and skips them in
+future rotation. An owner cannot leave or delete their account while they own
+an active arena. Ownership transfer is not available in this release; do not
+work around the server-authoritative guard with direct Firestore edits.
+
+## Privacy incident check
+
+Owners and commissioners can inspect completion counts and post-lock reveals,
+not private pre-lock picks. If a client, rule, log, or export exposes a pre-lock
+choice, stop the release, preserve evidence without copying the pick value into
+chat or tickets, and investigate the authorization boundary.

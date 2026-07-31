@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../app/bootstrap.dart';
 import '../../core/domain/league_time.dart';
 import '../../core/responsive/breakpoints.dart';
 import '../../core/widgets/ui.dart';
@@ -19,7 +20,18 @@ class CatalogScreen extends ConsumerStatefulWidget {
 class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   final _searchController = TextEditingController();
   String _sport = 'All';
+  String _league = 'All leagues';
   String _day = 'All dates';
+  DateTimeRange? _dateRange;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(appControllerProvider).loadCatalog();
+    });
+  }
 
   @override
   void dispose() {
@@ -31,31 +43,86 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   Widget build(BuildContext context) {
     final controller = ref.watch(appControllerProvider);
     final games = _filtered(controller.games, controller.leagueTimezone);
+    final leagues =
+        <String>{
+          'All leagues',
+          ...controller.games.map((game) => game.leagueName),
+        }.toList()..sort((a, b) {
+          if (a == 'All leagues') return -1;
+          if (b == 'All leagues') return 1;
+          return a.compareTo(b);
+        });
+    if (!leagues.contains(_league)) _league = 'All leagues';
     return Padding(
       padding: AppBreakpoints.pagePadding(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           PageHeader(
-            eyebrow: 'Weekly picker tools',
-            title: 'Build the Week 9 slate',
+            eyebrow: '${controller.weekLabel} · Weekly picker tools',
+            title: 'Build the ${controller.weekLabel} slate',
             description:
-                'Browse the demo schedule and check every game you want to '
-                'include. There is no arbitrary game limit.',
+                'You’re this week’s picker. Choose at least one open game; '
+                'there is no maximum.',
             action: StatusPill(
-              label: controller.isDemo ? 'Demo schedule' : 'Cached schedule',
-              icon: Icons.cloud_done_outlined,
-              tone: StatusTone.success,
+              label: _providerStatus(controller),
+              icon: controller.catalogDelayed
+                  ? Icons.schedule_rounded
+                  : controller.catalogStale
+                  ? Icons.cloud_off_rounded
+                  : Icons.cloud_done_outlined,
+              tone: controller.catalogDelayed || controller.catalogStale
+                  ? StatusTone.warning
+                  : StatusTone.success,
             ),
           ),
           const SizedBox(height: 20),
           if (controller.canDraftSlate && !controller.slatePublished) ...[
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton.icon(
-                onPressed: () => _showManualGameDialog(context, controller),
-                icon: const Icon(Icons.add_circle_outline_rounded),
-                label: const Text('Add manual game'),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                OutlinedButton.icon(
+                  key: const Key('refresh-catalog-button'),
+                  onPressed: controller.catalogLoading
+                      ? null
+                      : () => controller.loadCatalog(forceRefresh: true),
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Refresh schedule'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => _showManualGameDialog(context, controller),
+                  icon: const Icon(Icons.add_circle_outline_rounded),
+                  label: const Text('Add manual game'),
+                ),
+              ],
+            ),
+            if (controller.catalogCachedAt != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Schedule cached ${DateFormat('MMM d, h:mm a').format(controller.catalogCachedAt!.toLocal())}',
+                textAlign: TextAlign.right,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            const SizedBox(height: 14),
+          ],
+          if (controller.catalogError != null) ...[
+            SectionCard(
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline_rounded),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text(controller.catalogError!)),
+                  TextButton(
+                    onPressed: controller.catalogLoading
+                        ? null
+                        : () => controller.loadCatalog(),
+                    child: const Text('Retry'),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 14),
@@ -93,19 +160,45 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
           ),
           const SizedBox(height: 10),
           _FilterRow(
+            values: leagues,
+            selected: _league,
+            onSelected: (value) => setState(() => _league = value),
+          ),
+          const SizedBox(height: 10),
+          _FilterRow(
             values: const ['All dates', 'Today', 'Tomorrow', 'Later'],
             selected: _day,
             onSelected: (value) => setState(() => _day = value),
           ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => _chooseDateRange(context),
+              icon: const Icon(Icons.date_range_rounded),
+              label: Text(
+                _dateRange == null
+                    ? 'Choose date range'
+                    : '${DateFormat('MMM d').format(_dateRange!.start)} – '
+                          '${DateFormat('MMM d').format(_dateRange!.end)}',
+              ),
+            ),
+          ),
           const SizedBox(height: 14),
           Expanded(
-            child: games.isEmpty
-                ? const EmptyState(
+            child: controller.catalogLoading && controller.games.isEmpty
+                ? const Center(child: CircularProgressIndicator())
+                : games.isEmpty
+                ? EmptyState(
                     icon: Icons.event_busy_rounded,
-                    title: 'No games match these filters',
-                    message:
-                        'Try another sport, date, or team name. Off-season '
-                        'leagues may not have a current schedule.',
+                    title: controller.catalogProvider == 'manual'
+                        ? 'Manual schedule is ready'
+                        : 'No games match these filters',
+                    message: controller.catalogProvider == 'manual'
+                        ? 'Production sports data remains manual until a '
+                              'provider is approved. Add a trustworthy game '
+                              'above.'
+                        : 'Try another sport, league, date, or team name. '
+                              'Off-season leagues may not have a schedule.',
                   )
                 : ListView.separated(
                     key: const Key('catalog-game-list'),
@@ -117,8 +210,9 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                       return _CatalogGameCard(
                         game: game,
                         selected: controller.selectedGameIds.contains(game.id),
-                        enabled: !controller.slatePublished,
+                        enabled: controller.isCatalogGameSelectable(game),
                         timezone: controller.leagueTimezone,
+                        logoPolicy: _logoPolicy(controller, game),
                         onChanged: () => controller.toggleSlateGame(game.id),
                       );
                     },
@@ -139,6 +233,25 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
           game.sportCode.toLowerCase() != _sport.toLowerCase()) {
         return false;
       }
+      if (_league != 'All leagues' && game.leagueName != _league) return false;
+      if (_dateRange != null) {
+        final local = game.scheduledAtUtc.toLocal();
+        final day = DateTime(local.year, local.month, local.day);
+        final start = DateTime(
+          _dateRange!.start.year,
+          _dateRange!.start.month,
+          _dateRange!.start.day,
+        );
+        final end = DateTime(
+          _dateRange!.end.year,
+          _dateRange!.end.month,
+          _dateRange!.end.day,
+          23,
+          59,
+          59,
+        );
+        if (day.isBefore(start) || day.isAfter(end)) return false;
+      }
       final dayDelta = leagueDayDelta(game.scheduledAtUtc, now, timezone);
       if (_day == 'Today' && dayDelta != 0) return false;
       if (_day == 'Tomorrow' && dayDelta != 1) return false;
@@ -150,6 +263,44 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
       }
       return true;
     }).toList()..sort((a, b) => a.scheduledAtUtc.compareTo(b.scheduledAtUtc));
+  }
+
+  Future<void> _chooseDateRange(BuildContext context) async {
+    final now = DateTime.now();
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: now.subtract(const Duration(days: 1)),
+      lastDate: now.add(const Duration(days: 730)),
+      initialDateRange: _dateRange,
+    );
+    if (range != null && mounted) {
+      setState(() {
+        _dateRange = range;
+        _day = 'All dates';
+      });
+    }
+  }
+
+  String _providerStatus(AppController controller) {
+    if (controller.isDemo) return 'Explicit demo schedule';
+    if (controller.catalogProvider == 'theSportsDbTest') {
+      return 'Internal test · TheSportsDB';
+    }
+    if (controller.catalogProvider == 'manual') return 'Manual schedule';
+    if (controller.catalogCacheHit) return 'Cached schedule';
+    return 'Provider schedule';
+  }
+
+  TeamLogoPolicy _logoPolicy(AppController controller, Game game) {
+    if (controller.runtimeMode != AppRuntimeMode.firebaseEmulator ||
+        game.provider != 'theSportsDbTest') {
+      return const TeamLogoPolicy.disabled();
+    }
+    return const TeamLogoPolicy.provider(
+      provider: 'theSportsDbTest',
+      logoRightsVerified: true,
+      allowedHosts: {'r2.thesportsdb.com'},
+    );
   }
 
   Future<void> _showManualGameDialog(
@@ -323,6 +474,7 @@ class _CatalogGameCard extends StatelessWidget {
     required this.selected,
     required this.enabled,
     required this.timezone,
+    required this.logoPolicy,
     required this.onChanged,
   });
 
@@ -330,6 +482,7 @@ class _CatalogGameCard extends StatelessWidget {
   final bool selected;
   final bool enabled;
   final String timezone;
+  final TeamLogoPolicy logoPolicy;
   final VoidCallback onChanged;
 
   @override
@@ -383,7 +536,10 @@ class _CatalogGameCard extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      _CatalogTeamLine(team: game.awayTeam),
+                      _CatalogTeamLine(
+                        team: game.awayTeam,
+                        logoPolicy: logoPolicy,
+                      ),
                       const Padding(
                         padding: EdgeInsets.only(left: 50, top: 3, bottom: 3),
                         child: Text(
@@ -395,7 +551,10 @@ class _CatalogGameCard extends StatelessWidget {
                           ),
                         ),
                       ),
-                      _CatalogTeamLine(team: game.homeTeam),
+                      _CatalogTeamLine(
+                        team: game.homeTeam,
+                        logoPolicy: logoPolicy,
+                      ),
                       const SizedBox(height: 10),
                       Text(
                         [
@@ -428,15 +587,16 @@ class _CatalogGameCard extends StatelessWidget {
 }
 
 class _CatalogTeamLine extends StatelessWidget {
-  const _CatalogTeamLine({required this.team});
+  const _CatalogTeamLine({required this.team, required this.logoPolicy});
 
   final Team team;
+  final TeamLogoPolicy logoPolicy;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        TeamBadge(team: team, size: 40),
+        TeamBadge(team: team, size: 40, logoPolicy: logoPolicy),
         const SizedBox(width: 10),
         Expanded(
           child: Text(
@@ -485,16 +645,42 @@ class _SelectionBar extends StatelessWidget {
               liveRegion: true,
               label: '$count games selected',
               child: Text(
-                count == 1 ? '1 game selected' : '$count games selected',
+                [
+                  count == 1 ? '1 game selected' : '$count games selected',
+                  switch (controller.draftSyncState) {
+                    DraftSyncState.dirty => 'Not saved',
+                    DraftSyncState.saving => 'Saving draft…',
+                    DraftSyncState.saved => 'Draft saved',
+                    DraftSyncState.error => 'Save failed',
+                    DraftSyncState.pristine => 'Not saved',
+                  },
+                ].join(' · '),
                 style: const TextStyle(fontWeight: FontWeight.w900),
               ),
             ),
           ),
-          FilledButton.icon(
-            key: const Key('review-slate-button'),
-            onPressed: count == 0 ? null : () => context.go('/slate/review'),
-            icon: const Icon(Icons.arrow_forward_rounded),
-            label: const Text('Review slate'),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton(
+                key: const Key('save-draft-button'),
+                onPressed:
+                    controller.draftSaving ||
+                        controller.draftSyncState == DraftSyncState.saved
+                    ? null
+                    : controller.saveDraftSlate,
+                child: Text(controller.draftSaving ? 'Saving…' : 'Save draft'),
+              ),
+              FilledButton.icon(
+                key: const Key('review-slate-button'),
+                onPressed: count == 0
+                    ? null
+                    : () => context.go('/slate/review'),
+                icon: const Icon(Icons.arrow_forward_rounded),
+                label: const Text('Review slate'),
+              ),
+            ],
           ),
         ],
       ),

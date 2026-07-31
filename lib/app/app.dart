@@ -26,10 +26,12 @@ class LukesPicksApp extends StatefulWidget {
 class _LukesPicksAppState extends State<LukesPicksApp> {
   late final AppController _controller =
       widget.controller ??
-      AppController.demo(
-        runtimeMode: widget.bootstrap.mode,
-        bootstrapMessage: widget.bootstrap.message,
-      );
+      (widget.bootstrap.mode == AppRuntimeMode.demo
+          ? AppController.demo(bootstrapMessage: widget.bootstrap.message)
+          : AppController.connected(
+              runtimeMode: widget.bootstrap.mode,
+              bootstrapMessage: widget.bootstrap.message,
+            ));
 
   @override
   Widget build(BuildContext context) {

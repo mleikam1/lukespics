@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/bootstrap.dart';
 import '../../app/theme/app_theme.dart';
 import '../../core/responsive/breakpoints.dart';
 import '../../core/widgets/ui.dart';
@@ -16,7 +17,9 @@ class ResultsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.watch(appControllerProvider);
-    final games = controller.selectedGames;
+    final games = controller.isDemo
+        ? controller.selectedGames
+        : controller.selectedWeekGames;
     final finals = games
         .where(
           (game) =>
@@ -30,8 +33,8 @@ class ResultsScreen extends ConsumerWidget {
       children: [
         PageHeader(
           eyebrow: controller.weekFinalized
-              ? 'Week 9 · Finalized'
-              : 'Week 9 · In progress',
+              ? '${controller.weekLabel} · Finalized'
+              : '${controller.weekLabel} · In progress',
           title: 'Weekly results',
           description:
               'Member choices stay private until each game locks. Results are '
@@ -59,6 +62,7 @@ class ResultsScreen extends ConsumerWidget {
           )
         else
           _ScoreboardSummary(
+            weekLabel: controller.weekLabel,
             finalCount: finals,
             liveCount: live,
             total: games.length,
@@ -88,11 +92,12 @@ class ResultsScreen extends ConsumerWidget {
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             ),
-            TextButton.icon(
-              onPressed: () => context.go('/admin'),
-              icon: const Icon(Icons.rule_rounded),
-              label: const Text('Commissioner review'),
-            ),
+            if (controller.canAdmin)
+              TextButton.icon(
+                onPressed: () => context.go('/admin'),
+                icon: const Icon(Icons.rule_rounded),
+                label: const Text('Commissioner review'),
+              ),
           ],
         ),
         const SizedBox(height: 10),
@@ -110,21 +115,36 @@ class ResultsScreen extends ConsumerWidget {
               locked: controller.isGameLocked(game),
               showDemoReveals: controller.isDemo,
               revealedPicks: controller.revealsFor(game.id),
+              logoPolicy: _logoPolicy(controller, game),
             ),
             const SizedBox(height: 12),
           ],
       ],
     );
   }
+
+  TeamLogoPolicy _logoPolicy(AppController controller, Game game) {
+    if (controller.runtimeMode != AppRuntimeMode.firebaseEmulator ||
+        game.provider != 'theSportsDbTest') {
+      return const TeamLogoPolicy.disabled();
+    }
+    return const TeamLogoPolicy.provider(
+      provider: 'theSportsDbTest',
+      logoRightsVerified: true,
+      allowedHosts: {'r2.thesportsdb.com'},
+    );
+  }
 }
 
 class _ScoreboardSummary extends StatelessWidget {
   const _ScoreboardSummary({
+    required this.weekLabel,
     required this.finalCount,
     required this.liveCount,
     required this.total,
   });
 
+  final String weekLabel;
   final int finalCount;
   final int liveCount;
   final int total;
@@ -142,9 +162,9 @@ class _ScoreboardSummary extends StatelessWidget {
         runSpacing: 16,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          const Text(
-            'WEEK 9',
-            style: TextStyle(
+          Text(
+            weekLabel.toUpperCase(),
+            style: const TextStyle(
               color: BrandColors.gold,
               fontSize: 20,
               fontWeight: FontWeight.w900,
@@ -448,6 +468,7 @@ class _ResultGameCard extends StatelessWidget {
     required this.locked,
     required this.showDemoReveals,
     required this.revealedPicks,
+    required this.logoPolicy,
   });
 
   final Game game;
@@ -455,6 +476,7 @@ class _ResultGameCard extends StatelessWidget {
   final bool locked;
   final bool showDemoReveals;
   final List<RevealedPick> revealedPicks;
+  final TeamLogoPolicy logoPolicy;
 
   @override
   Widget build(BuildContext context) {
@@ -480,7 +502,7 @@ class _ResultGameCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              TeamBadge(team: game.awayTeam, size: 42),
+              TeamBadge(team: game.awayTeam, size: 42, logoPolicy: logoPolicy),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -509,7 +531,7 @@ class _ResultGameCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 10),
-              TeamBadge(team: game.homeTeam, size: 42),
+              TeamBadge(team: game.homeTeam, size: 42, logoPolicy: logoPolicy),
             ],
           ),
           const SizedBox(height: 14),

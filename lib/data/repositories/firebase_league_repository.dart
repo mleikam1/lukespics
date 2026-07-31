@@ -187,12 +187,14 @@ final class FirebaseLeagueRepository implements LeagueRepository {
   @override
   Future<SportsCatalogResult> listSportsCatalog({
     required String leagueId,
+    required String weekId,
     required CatalogQuery query,
   }) async {
     final date = (DateTime value) =>
         value.toUtc().toIso8601String().substring(0, 10);
     final result = await _call('listSportsCatalog', {
       'leagueId': leagueId,
+      'weekId': weekId,
       'sportCode': query.sportCode,
       'leagueCode': query.leagueCode,
       'leagueIdForProvider': query.providerLeagueId,
@@ -233,6 +235,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
     required String chunkKey,
     required List<Game> games,
     List<String> removeGameIds = const [],
+    String? requestId,
   }) async {
     final result = await _call('saveDraftSlate', {
       'leagueId': leagueId,
@@ -248,7 +251,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
           )
           .toList(growable: false),
       'removeGameIds': removeGameIds,
-    });
+    }, requestId: requestId);
     return _int(result, 'selectedGameCount');
   }
 
@@ -256,11 +259,12 @@ final class FirebaseLeagueRepository implements LeagueRepository {
   Future<PublishSlateResult> publishWeeklySlate({
     required String leagueId,
     required String weekId,
+    String? requestId,
   }) async {
     final result = await _call('publishWeeklySlate', {
       'leagueId': leagueId,
       'weekId': weekId,
-    });
+    }, requestId: requestId);
     return PublishSlateResult(
       eligibleMemberCount: _int(result, 'eligibleMemberCount'),
       selectedGameCount: _int(result, 'selectedGameCount'),
@@ -280,6 +284,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
     required Team awayTeam,
     String? venueName,
     bool neutralSite = false,
+    String? requestId,
   }) async {
     final result = await _call('createManualGame', {
       'leagueId': leagueId,
@@ -303,7 +308,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
         'shortName': awayTeam.shortName,
         'abbreviation': awayTeam.abbreviation,
       },
-    });
+    }, requestId: requestId);
     return _string(result, 'gameId');
   }
 
@@ -312,6 +317,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
     required String leagueId,
     required String weekId,
     required Map<String, String> picks,
+    String? requestId,
   }) async {
     final result = await _call('submitOrConfirmEntry', {
       'leagueId': leagueId,
@@ -320,12 +326,147 @@ final class FirebaseLeagueRepository implements LeagueRepository {
         for (final pick in picks.entries)
           {'gameId': pick.key, 'selectedTeamId': pick.value},
       ],
-    });
+    }, requestId: requestId);
     return EntrySaveResult(
       savedPickCount: _int(result, 'savedPickCount'),
       totalRequiredPickCount: _int(result, 'totalRequiredPickCount'),
       completionState: _string(result, 'completionState'),
     );
+  }
+
+  @override
+  Future<CreatedWeek> createNextWeek({
+    required String leagueId,
+    required int sequentialNumber,
+    required String label,
+    required DateTime startAt,
+    required DateTime endAt,
+    String? pickerUid,
+    String? requestId,
+  }) async {
+    final result = await _call('createNextWeek', {
+      'leagueId': leagueId,
+      'sequentialNumber': sequentialNumber,
+      'label': label,
+      'startAt': startAt.toUtc().toIso8601String(),
+      'endAt': endAt.toUtc().toIso8601String(),
+      if (pickerUid != null) 'pickerUid': pickerUid,
+    }, requestId: requestId);
+    return CreatedWeek(
+      weekId: _string(result, 'weekId'),
+      pickerUid: _string(result, 'pickerUid'),
+    );
+  }
+
+  @override
+  Future<void> assignWeeklyPicker({
+    required String leagueId,
+    required String weekId,
+    required String pickerUid,
+  }) async {
+    await _call('assignWeeklyPicker', {
+      'leagueId': leagueId,
+      'weekId': weekId,
+      'pickerUid': pickerUid,
+    });
+  }
+
+  @override
+  Future<RevealResult> revealLockedGamePicks({
+    required String leagueId,
+    required String weekId,
+  }) async {
+    const revealPageSize = 200;
+    final revealsByGame = <String, Map<String, RevealedPick>>{};
+    final visitedCursors = <String>{};
+    Map<String, Object?>? cursor;
+    var revealedGameCount = 0;
+    var payloadTruncated = false;
+    while (true) {
+      final result = await _call('revealLockedGamePicks', {
+        'leagueId': leagueId,
+        'weekId': weekId,
+        'revealPageSize': revealPageSize,
+        if (cursor != null) 'revealCursor': cursor,
+      });
+      revealedGameCount += _int(result, 'revealedGameCount');
+      for (final entry in _mapOrEmpty(result['revealsByGame']).entries) {
+        final picksByUid = revealsByGame.putIfAbsent(
+          entry.key,
+          () => <String, RevealedPick>{},
+        );
+        final value = entry.value;
+        if (value is! List) continue;
+        for (final item in value) {
+          if (item is! Map) continue;
+          final data = _map(item);
+          final uid = data['uid'] as String? ?? '';
+          if (uid.isEmpty) continue;
+          picksByUid[uid] = RevealedPick(
+            uid: uid,
+            displayName: data['displayName'] as String? ?? 'Member',
+            selectedTeamId: data['selectedTeamId'] as String? ?? '',
+            outcome: _pickOutcome(data['outcome'] as String?),
+            points: _number(data['points']),
+          );
+        }
+      }
+
+      final page = _mapOrEmpty(result['revealPage']);
+      final nextCursor = _mapOrEmpty(page['nextCursor']);
+      final nextGameId = nextCursor['gameId'] as String?;
+      if (nextGameId == null || nextGameId.isEmpty) {
+        payloadTruncated = page['truncated'] == true;
+        cursor = null;
+        break;
+      }
+      final nextAfterUid = nextCursor['afterUid'] as String?;
+      final currentGameId = cursor?['gameId'] as String?;
+      final currentAfterUid = cursor?['afterUid'] as String?;
+      final cursorAdvances =
+          currentGameId == null ||
+          nextGameId.compareTo(currentGameId) > 0 ||
+          (nextGameId == currentGameId &&
+              nextAfterUid != null &&
+              (currentAfterUid == null ||
+                  nextAfterUid.compareTo(currentAfterUid) > 0));
+      if (!cursorAdvances) {
+        throw const RepositoryException(
+          'invalid-response',
+          'The server returned a non-advancing reveal page.',
+        );
+      }
+      final cursorKey = '$nextGameId\u0000${nextAfterUid ?? ''}';
+      if (!visitedCursors.add(cursorKey)) {
+        throw const RepositoryException(
+          'invalid-response',
+          'The server returned a repeated reveal page.',
+        );
+      }
+      cursor = {'gameId': nextGameId, 'afterUid': nextAfterUid};
+      payloadTruncated = true;
+    }
+    return RevealResult(
+      revealedGameCount: revealedGameCount,
+      revealsByGame: Map<String, List<RevealedPick>>.unmodifiable({
+        for (final entry in revealsByGame.entries)
+          entry.key: List<RevealedPick>.unmodifiable(entry.value.values),
+      }),
+      payloadTruncated: payloadTruncated,
+    );
+  }
+
+  @override
+  Future<int> calculateProvisionalWeekResults({
+    required String leagueId,
+    required String weekId,
+  }) async {
+    final result = await _call('calculateProvisionalWeekResults', {
+      'leagueId': leagueId,
+      'weekId': weekId,
+    });
+    final scores = result['scores'];
+    return scores is List ? scores.length : 0;
   }
 
   @override
@@ -418,6 +559,9 @@ final class FirebaseLeagueRepository implements LeagueRepository {
         currentPickerUid: data['currentPickerUid'] as String?,
         pickerParticipatesInPicks:
             settings['pickerParticipatesInPicks'] as bool? ?? false,
+        pickLockPolicy: settings['pickLockPolicy'] == 'firstGame'
+            ? PickLockPolicy.firstGame
+            : PickLockPolicy.perGame,
       );
     });
   }
@@ -604,11 +748,12 @@ final class FirebaseLeagueRepository implements LeagueRepository {
 
   Future<Map<String, Object?>> _call(
     String name,
-    Map<String, Object?> payload,
-  ) async {
+    Map<String, Object?> payload, {
+    String? requestId,
+  }) async {
     try {
       final response = await _functions.httpsCallable(name).call<Object?>({
-        'requestId': _requestId(),
+        'requestId': requestId ?? _requestId(),
         ...payload,
       });
       final envelope = _map(response.data);
@@ -620,12 +765,15 @@ final class FirebaseLeagueRepository implements LeagueRepository {
       }
       return _map(envelope['result']);
     } on FirebaseFunctionsException catch (error) {
-      throw RepositoryException(error.code, _safeFunctionsMessage(error.code));
+      throw RepositoryException(
+        error.code,
+        _safeFunctionsMessage(error.code, error.message),
+      );
     }
   }
 
   String _requestId() =>
-      '${DateTime.now().microsecondsSinceEpoch}_${_random.nextInt(1 << 32)}';
+      '${DateTime.now().microsecondsSinceEpoch}_${_random.nextInt(0x3fffffff)}';
 }
 
 Map<String, Object?> _map(Object? value) {
@@ -637,6 +785,14 @@ Map<String, Object?> _map(Object? value) {
     'invalid-response',
     'The server returned an unexpected response.',
   );
+}
+
+Map<String, Object?> _mapOrEmpty(Object? value) {
+  if (value is Map<String, Object?>) return value;
+  if (value is Map) {
+    return value.map((key, item) => MapEntry('$key', item));
+  }
+  return const {};
 }
 
 String _string(Map<String, Object?> data, String key) {
@@ -665,16 +821,31 @@ List<String> _stringList(Map<String, Object?> data, String key) {
 
 int _number(Object? value) => value is num ? value.toInt() : 0;
 
-String _safeFunctionsMessage(String code) => switch (code) {
-  'unauthenticated' => 'Please sign in again.',
-  'permission-denied' => 'You do not have permission to do that.',
-  'resource-exhausted' =>
-    'Sports data refresh is temporarily delayed. Cached data is still available.',
-  'deadline-exceeded' ||
-  'unavailable' => 'The service is temporarily unavailable. Try again shortly.',
-  'failed-precondition' => 'This action is not available in the current state.',
-  _ => 'The action could not be completed. Try again.',
-};
+String _safeFunctionsMessage(String code, String? serverMessage) {
+  final safeServerMessage = serverMessage?.trim();
+  if (safeServerMessage != null &&
+      safeServerMessage.isNotEmpty &&
+      safeServerMessage.length <= 240 &&
+      const {
+        'failed-precondition',
+        'permission-denied',
+        'invalid-argument',
+        'already-exists',
+      }.contains(code)) {
+    return safeServerMessage;
+  }
+  return switch (code) {
+    'unauthenticated' => 'Please sign in again.',
+    'permission-denied' => 'You do not have permission to do that.',
+    'resource-exhausted' =>
+      'Sports data refresh is temporarily delayed. Cached data is still available.',
+    'deadline-exceeded' || 'unavailable' =>
+      'The service is temporarily unavailable. Try again shortly.',
+    'failed-precondition' =>
+      'This action is not available in the current state.',
+    _ => 'The action could not be completed. Try again.',
+  };
+}
 
 Map<String, Object?> _gameToJson(
   Game game, {
@@ -813,6 +984,13 @@ WeekSummary _weekFromJson(String id, Map<String, Object?> data) => WeekSummary(
   highScore: data['highScore'] is num
       ? (data['highScore'] as num).toInt()
       : null,
+  pickerParticipatesInPicks:
+      data['pickerParticipatesSnapshot'] as bool? ?? false,
+  lockPolicy: data['lockPolicySnapshot'] == 'firstGame'
+      ? PickLockPolicy.firstGame
+      : PickLockPolicy.perGame,
+  selectedGameCount: _number(data['selectedGameCount']),
+  eligibleMemberCount: _number(data['eligibleMemberCount']),
 );
 
 Pick _pickFromJson(String gameId, Map<String, Object?> data) {

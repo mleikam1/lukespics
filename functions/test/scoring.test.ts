@@ -5,7 +5,10 @@ import {
   withSourceHash,
 } from "../src/providers/normalization.js";
 import {MockSportsProvider} from "../src/providers/mock.js";
-import {scoreEntry} from "../src/services/scoring.js";
+import {
+  gameResultVersionsAreStable,
+  scoreEntry,
+} from "../src/services/scoring.js";
 import {isCatalogGameSelectable} from "../src/services/weeks.js";
 
 describe("authoritative scoring", () => {
@@ -15,24 +18,28 @@ describe("authoritative scoring", () => {
       status: "final",
       winnerTeamId: "home",
       resultVersion: "version-home",
+      revealed: true,
     },
     {
       id: "final-away",
       status: "final",
       winnerTeamId: "away",
       resultVersion: "version-away",
+      revealed: true,
     },
     {
       id: "void-game",
       status: "void",
       winnerTeamId: null,
       resultVersion: "version-void",
+      revealed: true,
     },
     {
       id: "pending-game",
       status: "postponed",
       winnerTeamId: null,
       resultVersion: "version-pending",
+      revealed: true,
     },
   ];
 
@@ -73,6 +80,61 @@ describe("authoritative scoring", () => {
     expect(scoreEntry("member", true, games, picks)).toEqual(
       scoreEntry("member", true, games, picks),
     );
+  });
+
+  it("ignores final and void results until server reveal completes", () => {
+    const result = scoreEntry(
+      "member",
+      true,
+      [
+        {
+          id: "future-final",
+          status: "final",
+          winnerTeamId: "home",
+          resultVersion: "future-final-version",
+          revealed: false,
+        },
+        {
+          id: "future-void",
+          status: "void",
+          winnerTeamId: null,
+          resultVersion: "future-void-version",
+          revealed: false,
+        },
+      ],
+      [{gameId: "future-final", selectedTeamId: "home"}],
+    );
+
+    expect(result).toMatchObject({
+      points: 0,
+      correctCount: 0,
+      incorrectCount: 0,
+      gradedCount: 0,
+      voidCount: 0,
+      accuracy: null,
+    });
+  });
+
+  it("detects a changed, added, or removed game result during finalization", () => {
+    const first = {id: "game-a", resultVersion: "version-a"};
+    const claimed = [
+      first,
+      {id: "game-b", resultVersion: "version-b"},
+    ];
+    expect(gameResultVersionsAreStable(claimed, [...claimed])).toBe(true);
+    expect(
+      gameResultVersionsAreStable(claimed, [
+        first,
+        {id: "game-b", resultVersion: "corrected-version"},
+      ]),
+    ).toBe(false);
+    expect(gameResultVersionsAreStable(claimed, [first])).toBe(false);
+    expect(
+      gameResultVersionsAreStable(claimed, [
+        ...claimed,
+        {id: "game-c", resultVersion: "version-c"},
+      ]),
+    ).toBe(false);
   });
 });
 

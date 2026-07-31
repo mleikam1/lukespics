@@ -13,10 +13,6 @@ db.settings({ignoreUndefinedProperties: true});
 
 export const auth = getAuth();
 
-export const API_SPORTS_KEY = defineSecret("API_SPORTS_KEY");
-export const COLLEGE_FOOTBALL_DATA_KEY = defineSecret(
-  "COLLEGE_FOOTBALL_DATA_KEY",
-);
 export const INVITE_CODE_PEPPER = defineSecret("INVITE_CODE_PEPPER");
 
 export const REGION = "us-central1";

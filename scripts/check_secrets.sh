@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tracked_files="$(git ls-files)"
+readonly script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly repo_root="$(cd "$script_dir/.." && pwd)"
+cd "$repo_root"
+
+candidate_files="$(
+  git ls-files --cached --others --exclude-standard
+)"
 
 blocked_names="$(
-  printf '%s\n' "$tracked_files" |
-    grep -E '(^|/)(service-account.*\.json|GoogleService-Info\.plist|.*\.jks|.*\.keystore|.*\.p12|.*\.pem|\.env)$' ||
+  printf '%s\n' "$candidate_files" |
+    grep -E '(^|/)(service-account.*\.json|.*firebase-adminsdk.*\.json|GoogleService-Info\.plist|.*\.jks|.*\.keystore|.*\.p8|.*\.p12|.*\.pem|.*\.key|\.env)$' ||
     true
 )"
 
@@ -15,10 +21,26 @@ if [[ -n "$blocked_names" ]]; then
   exit 1
 fi
 
-if git grep -I -n -E -- \
-  '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|x-apisports-key[[:space:]]*[:=][[:space:]]*[^[:space:]$<{]+' \
-  -- ':!scripts/check_secrets.sh'; then
-  echo "Potential secret material detected."
+readonly structural_secret_pattern='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|x-apisports-key[[:space:]]*[:=][[:space:]]*[^[:space:]$<{]+|"(private_key|client_secret)"[[:space:]]*:[[:space:]]*"[^"]+"'
+readonly named_secret_pattern="API_SPORTS_KEY[[:space:]]*=[[:space:]]*['\"][^'\"\\$<{][^'\"]*['\"]|COLLEGE_FOOTBALL_DATA_KEY[[:space:]]*=[[:space:]]*['\"][^'\"\\$<{][^'\"]*['\"]|INVITE_CODE_PEPPER[[:space:]]*=[[:space:]]*['\"][^'\"\\$<{][^'\"]*['\"]"
+
+secret_files="$(
+  while IFS= read -r file; do
+    if [[ "$file" == "scripts/check_secrets.sh" ||
+          "$file" == "scripts/check_public_build.sh" ]]; then
+      continue
+    fi
+    if [[ -f "$file" ]] &&
+       LC_ALL=C grep -IEql -- \
+         "$structural_secret_pattern|$named_secret_pattern" "$file"; then
+      printf '%s\n' "$file"
+    fi
+  done <<<"$candidate_files"
+)"
+
+if [[ -n "$secret_files" ]]; then
+  echo "Potential secret material detected in:"
+  printf '%s\n' "$secret_files"
   exit 1
 fi
 

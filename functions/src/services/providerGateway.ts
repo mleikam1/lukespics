@@ -31,6 +31,7 @@ function cacheKey(provider: SportsDataProvider, query: ProviderQuery): string {
     requestType: "games",
     sportCode: query.sportCode,
     leagueCode: query.leagueCode,
+    leagueId: query.leagueId,
     season: query.season,
     from: query.from,
     to: query.to,
@@ -57,6 +58,33 @@ function materialGame(game: NormalizedGame): Record<string, unknown> {
     ...material
   } = serialized;
   return material;
+}
+
+export function validateAndDeduplicateProviderGames(
+  values: unknown[],
+): NormalizedGame[] {
+  const gamesByProviderId = new Map<string, NormalizedGame>();
+  const documentIds = new Map<string, string>();
+  for (const value of values) {
+    const game = normalizedGameSchema.parse(value) as NormalizedGame;
+    const providerKey = `${game.provider}:${game.providerGameId}`;
+    const existingProviderKey = documentIds.get(game.id);
+    if (
+      existingProviderKey !== undefined &&
+      existingProviderKey !== providerKey
+    ) {
+      throw new Error("Provider returned conflicting games with one document ID.");
+    }
+    documentIds.set(game.id, providerKey);
+    const existing = gamesByProviderId.get(providerKey);
+    if (
+      existing === undefined ||
+      game.providerLastUpdatedAt > existing.providerLastUpdatedAt
+    ) {
+      gamesByProviderId.set(providerKey, game);
+    }
+  }
+  return [...gamesByProviderId.values()];
 }
 
 function cacheDurationMs(games: NormalizedGame[], now = new Date()): number {
@@ -355,7 +383,9 @@ export async function listGamesWithCache(
 
   try {
     await reserveQuota(provider);
-    const games = await provider.listGames(query);
+    const games = validateAndDeduplicateProviderGames(
+      await provider.listGames(query),
+    );
     await recordProviderSuccess(provider);
     const result = await writeCache(
       reference,

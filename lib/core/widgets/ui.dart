@@ -159,8 +159,155 @@ class StatusPill extends StatelessWidget {
 
 enum StatusTone { neutral, success, warning, info, danger }
 
+/// A fail-closed policy for displaying provider-returned team marks.
+///
+/// Callers must explicitly identify the provider, confirm that display rights
+/// have been verified for the current runtime, and list each permitted image
+/// host. Hosts are exact matches: allowing `images.example.com` does not also
+/// allow arbitrary subdomains. ESPN-owned hosts and credential-bearing URLs
+/// are rejected regardless of the supplied allowlist. Query parameters are
+/// also fail-closed and must be individually identified as safe.
+@immutable
+final class TeamLogoPolicy {
+  const TeamLogoPolicy.disabled()
+    : provider = '',
+      logoRightsVerified = false,
+      allowedHosts = const <String>{},
+      allowedQueryParameters = const <String>{};
+
+  const TeamLogoPolicy.provider({
+    required this.provider,
+    required this.logoRightsVerified,
+    required this.allowedHosts,
+    this.allowedQueryParameters = const <String>{},
+  });
+
+  final String provider;
+  final bool logoRightsVerified;
+  final Set<String> allowedHosts;
+  final Set<String> allowedQueryParameters;
+
+  Uri? permittedUri(Uri? candidate) {
+    if (!logoRightsVerified ||
+        provider.trim().isEmpty ||
+        candidate == null ||
+        candidate.scheme.toLowerCase() != 'https' ||
+        candidate.host.isEmpty ||
+        candidate.userInfo.isNotEmpty) {
+      return null;
+    }
+
+    final host = _normalizeLogoHost(candidate.host);
+    final permittedQueryKeys = allowedQueryParameters
+        .map((key) => key.trim().toLowerCase())
+        .toSet();
+    if (_isEspnLogoHost(host) ||
+        !allowedHosts.any((allowed) => _normalizeLogoHost(allowed) == host) ||
+        candidate.queryParameters.keys.any(
+          (key) =>
+              _isSensitiveLogoQueryKey(key) ||
+              !permittedQueryKeys.contains(key.trim().toLowerCase()),
+        )) {
+      return null;
+    }
+
+    // Fragments are not sent to the image host and add no rendering value.
+    // Removing them also keeps error diagnostics from carrying irrelevant URL
+    // data. This widget never logs the original or resolved URL.
+    return candidate.removeFragment();
+  }
+}
+
+typedef TeamLogoImageProviderBuilder =
+    ImageProvider<Object> Function(Uri permittedUri);
+
 class TeamBadge extends StatelessWidget {
-  const TeamBadge({super.key, required this.team, this.size = 42});
+  const TeamBadge({
+    super.key,
+    required this.team,
+    this.size = 42,
+    this.logoPolicy = const TeamLogoPolicy.disabled(),
+    this.imageProviderBuilder,
+  });
+
+  final Team team;
+  final double size;
+  final TeamLogoPolicy logoPolicy;
+
+  /// Primarily useful for deterministic image loading in tests.
+  ///
+  /// Production callers normally leave this null so a cross-platform
+  /// [NetworkImage] is used.
+  final TeamLogoImageProviderBuilder? imageProviderBuilder;
+
+  @override
+  Widget build(BuildContext context) {
+    final permittedLogo = logoPolicy.permittedUri(team.logoUrl);
+    final fallback = _TeamBadgeFallback(team: team, size: size);
+    final mark = permittedLogo == null
+        ? fallback
+        : _PermittedTeamLogo(
+            uri: permittedLogo,
+            size: size,
+            fallback: fallback,
+            imageProviderBuilder: imageProviderBuilder,
+          );
+    return Semantics(
+      label: '${team.name} team mark',
+      image: true,
+      child: ExcludeSemantics(
+        child: SizedBox.square(dimension: size, child: mark),
+      ),
+    );
+  }
+}
+
+class _PermittedTeamLogo extends StatelessWidget {
+  const _PermittedTeamLogo({
+    required this.uri,
+    required this.size,
+    required this.fallback,
+    this.imageProviderBuilder,
+  });
+
+  final Uri uri;
+  final double size;
+  final Widget fallback;
+  final TeamLogoImageProviderBuilder? imageProviderBuilder;
+
+  @override
+  Widget build(BuildContext context) {
+    final imageProvider =
+        imageProviderBuilder?.call(uri) ?? NetworkImage(uri.toString());
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(size * 0.32),
+        border: Border.all(color: Theme.of(context).dividerColor),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(size * 0.32),
+        child: Image(
+          image: imageProvider,
+          width: size,
+          height: size,
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.medium,
+          gaplessPlayback: true,
+          excludeFromSemantics: true,
+          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+            if (wasSynchronouslyLoaded || frame != null) return child;
+            return fallback;
+          },
+          errorBuilder: (context, error, stackTrace) => fallback,
+        ),
+      ),
+    );
+  }
+}
+
+class _TeamBadgeFallback extends StatelessWidget {
+  const _TeamBadgeFallback({required this.team, required this.size});
 
   final Team team;
   final double size;
@@ -175,32 +322,68 @@ class TeamBadge extends StatelessWidget {
     ];
     final color =
         colors[team.id.codeUnits.fold(0, (a, b) => a + b) % colors.length];
-    return Semantics(
-      label: '${team.name} team mark',
-      image: true,
-      child: ExcludeSemantics(
-        child: Container(
-          width: size,
-          height: size,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(size * 0.32),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-          ),
-          child: Text(
-            team.abbreviation,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: size * 0.28,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.4,
-            ),
-          ),
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(size * 0.32),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+      ),
+      child: Text(
+        team.abbreviation,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: size * 0.28,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0.4,
         ),
       ),
     );
   }
+}
+
+const _sensitiveLogoQueryKeys = <String>{
+  'access_token',
+  'api-key',
+  'api_key',
+  'apikey',
+  'auth',
+  'authorization',
+  'credential',
+  'key',
+  'secret',
+  'sig',
+  'signature',
+  'token',
+};
+
+String _normalizeLogoHost(String value) {
+  final normalized = value.trim().toLowerCase();
+  return normalized.endsWith('.')
+      ? normalized.substring(0, normalized.length - 1)
+      : normalized;
+}
+
+bool _isEspnLogoHost(String host) {
+  final labels = host.split('.');
+  return labels.any((label) => label == 'espn' || label == 'espncdn');
+}
+
+bool _isSensitiveLogoQueryKey(String key) {
+  final normalized = key.trim().toLowerCase();
+  final compact = normalized.replaceAll(RegExp('[^a-z0-9]'), '');
+  return _sensitiveLogoQueryKeys.contains(normalized) ||
+      compact.endsWith('apikey') ||
+      compact.contains('accesstoken') ||
+      compact.contains('accessid') ||
+      compact.contains('authorization') ||
+      compact.contains('credential') ||
+      compact.contains('password') ||
+      compact.contains('signature') ||
+      compact.contains('token') ||
+      compact.contains('secret');
 }
 
 class EmptyState extends StatelessWidget {
@@ -219,40 +402,58 @@ class EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SectionCard(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 28),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
-            child: Column(
-              children: [
-                Icon(
-                  icon,
-                  size: 44,
-                  color: Theme.of(context).colorScheme.tertiary,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact =
+            constraints.hasBoundedHeight && constraints.maxHeight < 180;
+        return SectionCard(
+          padding: EdgeInsets.all(compact ? 8 : 20),
+          child: Padding(
+            padding: EdgeInsets.symmetric(vertical: compact ? 0 : 28),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 440),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!compact) ...[
+                      Icon(
+                        icon,
+                        size: 44,
+                        color: Theme.of(context).colorScheme.tertiary,
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    Text(
+                      title,
+                      textAlign: TextAlign.center,
+                      style: compact
+                          ? Theme.of(context).textTheme.titleSmall
+                          : Theme.of(context).textTheme.titleLarge,
+                    ),
+                    SizedBox(height: compact ? 4 : 8),
+                    Text(
+                      message,
+                      textAlign: TextAlign.center,
+                      maxLines: compact ? 2 : null,
+                      overflow: compact ? TextOverflow.ellipsis : null,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: compact ? 12 : null,
+                        height: compact ? 1.2 : 1.4,
+                      ),
+                    ),
+                    if (action != null) ...[
+                      SizedBox(height: compact ? 10 : 20),
+                      action!,
+                    ],
+                  ],
                 ),
-                const SizedBox(height: 14),
-                Text(
-                  title,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  message,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    height: 1.4,
-                  ),
-                ),
-                if (action != null) ...[const SizedBox(height: 20), action!],
-              ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

@@ -28,8 +28,8 @@ class MoreScreen extends ConsumerWidget {
     return ListView(
       padding: AppBreakpoints.pagePadding(context),
       children: [
-        const PageHeader(
-          eyebrow: 'Luke’s Picks Arena',
+        PageHeader(
+          eyebrow: controller.leagueName,
           title: 'More',
           description:
               'Manage the arena, browse the record book, and get help.',

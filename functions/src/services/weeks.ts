@@ -1,4 +1,6 @@
+import {randomUUID} from "node:crypto";
 import {
+  FieldPath,
   FieldValue,
   Timestamp,
   type DocumentData,
@@ -15,12 +17,20 @@ import {
 import {db} from "../config.js";
 import {getProvider} from "../providers/factory.js";
 import {resultVersionFor, withSourceHash} from "../providers/normalization.js";
+import {
+  assertProviderAllowedForRuntime,
+  providerRuntime,
+  type ProviderRuntime,
+} from "../providers/policy.js";
+import {THE_SPORTS_DB_ATTRIBUTION} from "../providers/theSportsDbTest.js";
 import {normalizedGameSchema} from "../schemas.js";
 import type {
   LeagueSettings,
   NormalizedGame,
+  ProviderName,
   ProviderQuery,
 } from "../types.js";
+import {PROVIDER_NAMES} from "../types.js";
 import {
   asDate,
   commitWritesInChunks,
@@ -59,11 +69,21 @@ function gameForClient(game: NormalizedGame): Record<string, unknown> {
 }
 
 const OPERATION_CLAIM_TTL_MS = 5 * 60_000;
+export const MAX_REVEAL_PAGE_SIZE = 200;
+const DEFAULT_REVEAL_PAGE_SIZE = MAX_REVEAL_PAGE_SIZE;
+const MAX_REVEAL_GAMES_PER_PAGE = 25;
+const REVEAL_WRITE_CHUNK_SIZE = 350;
+const REVEAL_PICK_READ_CONCURRENCY = 50;
 const SELECTABLE_CATALOG_STATUSES = new Set([
   "scheduled",
   "delayed",
   "postponed",
 ]);
+
+type GameResultUpdate = {
+  document: QueryDocumentSnapshot;
+  game: NormalizedGame;
+};
 
 function hasActiveClaim(
   data: DocumentData,
@@ -77,6 +97,155 @@ function hasActiveClaim(
     (data[startedField] as Timestamp).toMillis() >
       now - OPERATION_CLAIM_TTL_MS
   );
+}
+
+function resultMutationClaimIsActive(
+  data: DocumentData,
+  now = Date.now(),
+): boolean {
+  const heartbeat =
+    data.resultMutationHeartbeatAt instanceof Timestamp
+      ? data.resultMutationHeartbeatAt
+      : data.resultMutationStartedAt;
+  return (
+    typeof data.resultMutationRequestId === "string" &&
+    heartbeat instanceof Timestamp &&
+    heartbeat.toMillis() > now - OPERATION_CLAIM_TTL_MS
+  );
+}
+
+async function claimResultMutation(
+  reference: FirebaseFirestore.DocumentReference,
+  requestId: string,
+  claimId: string,
+): Promise<DocumentData> {
+  return db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    const data = snapshot.data();
+    if (data === undefined) {
+      throw new HttpsError("not-found", "Week not found.");
+    }
+    if (data.status === "finalized") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Reopen the week before changing game results.",
+      );
+    }
+    if (typeof data.finalizationRequestId === "string") {
+      throw new HttpsError(
+        "aborted",
+        "Week finalization is in progress.",
+      );
+    }
+    if (resultMutationClaimIsActive(data)) {
+      throw new HttpsError(
+        "aborted",
+        "Game results are currently being updated.",
+      );
+    }
+    transaction.update(reference, {
+      resultMutationRequestId: requestId,
+      resultMutationClaimId: claimId,
+      resultMutationStartedAt: FieldValue.serverTimestamp(),
+      resultMutationHeartbeatAt: FieldValue.serverTimestamp(),
+    });
+    return data;
+  });
+}
+
+function assertResultMutationClaim(
+  data: DocumentData | undefined,
+  claimId: string,
+): asserts data is DocumentData {
+  if (
+    data === undefined ||
+    data.status === "finalized" ||
+    typeof data.finalizationRequestId === "string" ||
+    data.resultMutationClaimId !== claimId
+  ) {
+    throw new HttpsError(
+      "aborted",
+      "Week state changed while game results were updating.",
+    );
+  }
+}
+
+async function releaseResultMutationClaim(
+  reference: FirebaseFirestore.DocumentReference,
+  claimId: string,
+): Promise<void> {
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    if (snapshot.data()?.resultMutationClaimId !== claimId) return;
+    transaction.update(reference, {
+      resultMutationRequestId: FieldValue.delete(),
+      resultMutationClaimId: FieldValue.delete(),
+      resultMutationStartedAt: FieldValue.delete(),
+      resultMutationHeartbeatAt: FieldValue.delete(),
+    });
+  });
+}
+
+async function commitGameResultUpdates(
+  reference: FirebaseFirestore.DocumentReference,
+  claimId: string,
+  updates: GameResultUpdate[],
+): Promise<void> {
+  for (let index = 0; index < updates.length; index += 350) {
+    const chunk = updates.slice(index, index + 350);
+    await db.runTransaction(async (transaction) => {
+      const week = await transaction.get(reference);
+      assertResultMutationClaim(week.data(), claimId);
+      for (const update of chunk) {
+        transaction.set(update.document.ref, toStoredGame(update.game), {
+          merge: true,
+        });
+      }
+      transaction.update(reference, {
+        gameResultsVersion: FieldValue.increment(1),
+        resultMutationHeartbeatAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+  }
+}
+
+export async function gradeWeekWithResultClaim(input: {
+  leagueId: string;
+  weekId: string;
+  requestId: string;
+}): ReturnType<typeof gradeWeek> {
+  const reference = weekReference(input.leagueId, input.weekId);
+  const claimId = randomUUID();
+  await claimResultMutation(reference, input.requestId, claimId);
+  try {
+    return await gradeWeek(input.leagueId, input.weekId);
+  } finally {
+    await releaseResultMutationClaim(reference, claimId);
+  }
+}
+
+export function validateCatalogProviderForLeague(
+  catalogProvider: ProviderName,
+  configuredProvider: unknown,
+  runtime: ProviderRuntime = providerRuntime(),
+): ProviderName {
+  const configured = configuredProvider ?? "manual";
+  if (!PROVIDER_NAMES.includes(configured as ProviderName)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The arena sports provider configuration is invalid.",
+    );
+  }
+  const provider = configured as ProviderName;
+  assertProviderAllowedForRuntime(provider, runtime);
+  if (catalogProvider !== provider) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The catalog game does not match the arena sports provider.",
+    );
+  }
+  return provider;
 }
 
 export function isCatalogGameSelectable(
@@ -235,6 +404,7 @@ export async function createDraftWeekRecord(input: {
       eligibleMemberCount: 0,
       winnerUids: [],
       highScore: null,
+      gameResultsVersion: 0,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
       resultVersion: 0,
@@ -367,6 +537,10 @@ async function canonicalCatalogGames(
         );
       }
       const game = normalizedGameSchema.parse(data);
+      validateCatalogProviderForLeague(
+        game.provider,
+        settings.providerName,
+      );
       if (
         game.id !== snapshot.id ||
         game.provider === "manual" ||
@@ -815,41 +989,72 @@ export async function submitEntry(input: {
         },
         {merge: true},
       );
+      const entryData = currentEntry.data() ?? {};
+      const totalRequiredPickCount = Math.max(
+        0,
+        Number(entryData.totalRequiredPickCount ?? 0),
+      );
+      const currentSavedPickCount = Math.max(
+        0,
+        Number(entryData.savedPickCount ?? 0),
+      );
+      const savedPickCount = previous.exists
+        ? currentSavedPickCount
+        : Math.min(
+            totalRequiredPickCount,
+            currentSavedPickCount + 1,
+          );
+      const completionState =
+        totalRequiredPickCount > 0 &&
+        savedPickCount >= totalRequiredPickCount
+          ? "complete"
+          : "inProgress";
+      transaction.set(
+        entryReference,
+        {
+          savedPickCount,
+          totalRequiredPickCount,
+          completionState,
+          submittedAt:
+            completionState === "complete"
+              ? entryData.submittedAt ?? FieldValue.serverTimestamp()
+              : entryData.submittedAt ?? null,
+          lastSyncedAt: FieldValue.serverTimestamp(),
+        },
+        {merge: true},
+      );
     });
   }
-  const [saved, required] = await Promise.all([
-    entryReference.collection("picks").count().get(),
-    reference.collection("games").count().get(),
-  ]);
-  const savedPickCount = saved.data().count;
-  const totalRequiredPickCount = required.data().count;
-  const completionState =
-    savedPickCount >= totalRequiredPickCount ? "complete" : "inProgress";
-  const currentEntry = await entryReference.get();
-  await entryReference.set(
-    {
-      savedPickCount,
-      totalRequiredPickCount,
-      completionState,
-      submittedAt:
-        completionState === "complete"
-          ? FieldValue.serverTimestamp()
-          : currentEntry.data()?.submittedAt ?? null,
-      lastSyncedAt: FieldValue.serverTimestamp(),
-    },
-    {merge: true},
-  );
-  return {savedPickCount, totalRequiredPickCount, completionState};
+  const entry = await entryReference.get();
+  return {
+    savedPickCount: Number(entry.data()?.savedPickCount ?? 0),
+    totalRequiredPickCount: Number(
+      entry.data()?.totalRequiredPickCount ?? 0,
+    ),
+    completionState: String(
+      entry.data()?.completionState ?? "inProgress",
+    ),
+  };
 }
 
 export async function listCatalog(input: {
   leagueId: string;
+  weekId: string;
   actorUid: string;
   query: ProviderQuery;
 }): Promise<Record<string, unknown>> {
-  await requireMembership(input.leagueId, input.actorUid);
+  const {week} = await requirePickerOrAdmin(
+    input.leagueId,
+    input.weekId,
+    input.actorUid,
+  );
+  if (week.status !== "draft") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Sports catalog access is limited to a draft week.",
+    );
+  }
   if (input.query.forceRefresh === true) {
-    await requireAdmin(input.leagueId, input.actorUid);
     await enforceManualRefreshRateLimit({
       leagueId: input.leagueId,
       actorUid: input.actorUid,
@@ -876,12 +1081,14 @@ export async function listCatalog(input: {
       "This league is not enabled for the arena.",
     );
   }
-  const providerName =
-    settings.providerName === "apiSports"
-      ? "apiSports"
-      : settings.providerName === "manual"
-        ? "manual"
-        : "mock";
+  const configuredProvider = settings.providerName ?? "manual";
+  if (!PROVIDER_NAMES.includes(configuredProvider as ProviderName)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The arena sports provider configuration is invalid.",
+    );
+  }
+  const providerName = configuredProvider as ProviderName;
   const provider = await getProvider(providerName);
   const [sports, leagues, cached] = await Promise.all([
     provider.listSupportedSports(),
@@ -912,6 +1119,10 @@ export async function listCatalog(input: {
       expiresAt: cached.expiresAt.toISOString(),
     },
     usage: await providerUsageSummary(provider.name),
+    attribution:
+      provider.name === "theSportsDbTest"
+        ? THE_SPORTS_DB_ATTRIBUTION
+        : null,
   };
 }
 
@@ -975,114 +1186,483 @@ export async function refreshWeekGames(input: {
     });
   }
   const reference = weekReference(input.leagueId, input.weekId);
-  const [week, selected] = await Promise.all([
-    reference.get(),
-    reference.collection("games").get(),
-  ]);
-  if (!week.exists) throw new HttpsError("not-found", "Week not found.");
-  if (typeof week.data()?.finalizationRequestId === "string") {
-    throw new HttpsError(
-      "aborted",
-      "Week finalization is in progress.",
-    );
-  }
-  if (week.data()?.status === "finalized") {
-    throw new HttpsError(
-      "failed-precondition",
-      "Reopen the week before applying provider corrections.",
-    );
-  }
-  const groups = new Map<
-    string,
-    {query: ProviderQuery; documents: QueryDocumentSnapshot[]}
-  >();
-  for (const game of selected.docs) {
-    const provider = String(game.data().provider);
-    if (provider === "manual") continue;
-    const query = selectedGameToQuery(game, input.forceRefresh);
-    const key = sha256({provider, ...query});
-    const group = groups.get(key) ?? {query, documents: []};
-    group.documents.push(game);
-    groups.set(key, group);
-  }
-  let delayed = false;
-  let updatedGameCount = 0;
-  for (const group of groups.values()) {
-    const providerName = String(group.documents[0]?.data().provider);
-    const provider = await getProvider(
-      providerName === "apiSports" ? "apiSports" : "mock",
-    );
-    let refreshed: CachedGamesResult;
-    try {
-      refreshed = await listGamesWithCache(provider, group.query);
-    } catch (_error: unknown) {
-      delayed = true;
-      continue;
+  const claimId = randomUUID();
+  const claimedWeek = await claimResultMutation(
+    reference,
+    input.requestId,
+    claimId,
+  );
+  try {
+    const selected = await reference.collection("games").get();
+    const groups = new Map<
+      string,
+      {query: ProviderQuery; documents: QueryDocumentSnapshot[]}
+    >();
+    for (const game of selected.docs) {
+      const provider = String(game.data().provider);
+      if (provider === "manual") continue;
+      const query = selectedGameToQuery(game, input.forceRefresh);
+      const key = sha256({provider, ...query});
+      const group = groups.get(key) ?? {query, documents: []};
+      group.documents.push(game);
+      groups.set(key, group);
     }
-    delayed ||= refreshed.delayed;
-    const byProviderId = new Map(
-      refreshed.games.map((game) => [game.providerGameId, game]),
-    );
-    const updates: Array<{
-      document: QueryDocumentSnapshot;
-      game: NormalizedGame;
-    }> = [];
-    for (const document of group.documents) {
-      const current = document.data();
-      if (current.manualOverride === true) continue;
-      const next = byProviderId.get(String(current.providerGameId));
-      if (next === undefined) continue;
-      const lockPassed =
-        current.effectiveLockAtUtc instanceof Timestamp &&
-        current.effectiveLockAtUtc.toMillis() <= Date.now();
-      if (lockPassed || current.pickRevealCompletedAt instanceof Timestamp) {
-        next.effectiveLockAtUtc = asDate(
-          current.effectiveLockAtUtc,
-          "effectiveLockAtUtc",
+    let delayed = false;
+    let updatedGameCount = 0;
+    for (const group of groups.values()) {
+      const providerName = String(group.documents[0]?.data().provider);
+      if (!PROVIDER_NAMES.includes(providerName as ProviderName)) {
+        throw new HttpsError(
+          "failed-precondition",
+          "A selected game has an unsupported sports provider.",
         );
       }
-      next.publishedScheduledAtUtc = asDate(
-        current.publishedScheduledAtUtc,
-        "publishedScheduledAtUtc",
+      const provider = await getProvider(providerName as ProviderName);
+      let refreshed: CachedGamesResult;
+      try {
+        refreshed = await listGamesWithCache(provider, group.query);
+      } catch (_error: unknown) {
+        delayed = true;
+        continue;
+      }
+      delayed ||= refreshed.delayed;
+      const byProviderId = new Map(
+        refreshed.games.map((game) => [game.providerGameId, game]),
       );
-      if (next.status === "cancelled") {
-        next.status = "void";
-        next.winnerTeamId = null;
-        next.resultVersion = resultVersionFor(next);
+      const updates: GameResultUpdate[] = [];
+      for (const document of group.documents) {
+        const current = document.data();
+        if (current.manualOverride === true) continue;
+        const next = byProviderId.get(String(current.providerGameId));
+        if (next === undefined) continue;
+        const lockPassed =
+          current.effectiveLockAtUtc instanceof Timestamp &&
+          current.effectiveLockAtUtc.toMillis() <= Date.now();
+        if (lockPassed || current.pickRevealCompletedAt instanceof Timestamp) {
+          next.effectiveLockAtUtc = asDate(
+            current.effectiveLockAtUtc,
+            "effectiveLockAtUtc",
+          );
+        }
+        next.publishedScheduledAtUtc = asDate(
+          current.publishedScheduledAtUtc,
+          "publishedScheduledAtUtc",
+        );
+        if (next.status === "cancelled") {
+          next.status = "void";
+          next.winnerTeamId = null;
+          next.resultVersion = resultVersionFor(next);
+        }
+        if (materialSyncHash(next) !== materialSyncHash(current)) {
+          updates.push({document, game: next});
+        }
       }
-      if (materialSyncHash(next) !== materialSyncHash(current)) {
-        updates.push({document, game: next});
-      }
+      await commitGameResultUpdates(reference, claimId, updates);
+      updatedGameCount += updates.length;
     }
-    await commitWritesInChunks(db, updates, (batch, update) => {
-      batch.set(update.document.ref, toStoredGame(update.game), {merge: true});
+    const freshGames = await reference.collection("games").get();
+    const statuses = freshGames.docs.map((game) => String(game.data().status));
+    let status = claimedWeek.status;
+    if (statuses.some((gameStatus) => gameStatus === "live")) {
+      status = "inProgress";
+    } else if (
+      statuses.length > 0 &&
+      statuses.every((gameStatus) => ["final", "void"].includes(gameStatus))
+    ) {
+      status = "review";
+    }
+    await db.runTransaction(async (transaction) => {
+      const current = await transaction.get(reference);
+      const data = current.data();
+      assertResultMutationClaim(data, claimId);
+      const update: Record<string, unknown> = {
+        resultMutationHeartbeatAt: FieldValue.serverTimestamp(),
+      };
+      if (status !== data.status) {
+        update.status = status;
+        update.updatedAt = FieldValue.serverTimestamp();
+      }
+      transaction.update(reference, update);
     });
-    updatedGameCount += updates.length;
+    await gradeWeek(input.leagueId, input.weekId);
+    await writeAudit({
+      leagueId: input.leagueId,
+      eventType: "provider_results_synced",
+      actorUid: input.actorUid,
+      target: `weeks/${input.weekId}/games`,
+      requestId: input.requestId,
+      after: {updatedGameCount, delayed},
+    });
+    return {updatedGameCount, delayed};
+  } finally {
+    await releaseResultMutationClaim(reference, claimId);
   }
-  const freshGames = await reference.collection("games").get();
-  const statuses = freshGames.docs.map((game) => String(game.data().status));
-  let status = week.data()?.status;
-  if (statuses.some((gameStatus) => gameStatus === "live")) {
-    status = "inProgress";
-  } else if (
-    statuses.length > 0 &&
-    statuses.every((gameStatus) => ["final", "void"].includes(gameStatus))
-  ) {
-    status = "review";
-  }
-  if (status !== week.data()?.status) {
-    await reference.update({status, updatedAt: FieldValue.serverTimestamp()});
-  }
-  await gradeWeek(input.leagueId, input.weekId);
-  await writeAudit({
-    leagueId: input.leagueId,
-    eventType: "provider_results_synced",
-    actorUid: input.actorUid,
-    target: `weeks/${input.weekId}/games`,
-    requestId: input.requestId,
-    after: {updatedGameCount, delayed},
+}
+
+type RevealCursor = {
+  gameId: string;
+  afterUid: string | null;
+};
+
+type RevealPayloadPick = {
+  uid: string;
+  displayName: string;
+  selectedTeamId: string;
+  outcome: string;
+  points: number;
+};
+
+type RevealPageMetadata = {
+  included: boolean;
+  truncated: boolean;
+  nextCursor: RevealCursor | null;
+  pageSize: number;
+  returnedGameCount: number;
+  returnedPickCount: number;
+};
+
+type RevealLockedPicksResult = {
+  revealedGameCount: number;
+  processingGameCount: number;
+  revealsByGame: Record<string, RevealPayloadPick[]>;
+  revealPage: RevealPageMetadata;
+};
+
+type RevealSource = {
+  uid: string;
+  pick: DocumentData;
+  member: DocumentData;
+};
+
+type RevealClaimResult =
+  | "claimed"
+  | "completed"
+  | "busy"
+  | "not-locked";
+
+export function isRevealClaimActive(
+  data: DocumentData,
+  now = Date.now(),
+): boolean {
+  const heartbeat =
+    data.pickRevealHeartbeatAt instanceof Timestamp
+      ? data.pickRevealHeartbeatAt
+      : data.pickRevealStartedAt;
+  return (
+    typeof data.pickRevealClaimId === "string" &&
+    heartbeat instanceof Timestamp &&
+    heartbeat.toMillis() > now - OPERATION_CLAIM_TTL_MS
+  );
+}
+
+export function revealPayloadReadsEnabled(
+  includeRevealPayload: boolean | undefined,
+): boolean {
+  return includeRevealPayload !== false;
+}
+
+async function claimGameForReveal(input: {
+  gameReference: FirebaseFirestore.DocumentReference;
+  claimId: string;
+  requestId: string;
+  now: number;
+}): Promise<RevealClaimResult> {
+  return db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(input.gameReference);
+    const data = snapshot.data();
+    if (data === undefined) {
+      return "not-locked";
+    }
+    const lockAt = data.effectiveLockAtUtc;
+    if (!(lockAt instanceof Timestamp) || lockAt.toMillis() > input.now) {
+      return "not-locked";
+    }
+    if (data.pickRevealCompletedAt instanceof Timestamp) {
+      return "completed";
+    }
+    if (isRevealClaimActive(data, input.now)) {
+      return "busy";
+    }
+    const claimedAt = Timestamp.fromMillis(input.now);
+    transaction.update(input.gameReference, {
+      pickRevealClaimId: input.claimId,
+      pickRevealRequestId: input.requestId,
+      pickRevealStartedAt: claimedAt,
+      pickRevealHeartbeatAt: claimedAt,
+    });
+    return "claimed";
   });
-  return {updatedGameCount, delayed};
+}
+
+async function renewRevealClaim(
+  gameReference: FirebaseFirestore.DocumentReference,
+  claimId: string,
+): Promise<void> {
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(gameReference);
+    if (
+      snapshot.data()?.pickRevealClaimId !== claimId ||
+      snapshot.data()?.pickRevealCompletedAt instanceof Timestamp
+    ) {
+      throw new HttpsError(
+        "aborted",
+        "The reveal claim changed while picks were being processed.",
+      );
+    }
+    transaction.update(gameReference, {
+      pickRevealHeartbeatAt: Timestamp.now(),
+    });
+  });
+}
+
+async function releaseRevealClaim(
+  gameReference: FirebaseFirestore.DocumentReference,
+  claimId: string,
+): Promise<void> {
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(gameReference);
+    if (snapshot.data()?.pickRevealClaimId !== claimId) return;
+    transaction.update(gameReference, {
+      pickRevealClaimId: FieldValue.delete(),
+      pickRevealRequestId: FieldValue.delete(),
+      pickRevealStartedAt: FieldValue.delete(),
+      pickRevealHeartbeatAt: FieldValue.delete(),
+    });
+  });
+}
+
+async function revealSourcesForGame(input: {
+  entries: QueryDocumentSnapshot[];
+  gameId: string;
+  membersByUid: Map<string, DocumentData>;
+  gameReference: FirebaseFirestore.DocumentReference;
+  claimId: string;
+}): Promise<RevealSource[]> {
+  const reveals: RevealSource[] = [];
+  for (
+    let index = 0;
+    index < input.entries.length;
+    index += REVEAL_PICK_READ_CONCURRENCY
+  ) {
+    const entryChunk = input.entries.slice(
+      index,
+      index + REVEAL_PICK_READ_CONCURRENCY,
+    );
+    const picks = await Promise.all(
+      entryChunk.map((entry) =>
+        entry.ref.collection("picks").doc(input.gameId).get(),
+      ),
+    );
+    picks.forEach((pick, pickIndex) => {
+      const entry = entryChunk[pickIndex];
+      if (!pick.exists || entry === undefined) return;
+      reveals.push({
+        uid: entry.id,
+        pick: pick.data() ?? {},
+        member: input.membersByUid.get(entry.id) ?? {},
+      });
+    });
+    await renewRevealClaim(input.gameReference, input.claimId);
+  }
+  return reveals;
+}
+
+async function writeRevealSources(input: {
+  gameReference: FirebaseFirestore.DocumentReference;
+  revealPicksReference: FirebaseFirestore.CollectionReference;
+  claimId: string;
+  reveals: RevealSource[];
+}): Promise<void> {
+  for (
+    let index = 0;
+    index < input.reveals.length;
+    index += REVEAL_WRITE_CHUNK_SIZE
+  ) {
+    const revealChunk = input.reveals.slice(
+      index,
+      index + REVEAL_WRITE_CHUNK_SIZE,
+    );
+    await db.runTransaction(async (transaction) => {
+      const game = await transaction.get(input.gameReference);
+      if (
+        game.data()?.pickRevealClaimId !== input.claimId ||
+        game.data()?.pickRevealCompletedAt instanceof Timestamp
+      ) {
+        throw new HttpsError(
+          "aborted",
+          "The reveal claim changed before picks were committed.",
+        );
+      }
+      for (const reveal of revealChunk) {
+        transaction.set(
+          input.revealPicksReference.doc(reveal.uid),
+          {
+            uid: reveal.uid,
+            selectedTeamId:
+              typeof reveal.pick.selectedTeamId === "string"
+                ? reveal.pick.selectedTeamId.slice(0, 128)
+                : "",
+            displayName:
+              typeof reveal.member.displayName === "string"
+                ? reveal.member.displayName.slice(0, 80)
+                : "Member",
+            photoUrl:
+              typeof reveal.member.photoUrl === "string"
+                ? reveal.member.photoUrl.slice(0, 2048)
+                : null,
+            revealedAt: FieldValue.serverTimestamp(),
+          },
+          {merge: true},
+        );
+      }
+      transaction.update(input.gameReference, {
+        pickRevealHeartbeatAt: Timestamp.now(),
+      });
+    });
+  }
+}
+
+async function finalizeRevealClaim(
+  gameReference: FirebaseFirestore.DocumentReference,
+  claimId: string,
+): Promise<boolean> {
+  return db.runTransaction(async (transaction) => {
+    const game = await transaction.get(gameReference);
+    if (game.data()?.pickRevealCompletedAt instanceof Timestamp) {
+      return false;
+    }
+    if (game.data()?.pickRevealClaimId !== claimId) {
+      throw new HttpsError(
+        "aborted",
+        "The reveal claim changed before processing completed.",
+      );
+    }
+    transaction.update(gameReference, {
+      pickRevealCompletedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      pickRevealClaimId: FieldValue.delete(),
+      pickRevealRequestId: FieldValue.delete(),
+      pickRevealStartedAt: FieldValue.delete(),
+      pickRevealHeartbeatAt: FieldValue.delete(),
+    });
+    return true;
+  });
+}
+
+function revealPayload(document: QueryDocumentSnapshot): RevealPayloadPick {
+  const data = document.data();
+  const rawOutcome =
+    typeof data.outcome === "string" ? data.outcome : "pending";
+  return {
+    uid: document.id.slice(0, 128),
+    displayName:
+      typeof data.displayName === "string"
+        ? data.displayName.slice(0, 80)
+        : "Member",
+    selectedTeamId:
+      typeof data.selectedTeamId === "string"
+        ? data.selectedTeamId.slice(0, 128)
+        : "",
+    outcome: ["pending", "correct", "incorrect", "void"].includes(rawOutcome)
+      ? rawOutcome
+      : "pending",
+    points:
+      typeof data.points === "number" && Number.isFinite(data.points)
+        ? data.points
+        : 0,
+  };
+}
+
+function firstGameAtOrAfter(
+  gameIds: string[],
+  requestedGameId: string,
+): number {
+  const exact = gameIds.indexOf(requestedGameId);
+  if (exact >= 0) return exact;
+  const following = gameIds.findIndex((gameId) => gameId > requestedGameId);
+  return following >= 0 ? following : gameIds.length;
+}
+
+async function readRevealPage(input: {
+  weekReference: FirebaseFirestore.DocumentReference;
+  completedGameIds: string[];
+  cursor: RevealCursor | null;
+  pageSize: number;
+}): Promise<{
+  revealsByGame: Record<string, RevealPayloadPick[]>;
+  metadata: RevealPageMetadata;
+}> {
+  const gameIds = [...new Set(input.completedGameIds)].sort();
+  const revealsByGame: Record<string, RevealPayloadPick[]> = {};
+  let gameIndex =
+    input.cursor === null
+      ? 0
+      : firstGameAtOrAfter(gameIds, input.cursor.gameId);
+  let afterUid =
+    input.cursor !== null && gameIds[gameIndex] === input.cursor.gameId
+      ? input.cursor.afterUid
+      : null;
+  let returnedPickCount = 0;
+  let visitedGameCount = 0;
+  let nextCursor: RevealCursor | null = null;
+
+  while (
+    gameIndex < gameIds.length &&
+    returnedPickCount < input.pageSize &&
+    visitedGameCount < MAX_REVEAL_GAMES_PER_PAGE
+  ) {
+    const gameId = gameIds[gameIndex];
+    if (gameId === undefined) break;
+    const remaining = input.pageSize - returnedPickCount;
+    let query: FirebaseFirestore.Query = input.weekReference
+      .collection("reveals")
+      .doc(gameId)
+      .collection("picks")
+      .orderBy(FieldPath.documentId());
+    if (afterUid !== null) {
+      query = query.startAfter(afterUid);
+    }
+    const committedReveals = await query.limit(remaining + 1).get();
+    const pageDocuments = committedReveals.docs.slice(0, remaining);
+    revealsByGame[gameId] = pageDocuments.map(revealPayload);
+    returnedPickCount += pageDocuments.length;
+    visitedGameCount += 1;
+
+    if (committedReveals.size > remaining) {
+      const lastDocument = pageDocuments.at(-1);
+      nextCursor =
+        lastDocument === undefined
+          ? {gameId, afterUid}
+          : {gameId, afterUid: lastDocument.id};
+      break;
+    }
+
+    gameIndex += 1;
+    afterUid = null;
+    if (
+      gameIndex < gameIds.length &&
+      (returnedPickCount >= input.pageSize ||
+        visitedGameCount >= MAX_REVEAL_GAMES_PER_PAGE)
+    ) {
+      const nextGameId = gameIds[gameIndex];
+      if (nextGameId !== undefined) {
+        nextCursor = {gameId: nextGameId, afterUid: null};
+      }
+      break;
+    }
+  }
+
+  return {
+    revealsByGame,
+    metadata: {
+      included: true,
+      truncated: nextCursor !== null,
+      nextCursor,
+      pageSize: input.pageSize,
+      returnedGameCount: Object.keys(revealsByGame).length,
+      returnedPickCount,
+    },
+  };
 }
 
 export async function revealLockedPicks(input: {
@@ -1091,74 +1671,171 @@ export async function revealLockedPicks(input: {
   actorUid: string;
   requestId: string;
   skipAuthorization?: boolean;
-}): Promise<{revealedGameCount: number}> {
+  includeRevealPayload?: boolean;
+  revealCursor?: RevealCursor | null;
+  revealPageSize?: number;
+}): Promise<RevealLockedPicksResult> {
   if (input.skipAuthorization !== true) {
     await requireAdmin(input.leagueId, input.actorUid);
   }
   const reference = weekReference(input.leagueId, input.weekId);
-  const [games, entries, members] = await Promise.all([
-    reference.collection("games").get(),
-    reference.collection("entries").get(),
-    db
-      .collection("leagues")
-      .doc(input.leagueId)
-      .collection("members")
-      .get(),
-  ]);
-  const membersByUid = new Map(
-    members.docs.map((member) => [member.id, member.data()]),
-  );
+  const games = await reference.collection("games").get();
+  const completedGameIds = new Set<string>();
+  let revealContext:
+    | Promise<{
+        entries: QueryDocumentSnapshot[];
+        membersByUid: Map<string, DocumentData>;
+      }>
+    | undefined;
   let revealedGameCount = 0;
+  let processingGameCount = 0;
+  const processLockedGames = input.revealCursor == null;
+  const now = Date.now();
+
   for (const game of games.docs) {
-    const lockAt = game.data().effectiveLockAtUtc;
-    if (
-      !(lockAt instanceof Timestamp) ||
-      lockAt.toMillis() > Date.now() ||
-      game.data().pickRevealCompletedAt instanceof Timestamp
-    ) {
+    const data = game.data();
+    const lockAt = data.effectiveLockAtUtc;
+    if (!(lockAt instanceof Timestamp) || lockAt.toMillis() > now) {
       continue;
     }
-    const reveals: Array<{
-      uid: string;
-      pick: DocumentData;
-      member: DocumentData;
-    }> = [];
-    for (const entry of entries.docs) {
-      const pick = await entry.ref.collection("picks").doc(game.id).get();
-      if (pick.exists) {
-        reveals.push({
-          uid: entry.id,
-          pick: pick.data() ?? {},
-          member: membersByUid.get(entry.id) ?? {},
+    if (data.pickRevealCompletedAt instanceof Timestamp) {
+      completedGameIds.add(game.id);
+      continue;
+    }
+    if (!processLockedGames) continue;
+
+    const claimId = randomUUID();
+    const claim = await claimGameForReveal({
+      gameReference: game.ref,
+      claimId,
+      requestId: input.requestId,
+      now: Date.now(),
+    });
+    if (claim === "completed") {
+      completedGameIds.add(game.id);
+      continue;
+    }
+    if (claim === "busy") {
+      processingGameCount += 1;
+      continue;
+    }
+    if (claim !== "claimed") continue;
+
+    try {
+      revealContext ??= Promise.all([
+        reference.collection("entries").get(),
+        db
+          .collection("leagues")
+          .doc(input.leagueId)
+          .collection("members")
+          .get(),
+      ]).then(([entries, members]) => ({
+        entries: entries.docs,
+        membersByUid: new Map(
+          members.docs.map((member) => [member.id, member.data()]),
+        ),
+      }));
+      const context = await revealContext;
+      const revealPicksReference = reference
+        .collection("reveals")
+        .doc(game.id)
+        .collection("picks");
+      const reveals = await revealSourcesForGame({
+        entries: context.entries,
+        gameId: game.id,
+        membersByUid: context.membersByUid,
+        gameReference: game.ref,
+        claimId,
+      });
+      await writeRevealSources({
+        gameReference: game.ref,
+        revealPicksReference,
+        claimId,
+        reveals,
+      });
+      if (await finalizeRevealClaim(game.ref, claimId)) {
+        revealedGameCount += 1;
+      }
+      completedGameIds.add(game.id);
+    } catch (error: unknown) {
+      try {
+        await releaseRevealClaim(game.ref, claimId);
+      } catch (releaseError: unknown) {
+        logger.warn("Reveal claim release failed", {
+          leagueId: input.leagueId,
+          weekId: input.weekId,
+          gameId: game.id,
+          requestId: input.requestId,
+          safeErrorCode:
+            releaseError instanceof Error
+              ? releaseError.name
+              : "UnknownError",
         });
       }
+      throw error;
     }
-    await commitWritesInChunks(db, reveals, (batch, reveal) => {
-      batch.set(
-        reference
-          .collection("reveals")
-          .doc(game.id)
-          .collection("picks")
-          .doc(reveal.uid),
-        {
-          uid: reveal.uid,
-          selectedTeamId: reveal.pick.selectedTeamId,
-          displayName: reveal.member.displayName ?? "Member",
-          photoUrl: reveal.member.photoUrl ?? null,
-          revealedAt: FieldValue.serverTimestamp(),
-          outcome: reveal.pick.outcome ?? "pending",
-          points: reveal.pick.points ?? 0,
-        },
-        {merge: true},
-      );
-    });
-    await game.ref.update({
-      pickRevealCompletedAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    revealedGameCount += 1;
   }
-  return {revealedGameCount};
+
+  const pageSize = Math.min(
+    MAX_REVEAL_PAGE_SIZE,
+    Math.max(1, Math.floor(input.revealPageSize ?? DEFAULT_REVEAL_PAGE_SIZE)),
+  );
+  const includeRevealPayload = revealPayloadReadsEnabled(
+    input.includeRevealPayload,
+  );
+  if (
+    processLockedGames &&
+    completedGameIds.size > 0 &&
+    input.skipAuthorization !== true &&
+    includeRevealPayload
+  ) {
+    try {
+      await gradeWeekWithResultClaim({
+        leagueId: input.leagueId,
+        weekId: input.weekId,
+        requestId: input.requestId,
+      });
+    } catch (error: unknown) {
+      // A concurrent reveal/result operation may own the short-lived result
+      // lease. Reveals are already durable, so return them and let the winning
+      // operation, an explicit retry, or the scheduler finish grading.
+      if (!(error instanceof HttpsError) || error.code !== "aborted") {
+        throw error;
+      }
+      logger.info("Reveal grading deferred behind an active result lease", {
+        leagueId: input.leagueId,
+        weekId: input.weekId,
+        requestId: input.requestId,
+      });
+    }
+  }
+  if (!includeRevealPayload) {
+    return {
+      revealedGameCount,
+      processingGameCount,
+      revealsByGame: {},
+      revealPage: {
+        included: false,
+        truncated: false,
+        nextCursor: null,
+        pageSize,
+        returnedGameCount: 0,
+        returnedPickCount: 0,
+      },
+    };
+  }
+  const page = await readRevealPage({
+    weekReference: reference,
+    completedGameIds: [...completedGameIds],
+    cursor: input.revealCursor ?? null,
+    pageSize,
+  });
+  return {
+    revealedGameCount,
+    processingGameCount,
+    revealsByGame: page.revealsByGame,
+    revealPage: page.metadata,
+  };
 }
 
 export async function overrideResult(input: {
@@ -1176,95 +1853,101 @@ export async function overrideResult(input: {
   await requireAdmin(input.leagueId, input.actorUid);
   const reference = weekReference(input.leagueId, input.weekId);
   const gameReference = reference.collection("games").doc(input.gameId);
-  const [week, game] = await Promise.all([reference.get(), gameReference.get()]);
-  if (typeof week.data()?.finalizationRequestId === "string") {
-    throw new HttpsError(
-      "aborted",
-      "Week finalization is in progress.",
-    );
+  const claimId = randomUUID();
+  await claimResultMutation(reference, input.requestId, claimId);
+  try {
+    const mutation = await db.runTransaction(async (transaction) => {
+      const [week, game] = await Promise.all([
+        transaction.get(reference),
+        transaction.get(gameReference),
+      ]);
+      assertResultMutationClaim(week.data(), claimId);
+      const current = game.data();
+      if (current === undefined) {
+        throw new HttpsError("not-found", "Game not found.");
+      }
+      const validTeamIds = [current.homeTeam?.id, current.awayTeam?.id];
+      if (input.status === "final") {
+        const expectedWinnerTeamId =
+          input.homeScore !== null &&
+          input.awayScore !== null &&
+          input.homeScore !== input.awayScore
+            ? input.homeScore > input.awayScore
+              ? current.homeTeam?.id
+              : current.awayTeam?.id
+            : null;
+        if (
+          input.homeScore === null ||
+          input.awayScore === null ||
+          input.homeScore === input.awayScore ||
+          input.winnerTeamId === null ||
+          !validTeamIds.includes(input.winnerTeamId) ||
+          input.winnerTeamId !== expectedWinnerTeamId
+        ) {
+          throw new HttpsError(
+            "invalid-argument",
+            "A final result needs non-tied scores and the matching winning team.",
+          );
+        }
+      } else if (input.winnerTeamId !== null) {
+        throw new HttpsError(
+          "invalid-argument",
+          "Void or review-required games cannot have a winner.",
+        );
+      }
+      const resultVersion = resultVersionFor({
+        status: input.status,
+        homeScore: input.homeScore,
+        awayScore: input.awayScore,
+        winnerTeamId: input.winnerTeamId,
+        manualOverride: true,
+      });
+      transaction.update(gameReference, {
+        status: input.status,
+        homeScore: input.homeScore,
+        awayScore: input.awayScore,
+        winnerTeamId: input.winnerTeamId,
+        manualOverride: true,
+        manualOverrideReason: input.reason,
+        manualOverrideBy: input.actorUid,
+        resultVersion,
+        providerLastUpdatedAt: FieldValue.serverTimestamp(),
+        lastSyncedAt: FieldValue.serverTimestamp(),
+      });
+      transaction.update(reference, {
+        gameResultsVersion: FieldValue.increment(1),
+        resultMutationHeartbeatAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return {current, resultVersion};
+    });
+    await writeAudit({
+      leagueId: input.leagueId,
+      eventType: input.status === "void" ? "game_voided" : "game_overridden",
+      actorUid: input.actorUid,
+      target: `weeks/${input.weekId}/games/${input.gameId}`,
+      requestId: input.requestId,
+      reason: input.reason,
+      before: {
+        status: mutation.current.status,
+        homeScore: mutation.current.homeScore,
+        awayScore: mutation.current.awayScore,
+        winnerTeamId: mutation.current.winnerTeamId,
+        resultVersion: mutation.current.resultVersion,
+      },
+      after: {
+        status: input.status,
+        homeScore: input.homeScore,
+        awayScore: input.awayScore,
+        winnerTeamId: input.winnerTeamId,
+        resultVersion: mutation.resultVersion,
+      },
+    });
+    await gradeWeek(input.leagueId, input.weekId);
+    return {resultVersion: mutation.resultVersion};
+  } finally {
+    await releaseResultMutationClaim(reference, claimId);
   }
-  if (week.data()?.status === "finalized") {
-    throw new HttpsError(
-      "failed-precondition",
-      "Reopen the week before changing a finalized result.",
-    );
-  }
-  const current = game.data();
-  if (current === undefined) {
-    throw new HttpsError("not-found", "Game not found.");
-  }
-  const validTeamIds = [current.homeTeam?.id, current.awayTeam?.id];
-  if (input.status === "final") {
-    const expectedWinnerTeamId =
-      input.homeScore !== null &&
-      input.awayScore !== null &&
-      input.homeScore !== input.awayScore
-        ? input.homeScore > input.awayScore
-          ? current.homeTeam?.id
-          : current.awayTeam?.id
-        : null;
-    if (
-      input.homeScore === null ||
-      input.awayScore === null ||
-      input.homeScore === input.awayScore ||
-      input.winnerTeamId === null ||
-      !validTeamIds.includes(input.winnerTeamId) ||
-      input.winnerTeamId !== expectedWinnerTeamId
-    ) {
-      throw new HttpsError(
-        "invalid-argument",
-        "A final result needs non-tied scores and the matching winning team.",
-      );
-    }
-  } else if (input.winnerTeamId !== null) {
-    throw new HttpsError(
-      "invalid-argument",
-      "Void or review-required games cannot have a winner.",
-    );
-  }
-  const resultVersion = resultVersionFor({
-    status: input.status,
-    homeScore: input.homeScore,
-    awayScore: input.awayScore,
-    winnerTeamId: input.winnerTeamId,
-    manualOverride: true,
-  });
-  await gameReference.update({
-    status: input.status,
-    homeScore: input.homeScore,
-    awayScore: input.awayScore,
-    winnerTeamId: input.winnerTeamId,
-    manualOverride: true,
-    manualOverrideReason: input.reason,
-    manualOverrideBy: input.actorUid,
-    resultVersion,
-    providerLastUpdatedAt: FieldValue.serverTimestamp(),
-    lastSyncedAt: FieldValue.serverTimestamp(),
-  });
-  await writeAudit({
-    leagueId: input.leagueId,
-    eventType: input.status === "void" ? "game_voided" : "game_overridden",
-    actorUid: input.actorUid,
-    target: `weeks/${input.weekId}/games/${input.gameId}`,
-    requestId: input.requestId,
-    reason: input.reason,
-    before: {
-      status: current.status,
-      homeScore: current.homeScore,
-      awayScore: current.awayScore,
-      winnerTeamId: current.winnerTeamId,
-      resultVersion: current.resultVersion,
-    },
-    after: {
-      status: input.status,
-      homeScore: input.homeScore,
-      awayScore: input.awayScore,
-      winnerTeamId: input.winnerTeamId,
-      resultVersion,
-    },
-  });
-  await gradeWeek(input.leagueId, input.weekId);
-  return {resultVersion};
 }
 
 export async function reopenWeekRecord(input: {
@@ -1484,6 +2167,7 @@ export async function syncActiveWeeks(): Promise<void> {
           actorUid: "system",
           requestId,
           skipAuthorization: true,
+          includeRevealPayload: false,
         });
         await refreshWeekGames({
           leagueId: league.id,

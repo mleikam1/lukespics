@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/responsive/breakpoints.dart';
 import '../../core/widgets/ui.dart';
 import '../../data/demo/demo_repository.dart';
+import '../../data/models/game.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -20,13 +19,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late final TextEditingController _nickname;
   bool _pickerParticipates = false;
   bool _firstGameLock = false;
+  bool _savingArenaRules = false;
 
   @override
   void initState() {
     super.initState();
-    _nickname = TextEditingController(
-      text: ref.read(appControllerProvider).displayName,
-    );
+    final controller = ref.read(appControllerProvider);
+    _nickname = TextEditingController(text: controller.displayName);
+    _pickerParticipates = controller.pickerParticipatesInFutureWeeks;
+    _firstGameLock =
+        controller.futureWeekLockPolicy == PickLockPolicy.firstGame;
   }
 
   @override
@@ -64,8 +66,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   Expanded(
                     child: TextField(
                       controller: _nickname,
-                      decoration: const InputDecoration(
-                        labelText: 'Arena nickname',
+                      readOnly: !controller.isDemo,
+                      decoration: InputDecoration(
+                        labelText: controller.isDemo
+                            ? 'Arena nickname'
+                            : 'Google profile name',
+                        helperText: controller.isDemo
+                            ? null
+                            : 'Connected names come from the signed-in '
+                                  'Google account.',
                       ),
                     ),
                   ),
@@ -75,12 +84,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               Align(
                 alignment: Alignment.centerRight,
                 child: FilledButton(
-                  onPressed: () {
-                    controller.updateNickname(_nickname.text);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Nickname updated.')),
-                    );
-                  },
+                  onPressed: controller.isDemo
+                      ? () {
+                          controller.updateNickname(_nickname.text);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Nickname updated.')),
+                          );
+                        }
+                      : null,
                   child: const Text('Save profile'),
                 ),
               ),
@@ -94,28 +105,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             children: [
               Text('Appearance', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 16),
-              SegmentedButton<ThemeMode>(
-                showSelectedIcon: false,
-                segments: const [
-                  ButtonSegment(
-                    value: ThemeMode.system,
-                    icon: Icon(Icons.brightness_auto_rounded),
-                    label: Text('System'),
-                  ),
-                  ButtonSegment(
-                    value: ThemeMode.light,
-                    icon: Icon(Icons.light_mode_rounded),
-                    label: Text('Light'),
-                  ),
-                  ButtonSegment(
-                    value: ThemeMode.dark,
-                    icon: Icon(Icons.dark_mode_rounded),
-                    label: Text('Dark'),
-                  ),
-                ],
-                selected: {controller.themeMode},
-                onSelectionChanged: (values) =>
-                    controller.setThemeMode(values.first),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SegmentedButton<ThemeMode>(
+                  showSelectedIcon: false,
+                  segments: const [
+                    ButtonSegment(
+                      value: ThemeMode.system,
+                      icon: Icon(Icons.brightness_auto_rounded),
+                      label: Text('System'),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.light,
+                      icon: Icon(Icons.light_mode_rounded),
+                      label: Text('Light'),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.dark,
+                      icon: Icon(Icons.dark_mode_rounded),
+                      label: Text('Dark'),
+                    ),
+                  ],
+                  selected: {controller.themeMode},
+                  onSelectionChanged: (values) =>
+                      controller.setThemeMode(values.first),
+                ),
               ),
             ],
           ),
@@ -179,14 +193,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           tooltip: 'Rotate invite code',
                           onPressed: () async {
                             final rotated = await controller.rotateInviteCode();
-                            if (!context.mounted || !rotated) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Invite code rotated. The prior code is invalid.',
-                                ),
-                              ),
-                            );
+                            if (!context.mounted) return;
+                            if (rotated) {
+                              _showSuccess(
+                                context,
+                                'Invite code rotated. The prior code is invalid.',
+                              );
+                            } else {
+                              _showFailure(
+                                context,
+                                controller,
+                                'The invite code could not be rotated.',
+                              );
+                            }
                           },
                           icon: const Icon(Icons.refresh_rounded),
                         ),
@@ -195,41 +214,50 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   const SizedBox(height: 10),
                 ],
+                _RuleSnapshot(
+                  pickerParticipates:
+                      controller.pickerParticipatesInCurrentWeek,
+                  firstGameLock:
+                      controller.weekLockPolicy == PickLockPolicy.firstGame,
+                ),
+                const SizedBox(height: 8),
                 SwitchListTile(
+                  key: const Key('picker-participation-setting'),
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Weekly picker participates'),
+                  title: const Text('Picker participates in future weeks'),
                   subtitle: const Text(
-                    'Off by default. Picker weeks are excluded from accuracy.',
+                    'Sets the default for weeks created after this one. '
+                    'Published-week eligibility does not change.',
                   ),
                   value: _pickerParticipates,
-                  onChanged: (value) {
-                    setState(() => _pickerParticipates = value);
-                    unawaited(
-                      controller.updateLeagueSettings({
-                        'pickerParticipatesInPicks': value,
-                      }),
-                    );
-                  },
+                  onChanged: _savingArenaRules
+                      ? null
+                      : (value) => _setPickerParticipation(controller, value),
                 ),
                 SwitchListTile(
+                  key: const Key('pick-lock-policy-setting'),
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Lock entire slate at first game'),
-                  subtitle: const Text('Per-game locking is the default.'),
+                  title: const Text('Use first-game lock in future weeks'),
+                  subtitle: const Text(
+                    'When off, each game locks separately. This changes only '
+                    'the default for newly created weeks.',
+                  ),
                   value: _firstGameLock,
-                  onChanged: (value) {
-                    setState(() => _firstGameLock = value);
-                    unawaited(
-                      controller.updateLeagueSettings({
-                        'pickLockPolicy': value ? 'firstGame' : 'perGame',
-                      }),
-                    );
-                  },
+                  onChanged: _savingArenaRules
+                      ? null
+                      : (value) => _setLockPolicy(controller, value),
                 ),
-                const ListTile(
+                if (_savingArenaRules)
+                  Semantics(
+                    label: 'Saving arena rules',
+                    liveRegion: true,
+                    child: const LinearProgressIndicator(),
+                  ),
+                ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.public_rounded),
-                  title: Text('League timezone'),
-                  subtitle: Text('America/Chicago'),
+                  leading: const Icon(Icons.public_rounded),
+                  title: const Text('League timezone'),
+                  subtitle: Text(controller.leagueTimezone),
                 ),
               ],
             ),
@@ -302,10 +330,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final leave = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Leave Luke’s Picks Arena?'),
-        content: const Text(
-          'Your finalized history will remain so past standings stay accurate. '
-          'The owner must transfer ownership before leaving.',
+        title: Text('Leave ${controller.leagueName}?'),
+        content: Text(
+          'Your finalized history will remain so past standings stay accurate.'
+          '${controller.currentRole.name == 'owner' ? ' Owners cannot leave '
+                    'an active arena because ownership transfer is not '
+                    'available in this release.' : ''}',
         ),
         actions: [
           TextButton(
@@ -321,7 +351,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
     if (leave == true) {
       final left = await controller.leaveArena();
-      if (context.mounted && left) context.go('/arena');
+      if (!context.mounted) return;
+      if (left) {
+        context.go('/arena');
+      } else {
+        _showFailure(
+          context,
+          controller,
+          'The arena could not be left. Try again.',
+        );
+      }
     }
   }
 
@@ -351,7 +390,110 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
     if (shouldDelete != true) return;
     final deleted = await controller.deleteAccount();
-    if (context.mounted && deleted) context.go('/sign-in');
+    if (!context.mounted) return;
+    if (deleted) {
+      context.go('/sign-in');
+    } else {
+      _showFailure(
+        context,
+        controller,
+        'The account could not be deleted. Try again.',
+      );
+    }
+  }
+
+  Future<void> _setPickerParticipation(
+    AppController controller,
+    bool value,
+  ) async {
+    final previous = _pickerParticipates;
+    setState(() {
+      _pickerParticipates = value;
+      _savingArenaRules = true;
+    });
+    controller.clearError();
+    final saved = await controller.updateLeagueSettings({
+      'pickerParticipatesInPicks': value,
+    });
+    if (!mounted) return;
+    setState(() {
+      _savingArenaRules = false;
+      if (!saved) _pickerParticipates = previous;
+    });
+    if (saved) {
+      _showSuccess(
+        context,
+        'Future-week picker participation saved. The current week is unchanged.',
+      );
+    } else {
+      _showFailure(
+        context,
+        controller,
+        'Picker participation could not be saved.',
+      );
+    }
+  }
+
+  Future<void> _setLockPolicy(AppController controller, bool value) async {
+    final previous = _firstGameLock;
+    setState(() {
+      _firstGameLock = value;
+      _savingArenaRules = true;
+    });
+    controller.clearError();
+    final saved = await controller.updateLeagueSettings({
+      'pickLockPolicy': value ? 'firstGame' : 'perGame',
+    });
+    if (!mounted) return;
+    setState(() {
+      _savingArenaRules = false;
+      if (!saved) _firstGameLock = previous;
+    });
+    if (saved) {
+      _showSuccess(
+        context,
+        'Future-week lock policy saved. The current week is unchanged.',
+      );
+    } else {
+      _showFailure(context, controller, 'Lock policy could not be saved.');
+    }
+  }
+}
+
+class _RuleSnapshot extends StatelessWidget {
+  const _RuleSnapshot({
+    required this.pickerParticipates,
+    required this.firstGameLock,
+  });
+
+  final bool pickerParticipates;
+  final bool firstGameLock;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.lock_clock_outlined, color: colors.primary),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Text(
+              'Current week snapshot: picker '
+              '${pickerParticipates ? 'included' : 'excluded'} · '
+              '${firstGameLock ? 'entire slate locks at the first game' : 'each game locks separately'}. '
+              'These published rules stay fixed.',
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -377,5 +519,31 @@ class _LinkTile extends StatelessWidget {
   }
 }
 
-String _initials(String name) =>
-    name.split(' ').take(2).map((part) => part[0]).join();
+void _showSuccess(BuildContext context, String message) {
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+}
+
+void _showFailure(
+  BuildContext context,
+  AppController controller,
+  String fallback,
+) {
+  final message = controller.errorMessage?.trim();
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(message == null || message.isEmpty ? fallback : message),
+    ),
+  );
+}
+
+String _initials(String name) {
+  final parts = name
+      .trim()
+      .split(RegExp(r'\s+'))
+      .where((part) => part.isNotEmpty);
+  final initials = parts
+      .take(2)
+      .map((part) => part.characters.first.toUpperCase())
+      .join();
+  return initials.isEmpty ? '?' : initials;
+}

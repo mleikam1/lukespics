@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - codex/lukes-picks-mvp
+      - codex/connected-picker-flow
 
 permissions:
   contents: read
@@ -20,17 +21,25 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: 3.44.4
           cache: true
       - run: flutter pub get
+      - name: Validate release-safety scripts
+        run: |
+          bash -n scripts/*.sh
+          ./scripts/check_public_source.sh
       - run: dart format --output=none --set-exit-if-changed .
       - run: flutter analyze
       - run: flutter test
       - run: flutter build web --release
-      - run: ./scripts/check_secrets.sh
+      - name: Scan fresh public build
+        run: ./scripts/check_public_build.sh build/web
 
   functions:
     name: Functions and Firestore rules
@@ -48,6 +57,12 @@ jobs:
           distribution: temurin
           java-version: 21
       - run: npm ci
+        working-directory: functions
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=critical
+        working-directory: functions
+      - name: Audit complete dependency graph
+        run: npm audit --audit-level=critical
         working-directory: functions
       - run: npm run lint
         working-directory: functions
