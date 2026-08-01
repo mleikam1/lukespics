@@ -67,7 +67,13 @@ This document is authoritative for the MVP.
 - Production uses manual schedules/results until a production provider passes
   coverage, quota, terms, and publication-rights review.
 - Mock and TheSportsDB test schedules are emulator/internal-test-only.
-- No ESPN scraping, internal endpoints, or image hotlinking.
+- SportsDataIO automatic schedules/results are server-only and limited to NFL
+  and MLB. They remain default-off until the exact feeds, intended display and
+  grading use, key, access mode, and entitlement are verified.
+- Trial/Dev data cannot grade real picks. Discovery access cannot be presented
+  as real-time. Flutter never calls the provider directly.
+- A known day with no confirmed UTC start remains time-TBD and cannot be
+  selected or published; no synthetic kickoff or lock is allowed.
 - Team marks require permitted rights and an allowlisted HTTPS host; otherwise
   the UI uses a neutral initials badge.
 

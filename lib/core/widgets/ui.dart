@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../app/theme/app_theme.dart';
 import '../../data/models/game.dart';
@@ -164,9 +165,10 @@ enum StatusTone { neutral, success, warning, info, danger }
 /// Callers must explicitly identify the provider, confirm that display rights
 /// have been verified for the current runtime, and list each permitted image
 /// host. Hosts are exact matches: allowing `images.example.com` does not also
-/// allow arbitrary subdomains. ESPN-owned hosts and credential-bearing URLs
-/// are rejected regardless of the supplied allowlist. Query parameters are
-/// also fail-closed and must be individually identified as safe.
+/// allow arbitrary subdomains. Provider-owned hosts are usable only when the
+/// server has explicitly enabled them after the applicable rights review.
+/// Credential-bearing URLs remain forbidden, and query parameters are also
+/// fail-closed and must be individually identified as safe.
 @immutable
 final class TeamLogoPolicy {
   const TeamLogoPolicy.disabled()
@@ -201,8 +203,7 @@ final class TeamLogoPolicy {
     final permittedQueryKeys = allowedQueryParameters
         .map((key) => key.trim().toLowerCase())
         .toSet();
-    if (_isEspnLogoHost(host) ||
-        !allowedHosts.any((allowed) => _normalizeLogoHost(allowed) == host) ||
+    if (!allowedHosts.any((allowed) => _normalizeLogoHost(allowed) == host) ||
         candidate.queryParameters.keys.any(
           (key) =>
               _isSensitiveLogoQueryKey(key) ||
@@ -331,14 +332,32 @@ class _TeamBadgeFallback extends StatelessWidget {
         borderRadius: BorderRadius.circular(size * 0.32),
         border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
       ),
-      child: Text(
-        team.abbreviation,
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: size * 0.28,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 0.4,
-        ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Opacity(
+            opacity: 0.22,
+            child: Padding(
+              padding: EdgeInsets.all(size * 0.15),
+              child: SvgPicture.asset(
+                'assets/brand/lukes_picks_mark.svg',
+                width: size,
+                height: size,
+                fit: BoxFit.contain,
+                excludeFromSemantics: true,
+              ),
+            ),
+          ),
+          Text(
+            team.abbreviation,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: size * 0.28,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.4,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -364,11 +383,6 @@ String _normalizeLogoHost(String value) {
   return normalized.endsWith('.')
       ? normalized.substring(0, normalized.length - 1)
       : normalized;
-}
-
-bool _isEspnLogoHost(String host) {
-  final labels = host.split('.');
-  return labels.any((label) => label == 'espn' || label == 'espncdn');
 }
 
 bool _isSensitiveLogoQueryKey(String key) {

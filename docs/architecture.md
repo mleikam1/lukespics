@@ -11,8 +11,11 @@ flowchart LR
   Callables --> Services["Shared backend services"]
   Scheduler["Scheduled result sync"] --> Services
   Services --> Firestore
+  Config["Server-owned NFL/MLB catalog<br/>systemConfig/sportsDataIoCatalog"] --> Services
+  Gate["SportsDataIO project/mode/entitlement/kill-switch gates"] --> Services
+  Secret["Secret Manager key<br/>provider Functions only"] --> Services
   Services --> Cache["Provider cache / quota / locks"]
-  Cache --> Provider["API-Sports adapter<br/>production-gated"]
+  Cache --> Provider["SportsDataIO client<br/>separate NFL + MLB adapters"]
   Cache --> Internal["TheSportsDB test adapter<br/>emulator/internal only"]
   Cache --> Fallback["Mock test data / manual fallback"]
   Firestore --> Reveals["Server-generated pick reveals"]
@@ -36,11 +39,24 @@ mode requires `demo-lukes-picks-local`. Configuration failure is a visible
 retry state, never a demo fallback.
 
 Catalog candidates and selected week games are separate state domains. The
-catalog is query/filter/cache state; selected games are the exact server draft
-or published snapshots. A week subscription cannot overwrite the catalog.
+controller uses four distinct containers: the current query results, a
+cross-query canonical game cache, the desired draft selection map, and the
+authoritative week-game stream. The persisted server draft IDs form a fifth,
+ID-only reconciliation baseline. A new query replaces only current results;
+it can refresh a selected object's canonical fields but cannot discard a
+selection from another sport, league, or date. A week subscription cannot
+overwrite the catalog.
 
-The Flutter and Functions layers passed the isolated three-user
-browser-to-emulator release test together. See
+`listSportsCatalog` has a typed discovery contract. An initial request can omit
+the provider query, and the server returns enabled sports and leagues,
+canonical provider league IDs and seasons, presentation policy, availability,
+cache metadata, active-week bounds, games, and the effective query. Subsequent
+UI filter changes issue new callable requests using those server-returned
+identities. Date windows are arena-local calendar dates, constrained to the
+active week and seven inclusive days in both the client and server.
+
+The deployed dormant-provider Flutter and Functions layers passed the isolated
+three-user browser-to-emulator release test together. See
 [validation-report.md](validation-report.md) for dated evidence.
 
 ## Backend
@@ -56,9 +72,76 @@ Provider mode is server-authoritative. Production remains manual until a
 production provider passes its gate. Mock and TheSportsDB test modes must fail
 closed in `lukes-picks`.
 
+The SportsDataIO path has independent, fail-closed project, emulator, deploy
+kill-switch, environment access-mode, environment entitlement, server-catalog,
+per-league feed, and Secret Manager key gates. Only `production` mode can run
+the production adapter; fixture/trial/discovery modes remain test or delayed-
+access classifications. No secret or contract document belongs in Firestore.
+
+The provider factory reads `systemConfig/sportsDataIoCatalog` with Admin SDK
+access; rules deny every client read/write. The callable re-resolves query
+metadata against the configured NFL/MLB seasons and enforces US Eastern date
+buckets. The dedicated client constructs only five exact HTTPS League API path
+families and authenticates by header. Flutter never receives a vendor URL, key,
+or raw schema.
+
+Separate NFL and MLB adapters map endpoint-specific DTOs into
+`NormalizedGame`. NFL joins `SchedulesBasic` identity/reschedule data with
+`ScoresByDate`; MLB uses `GamesByDate` so exception statuses remain observable.
+Stable cross-reference IDs support result reconciliation without using
+matchup/date identity. True time-TBD games remain catalog-only until a UTC start
+exists. Every closed result is checked for scores and ties before grading.
+
+Provider-facing Functions retain the existing stable application contract:
+
+- `listSportsCatalog` resolves the centralized allowlist and returns normalized,
+  cache-aware schedule data to the authorized picker/admin;
+- `saveDraftSlate` and `publishWeeklySlate` validate canonical cached games,
+  reject duplicates/empty publication, and atomically expose snapshots;
+- `refreshSelectedGames` is an admin refresh path with server throttling;
+- `syncSelectedGameResults` is the protected on-demand reconciliation path;
+- `scheduledResultSync` runs every 30 minutes UTC, claims shared provider work,
+  refreshes active selected games, reveals newly locked picks, and invokes the
+  existing idempotent result/standings lifecycle; and
+- `overrideGameResult`, `voidGame`, `finalizeWeek`, and `rebuildStandings`
+  remain audited administrator recovery paths. Provider downtime never removes
+  the manual-game/result fallback.
+
+Publication also snapshots the selected games' connected provider and its
+reviewed presentation policy onto the week document. Picks and Results obtain
+that server-authored, member-readable policy from the week stream; ordinary
+members never need access to the picker-only catalog callable. Draft catalog
+responses remain authoritative for the picker, and a missing, mismatched, or
+legacy week snapshot remains logo-disabled.
+
+When the active week changes through another connected client, the controller
+invalidates in-flight catalog work and clears every week-scoped draft, pick,
+entry, and result view before subscribing to the new week. Publication also
+invalidates draft catalog requests so a late response cannot replace the
+immutable presentation snapshot. Week subscriptions use generation ownership so
+rapid consecutive transitions cannot reinstall an older listener, and draft
+save/publish actions validate their captured week after every network boundary.
+Server publish retries treat every recognized post-publication week status as
+the same already-published slate, including final settlement of concurrent calls
+sharing one request ID.
+
+This branch declares these gates but is not deployed. No key or enabled
+production catalog is present locally, no live smoke is claimed, and production
+arenas remain manual-provider. Sanitized fixtures prove parser, normalization,
+transport, and workflow behavior only; they do not prove live schema or feed
+entitlement.
+
 Finalization reads the entire authoritative week, recomputes entries, writes
 ranked snapshots, rebuilds aggregate standings, records an audit event, and
 advances the rotation in an idempotent transaction/versioned operation.
+Next-week creation waits for that per-week rotation marker and derives the picker
+from it; a stale client-supplied picker cannot override the finalized rotation.
+A finalized-only follow-up claim coordinates standings/rotation repair with
+reopen, and never re-finalizes a correction in progress. Before next-week
+creation, the same transactionally guarded rotation path replaces an inactive
+recorded next picker with the next active member. League-wide standings epochs
+fence every rebuild chunk and force a fresh aggregate read when a different
+week finalizes or reopens concurrently.
 
 ## Privacy boundary
 
@@ -70,10 +153,27 @@ fields to `reveals/{gameId}/picks/{uid}`. Email remains in private
 
 ## Resilience
 
-- Manual data permits production operation without a provider key. Mock data is
-  emulator/test-only.
-- Final normalized games are cached indefinitely until a requested correction.
-- Content hashes suppress unchanged writes.
+- Manual data permits production operation while SportsDataIO is inactive.
+  Mock data is emulator/test-only.
+- Catalog cache identities include canonical provider metadata, date bounds,
+  and timezone so arena-local queries cannot collide.
+- Provider presentation defaults to neutral initials. Remote URLs survive
+  normalization and Flutter rendering only after a reviewed date and exact
+  host/query policy pass independently at both layers.
+- Published weeks retain their publish-time presentation snapshot rather than
+  inheriting later mutable catalog policy. Revoking a previously approved logo
+  policy therefore requires a trusted update/backfill of affected open or
+  historical week snapshots.
+- Final catalog responses use a long-lived cache, while selected terminal-game
+  refreshes use a finite cache so later provider corrections remain observable.
+- Empty schedule responses cache for two hours for other providers and 30
+  minutes for SportsDataIO. SportsDataIO live games cache for 10 minutes; games starting within two hours for 15 minutes; games two to 24 hours
+  out for 30 minutes; farther games for one hour; and unresolved anomaly states
+  for one hour. Terminal catalog data is retained long-term, while selected
+  terminal games reconcile after 12 hours. Stale cached data may be returned
+  with an explicit indicator after a bounded refresh failure.
+- Content hashes suppress unchanged game payload writes; canonical trust-window
+  metadata can still advance on a provider refresh.
 - Result and outcome versions make retries no-ops.
 - Full standings rebuild is a recovery action.
 - The default Firebase alias remains emulator-only, while production writes

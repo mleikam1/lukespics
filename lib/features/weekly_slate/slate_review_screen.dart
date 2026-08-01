@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../app/bootstrap.dart';
+import '../../core/domain/game_presentation.dart';
 import '../../core/domain/league_time.dart';
 import '../../core/responsive/breakpoints.dart';
+import '../../core/widgets/catalog_logo_policy.dart';
 import '../../core/widgets/ui.dart';
 import '../../data/demo/demo_repository.dart';
 import '../../data/models/game.dart';
@@ -57,7 +58,10 @@ class SlateReviewScreen extends ConsumerWidget {
             _ReviewGameCard(
               game: game,
               timezone: controller.leagueTimezone,
-              logoPolicy: _logoPolicy(controller, game),
+              logoPolicy: catalogTeamLogoPolicy(
+                presentation: controller.catalogPresentation,
+                game: game,
+              ),
               onRemove: controller.slatePublished
                   ? null
                   : () => controller.removeSlateGame(game.id),
@@ -130,18 +134,6 @@ class SlateReviewScreen extends ConsumerWidget {
     );
     context.go('/dashboard');
   }
-
-  TeamLogoPolicy _logoPolicy(AppController controller, Game game) {
-    if (controller.runtimeMode != AppRuntimeMode.firebaseEmulator ||
-        game.provider != 'theSportsDbTest') {
-      return const TeamLogoPolicy.disabled();
-    }
-    return const TeamLogoPolicy.provider(
-      provider: 'theSportsDbTest',
-      logoRightsVerified: true,
-      allowedHosts: {'r2.thesportsdb.com'},
-    );
-  }
 }
 
 class _RulesSummary extends StatelessWidget {
@@ -211,20 +203,29 @@ class _RuleItem extends StatelessWidget {
         children: [
           Icon(icon, color: Theme.of(context).colorScheme.tertiary),
           const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label.toUpperCase(),
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.8,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label.toUpperCase(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.8,
+                  ),
                 ),
-              ),
-              Text(value, style: const TextStyle(fontWeight: FontWeight.w800)),
-            ],
+                Text(
+                  value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -247,6 +248,7 @@ class _ReviewGameCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final detail = gameDetailSummary(game);
     return SectionCard(
       padding: const EdgeInsets.all(16),
       child: Row(
@@ -263,12 +265,36 @@ class _ReviewGameCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  '${game.leagueName} · '
-                  '${formatLeagueTime(game.scheduledAtUtc, timezone, 'EEE, MMM d · h:mm a')}',
+                  [
+                    game.leagueName,
+                    game.timeTbd
+                        ? '${game.scheduledDayEastern ?? 'Date pending'} · Time TBD (Eastern)'
+                        : game.scheduledAtUtc == null
+                        ? 'Schedule unavailable'
+                        : formatLeagueTime(
+                            game.scheduledAtUtc!,
+                            timezone,
+                            'EEE, MMM d · h:mm a',
+                          ),
+                    if (game.venueName != null) game.venueName!,
+                  ].join(' · '),
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
+                if (detail != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    detail,
+                    key: Key('review-game-context-${game.id}'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

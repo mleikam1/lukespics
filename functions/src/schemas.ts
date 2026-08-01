@@ -1,5 +1,10 @@
 import {z} from "zod";
-import {GAME_STATUSES, MEMBER_ROLES, PROVIDER_NAMES} from "./types.js";
+import {
+  GAME_STATUSES,
+  MEMBER_ROLES,
+  PERSISTED_PROVIDER_NAMES,
+  PROVIDER_NAMES,
+} from "./types.js";
 
 export const idSchema = z
   .string()
@@ -27,29 +32,58 @@ export const teamSchema = z.object({
   shortName: z.string().trim().min(1).max(80),
   abbreviation: z.string().trim().min(1).max(12),
   logoUrl: z.url().nullable().default(null),
+  color: z
+    .string()
+    .regex(/^#[0-9a-f]{6}$/)
+    .nullable()
+    .default(null),
+  providerTeamId: idSchema.nullable().default(null),
+  providerGlobalTeamId: idSchema.nullable().default(null),
 });
 
 export const normalizedGameSchema = z
   .object({
     id: idSchema,
-    provider: z.enum(PROVIDER_NAMES),
+    provider: z.enum(PERSISTED_PROVIDER_NAMES),
     providerGameId: idSchema,
+    providerScoreId: idSchema.nullable().default(null),
+    providerLeagueGameId: idSchema.nullable().default(null),
+    providerGlobalGameId: idSchema.nullable().default(null),
+    providerGameKey: idSchema.nullable().default(null),
+    // Older stored manual/test games predate this field. Normalize those reads
+    // to leagueCode while all newly fetched provider games persist the
+    // canonical provider league identifier.
+    providerLeagueId: idSchema.optional(),
     sportCode: idSchema,
     leagueCode: idSchema,
     leagueName: z.string().trim().min(1).max(120),
     season: z.string().trim().min(1).max(32),
+    seasonType: z.string().trim().min(1).max(40).nullable().default(null),
     weekOrRound: z.string().trim().max(80).nullable().default(null),
-    scheduledAtUtc: dateSchema,
-    publishedScheduledAtUtc: dateSchema,
-    effectiveLockAtUtc: dateSchema,
+    scheduledAtUtc: dateSchema.nullable(),
+    publishedScheduledAtUtc: dateSchema.nullable(),
+    effectiveLockAtUtc: dateSchema.nullable(),
+    scheduledDayEastern: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .nullable()
+      .default(null),
+    timeTbd: z.boolean().default(false),
     venueName: z.string().trim().max(160).nullable().default(null),
     neutralSite: z.boolean().default(false),
     homeTeam: teamSchema,
     awayTeam: teamSchema,
     status: z.enum(GAME_STATUSES),
+    statusDetail: z.string().trim().max(120).nullable().default(null),
+    isClosed: z.boolean().nullable().default(null),
+    rescheduledFromLeagueGameId: idSchema.nullable().default(null),
+    rescheduledToLeagueGameId: idSchema.nullable().default(null),
     homeScore: z.number().int().nonnegative().nullable().default(null),
     awayScore: z.number().int().nonnegative().nullable().default(null),
     winnerTeamId: idSchema.nullable().default(null),
+    broadcast: z.string().trim().max(240).nullable().default(null),
+    eventDetail: z.string().trim().max(160).nullable().default(null),
+    rawResponseVersion: z.number().int().positive().max(100).default(1),
     providerLastUpdatedAt: dateSchema,
     lastSyncedAt: dateSchema,
     manualOverride: z.boolean().default(false),
@@ -58,7 +92,43 @@ export const normalizedGameSchema = z
     resultVersion: z.string().trim().min(8).max(128),
     sourcePayloadHash: z.string().regex(/^[a-f0-9]{64}$/),
   })
+  .transform((game) => ({
+    ...game,
+    providerLeagueId: game.providerLeagueId ?? game.leagueCode,
+  }))
   .superRefine((game, context) => {
+    if (game.timeTbd) {
+      if (game.scheduledDayEastern === null) {
+        context.addIssue({
+          code: "custom",
+          path: ["scheduledDayEastern"],
+          message: "A time-TBD game requires its Eastern calendar day.",
+        });
+      }
+      for (const field of [
+        "scheduledAtUtc",
+        "publishedScheduledAtUtc",
+        "effectiveLockAtUtc",
+      ] as const) {
+        if (game[field] !== null) {
+          context.addIssue({
+            code: "custom",
+            path: [field],
+            message: "A time-TBD game cannot carry an invented lock instant.",
+          });
+        }
+      }
+    } else if (
+      game.scheduledAtUtc === null ||
+      game.publishedScheduledAtUtc === null ||
+      game.effectiveLockAtUtc === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["scheduledAtUtc"],
+        message: "A confirmed game requires schedule and lock instants.",
+      });
+    }
     if (game.homeTeam.id === game.awayTeam.id) {
       context.addIssue({
         code: "custom",
@@ -217,12 +287,29 @@ export const submitEntrySchema = weekMutationSchema.extend({
 });
 
 export const providerQuerySchema = leagueMutationSchema.extend({
-  sportCode: idSchema,
-  leagueCode: idSchema,
-  leagueIdForProvider: idSchema,
-  season: z.string().trim().min(1).max(32),
-  from: z.iso.date(),
-  to: z.iso.date(),
+  sportCode: idSchema.optional(),
+  leagueCode: idSchema.optional(),
+  leagueIdForProvider: idSchema.optional(),
+  season: z.string().trim().min(1).max(32).optional(),
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  timezone: z
+    .string()
+    .trim()
+    .min(1)
+    .max(80)
+    .refine((value) => {
+      try {
+        new Intl.DateTimeFormat("en-US", {timeZone: value}).format();
+        return true;
+      } catch {
+        return false;
+      }
+    }, "A valid IANA timezone is required.")
+    .optional(),
+  dateMode: z
+    .enum(["today", "tomorrow", "later", "allDates", "custom"])
+    .optional(),
   forceRefresh: z.boolean().default(false),
 });
 
@@ -233,6 +320,15 @@ export const sportsCatalogSchema = providerQuerySchema
     weekId: idSchema,
   })
   .superRefine((value, context) => {
+    if ((value.from === undefined) !== (value.to === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: value.from === undefined ? ["from"] : ["to"],
+        message: "Catalog start and end dates must be supplied together.",
+      });
+      return;
+    }
+    if (value.from === undefined || value.to === undefined) return;
     const from = new Date(`${value.from}T00:00:00.000Z`);
     const to = new Date(`${value.to}T00:00:00.000Z`);
     const rangeDays =
@@ -252,21 +348,80 @@ export const sportsCatalogSchema = providerQuerySchema
     }
   });
 
-export const selectedGamesSchema = weekMutationSchema.extend({
-  forceRefresh: z.boolean().default(false),
-});
+export const selectedGamesSchema = weekMutationSchema
+  .extend({
+    forceRefresh: z.boolean().default(false),
+    gameId: idSchema.optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.gameId !== undefined && !value.forceRefresh) {
+      context.addIssue({
+        code: "custom",
+        path: ["forceRefresh"],
+        message: "A one-game provider refresh must be forced.",
+      });
+    }
+  });
 
 export const gameMutationSchema = weekMutationSchema.extend({
   gameId: idSchema,
 });
 
-export const overrideGameSchema = gameMutationSchema.extend({
-  status: z.enum(["final", "void", "reviewRequired"]),
-  homeScore: z.number().int().nonnegative().nullable(),
-  awayScore: z.number().int().nonnegative().nullable(),
-  winnerTeamId: idSchema.nullable(),
-  reason: z.string().trim().min(10).max(500),
-});
+export const overrideGameSchema = gameMutationSchema
+  .extend({
+    scheduledAtUtc: dateSchema.optional(),
+    status: z.enum([
+      "scheduled",
+      "delayed",
+      "postponed",
+      "suspended",
+      "final",
+      "void",
+      "reviewRequired",
+    ]),
+    homeScore: z.number().int().nonnegative().nullable(),
+    awayScore: z.number().int().nonnegative().nullable(),
+    winnerTeamId: idSchema.nullable(),
+    reason: z.string().trim().min(10).max(500),
+  })
+  .superRefine((value, context) => {
+    if (value.status === "final") {
+      if (
+        value.homeScore === null ||
+        value.awayScore === null ||
+        value.homeScore === value.awayScore ||
+        value.winnerTeamId === null
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["status"],
+          message: "A final override needs non-tied scores and a winner.",
+        });
+      }
+      return;
+    }
+    if (value.status === "reviewRequired") {
+      if (value.winnerTeamId !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["winnerTeamId"],
+          message: "A review-required game cannot have a winner.",
+        });
+      }
+      return;
+    }
+    if (
+      value.homeScore !== null ||
+      value.awayScore !== null ||
+      value.winnerTeamId !== null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["status"],
+        message: "This game status cannot carry scores or a winner.",
+      });
+    }
+  });
 
 export const reasonSchema = weekMutationSchema.extend({
   reason: z.string().trim().min(10).max(500),

@@ -1,0 +1,20 @@
+[
+  {
+    "TeamID": 11,
+    "GlobalTeamID": 2011,
+    "Key": "HBR",
+    "City": "Harbor",
+    "Name": "Captains",
+    "WikipediaLogoUrl": "https://unlicensed.example.test/captains.png",
+    "PrimaryColor": "abcdef",
+    "UnknownAdditiveField": true
+  },
+  {
+    "TeamID": 12,
+    "GlobalTeamID": 2012,
+    "Key": "PLN",
+    "City": "Plainview",
+    "Name": "Comets",
+    "WikipediaWordMarkUrl": "https://unlicensed.example.test/comets.png"
+  }
+]

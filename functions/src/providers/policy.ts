@@ -1,12 +1,23 @@
 import {HttpsError} from "firebase-functions/v2/https";
-import {isEmulator} from "../config.js";
+import {
+  ALLOW_API_SPORTS_PROVIDER,
+  ALLOW_SPORTSDATAIO_PROVIDER,
+  SPORTSDATAIO_ACCESS_MODE,
+  SPORTSDATAIO_ENTITLEMENT_VERIFIED,
+} from "../config.js";
 import type {ProviderName} from "../types.js";
+
+const AUTHORIZED_API_SPORTS_PROJECT_ID = "lukes-picks";
+const AUTHORIZED_SPORTSDATAIO_PROJECT_ID = "lukes-picks";
 
 export type ProviderRuntime = {
   projectId: string | null;
   emulator: boolean;
   allowTheSportsDbTest: boolean;
   allowApiSports: boolean;
+  allowSportsDataIo: boolean;
+  sportsDataIoAccessMode: string;
+  sportsDataIoEntitlementVerified: boolean;
 };
 
 function firebaseConfigProjectId(
@@ -37,12 +48,30 @@ export function runtimeProjectId(
 export function providerRuntime(
   environment: NodeJS.ProcessEnv = process.env,
 ): ProviderRuntime {
+  const emulator =
+    environment.FUNCTIONS_EMULATOR === "true" ||
+    environment.FIRESTORE_EMULATOR_HOST !== undefined;
   return {
     projectId: runtimeProjectId(environment),
-    emulator: isEmulator,
+    emulator,
     allowTheSportsDbTest:
       environment.ALLOW_THESPORTSDB_TEST_PROVIDER === "true",
-    allowApiSports: environment.ALLOW_API_SPORTS_PROVIDER === "true",
+    allowApiSports:
+      environment === process.env
+        ? ALLOW_API_SPORTS_PROVIDER.value()
+        : environment.ALLOW_API_SPORTS_PROVIDER === "true",
+    allowSportsDataIo:
+      environment === process.env
+        ? ALLOW_SPORTSDATAIO_PROVIDER.value()
+        : environment.ALLOW_SPORTSDATAIO_PROVIDER === "true",
+    sportsDataIoAccessMode:
+      environment === process.env
+        ? SPORTSDATAIO_ACCESS_MODE.value()
+        : environment.SPORTSDATAIO_ACCESS_MODE ?? "fixture",
+    sportsDataIoEntitlementVerified:
+      environment === process.env
+        ? SPORTSDATAIO_ENTITLEMENT_VERIFIED.value()
+        : environment.SPORTSDATAIO_ENTITLEMENT_VERIFIED === "true",
   };
 }
 
@@ -51,7 +80,22 @@ export function isProviderAllowed(
   runtime: ProviderRuntime,
 ): boolean {
   if (name === "manual") return true;
-  if (name === "apiSports") return runtime.allowApiSports;
+  if (name === "apiSports") {
+    return (
+      !runtime.emulator &&
+      runtime.projectId === AUTHORIZED_API_SPORTS_PROJECT_ID &&
+      runtime.allowApiSports
+    );
+  }
+  if (name === "sportsDataIo") {
+    return (
+      !runtime.emulator &&
+      runtime.projectId === AUTHORIZED_SPORTSDATAIO_PROJECT_ID &&
+      runtime.allowSportsDataIo &&
+      runtime.sportsDataIoAccessMode === "production" &&
+      runtime.sportsDataIoEntitlementVerified
+    );
+  }
 
   const internalEmulator =
     runtime.emulator && runtime.projectId === "demo-lukes-picks-local";
@@ -69,6 +113,12 @@ export function assertProviderAllowedForRuntime(
     throw new HttpsError(
       "failed-precondition",
       "API-Sports is disabled until production provider approval and configuration are complete.",
+    );
+  }
+  if (name === "sportsDataIo") {
+    throw new HttpsError(
+      "failed-precondition",
+      "SportsDataIO is disabled until production access and entitlement verification are complete.",
     );
   }
   if (name === "theSportsDbTest") {

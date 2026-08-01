@@ -9,6 +9,9 @@ readonly functions_host="${loopback}:5001"
 readonly hosting_host="${loopback}:5002"
 readonly firebase_cli="functions/node_modules/.bin/firebase"
 readonly android_studio_java_home="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+readonly functions_emulator_env="functions/.env.local"
+readonly functions_emulator_secrets="functions/.secret.local"
+readonly disabled_provider_credential="disabled-${project_id}-fixture"
 
 if [[ "$(node -p 'process.versions.node.split(".")[0]')" != "22" ]]; then
   echo "Browser E2E requires Node 22." >&2
@@ -43,8 +46,36 @@ export FIRESTORE_EMULATOR_HOST="$firestore_host"
 export FUNCTIONS_EMULATOR_HOST="$functions_host"
 export FIREBASE_HOSTING_EMULATOR_HOST="$hosting_host"
 export ALLOW_THESPORTSDB_TEST_PROVIDER="true"
+export ALLOW_API_SPORTS_PROVIDER="false"
+export ALLOW_SPORTSDATAIO_PROVIDER="false"
+export SPORTSDATAIO_ACCESS_MODE="fixture"
+export SPORTSDATAIO_ENTITLEMENT_VERIFIED="false"
+export USE_SANITIZED_MLB_FIXTURE="true"
 export INVITE_CODE_PEPPER="${project_id}-browser-e2e-invite-pepper"
 unset GOOGLE_APPLICATION_CREDENTIALS
+
+if [[ -e "$functions_emulator_env" || -e "$functions_emulator_secrets" ]]; then
+  echo "Refusing to overwrite an existing local Functions environment." >&2
+  exit 73
+fi
+cleanup_browser_e2e_env() {
+  rm -f -- "$functions_emulator_env" "$functions_emulator_secrets"
+}
+trap cleanup_browser_e2e_env EXIT
+umask 077
+printf '%s\n' \
+  'ALLOW_API_SPORTS_PROVIDER=false' \
+  'ALLOW_SPORTSDATAIO_PROVIDER=false' \
+  'SPORTSDATAIO_ACCESS_MODE=fixture' \
+  'SPORTSDATAIO_ENTITLEMENT_VERIFIED=false' \
+  > "$functions_emulator_env"
+# The Functions emulator treats an empty secret override as missing and then
+# reaches out to Secret Manager. A quoted whitespace value is deliberately not
+# a credential, remains truthy to the emulator, and trims to unavailable in the
+# server accessor.
+printf 'INVITE_CODE_PEPPER=%s\nAPI_SPORTS_KEY=%s\nSPORTSDATAIO_API_KEY=" "\n' \
+  "$INVITE_CODE_PEPPER" \
+  "$disabled_provider_credential" > "$functions_emulator_secrets"
 
 npm --prefix functions run build
 

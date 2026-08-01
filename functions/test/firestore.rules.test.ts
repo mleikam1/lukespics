@@ -64,6 +64,12 @@ async function seed(): Promise<void> {
         role: "member",
         status: "active",
       }),
+      setDoc(doc(firestore, "leagues/alpha/members/commissioner"), {
+        uid: "commissioner",
+        displayName: "Commissioner",
+        role: "commissioner",
+        status: "active",
+      }),
       setDoc(doc(firestore, "leagues/alpha/members/member"), {
         uid: "member",
         displayName: "Member",
@@ -80,6 +86,28 @@ async function seed(): Promise<void> {
         status: "open",
         pickerUid: "picker",
       }),
+      setDoc(doc(firestore, "leagues/alpha/weeks/week-draft"), {
+        status: "draft",
+        pickerUid: "picker",
+      }),
+      setDoc(doc(firestore, "leagues/alpha/weeks/week-first-game"), {
+        status: "open",
+        pickerUid: "picker",
+        lockPolicySnapshot: "firstGame",
+        effectiveSlateLockAtUtc: past,
+      }),
+      setDoc(doc(firestore, "leagues/alpha/weeks/week-draft/games/hidden"), {
+        status: "scheduled",
+        effectiveLockAtUtc: future,
+        homeTeam: {id: "draft-home"},
+        awayTeam: {id: "draft-away"},
+      }),
+      setDoc(doc(firestore, "leagues/alpha/weeks/week-orphan/games/orphan"), {
+        status: "scheduled",
+        effectiveLockAtUtc: future,
+        homeTeam: {id: "orphan-home"},
+        awayTeam: {id: "orphan-away"},
+      }),
       setDoc(doc(firestore, "leagues/alpha/weeks/week-0001/games/future"), {
         status: "scheduled",
         effectiveLockAtUtc: future,
@@ -94,6 +122,19 @@ async function seed(): Promise<void> {
         awayTeam: {id: "away"},
         winnerTeamId: "home",
       }),
+      setDoc(
+        doc(
+          firestore,
+          "leagues/alpha/weeks/week-first-game/games/later-sibling",
+        ),
+        {
+          status: "scheduled",
+          effectiveLockAtUtc: future,
+          pickRevealCompletedAt: Timestamp.fromMillis(now - 30 * 60_000),
+          homeTeam: {id: "first-home"},
+          awayTeam: {id: "first-away"},
+        },
+      ),
       setDoc(doc(firestore, "leagues/alpha/weeks/week-0001/entries/member"), {
         uid: "member",
         eligible: true,
@@ -104,6 +145,14 @@ async function seed(): Promise<void> {
         eligible: true,
         points: 0,
       }),
+      setDoc(
+        doc(firestore, "leagues/alpha/weeks/week-first-game/entries/member"),
+        {
+          uid: "member",
+          eligible: true,
+          points: 0,
+        },
+      ),
       setDoc(
         doc(
           firestore,
@@ -145,8 +194,40 @@ async function seed(): Promise<void> {
           points: 0,
         },
       ),
+      setDoc(
+        doc(
+          firestore,
+          "leagues/alpha/weeks/week-first-game/reveals/" +
+            "later-sibling/picks/other",
+        ),
+        {
+          uid: "other",
+          selectedTeamId: "first-home",
+          displayName: "Other",
+          revealedAt: Timestamp.now(),
+          outcome: "pending",
+          points: 0,
+        },
+      ),
       setDoc(doc(firestore, "sportsCache/internal"), {
         secret: "server-only",
+      }),
+      setDoc(doc(firestore, "sportsCatalogGames/sportsDataIo:football:401000001"), {
+        provider: "sportsDataIo",
+        providerGameId: "401000001",
+      }),
+      setDoc(doc(firestore, "providerLocks/sportsdataio-score-bucket"), {
+        owner: "server",
+        expiresAt: future,
+      }),
+      setDoc(doc(firestore, "providerManualRefreshLimits/sportsdataio-owner"), {
+        actorUid: "owner",
+        nextAllowedAt: future,
+      }),
+      setDoc(doc(firestore, "systemConfig/sportsDataIoCatalog"), {
+        enabled: false,
+        accessMode: "fixture",
+        entitlementVerified: false,
       }),
     ]);
   });
@@ -265,6 +346,30 @@ describe("Firestore security boundary", () => {
     );
   });
 
+  it("keeps draft game contents limited to the picker and arena admins", async () => {
+    const member = environment.authenticatedContext("member").firestore();
+    const picker = environment.authenticatedContext("picker").firestore();
+    const owner = environment.authenticatedContext("owner").firestore();
+    const commissioner = environment
+      .authenticatedContext("commissioner")
+      .firestore();
+    const draftGame = "leagues/alpha/weeks/week-draft/games/hidden";
+
+    await assertFails(getDoc(doc(member, draftGame)));
+    await assertFails(
+      getDocs(collection(member, "leagues/alpha/weeks/week-draft/games")),
+    );
+    await assertFails(
+      getDoc(doc(owner, "leagues/alpha/weeks/week-orphan/games/orphan")),
+    );
+    await assertSucceeds(
+      getDoc(doc(member, "leagues/alpha/weeks/week-0001/games/future")),
+    );
+    await assertSucceeds(getDoc(doc(picker, draftGame)));
+    await assertSucceeds(getDoc(doc(owner, draftGame)));
+    await assertSucceeds(getDoc(doc(commissioner, draftGame)));
+  });
+
   it("accepts a valid own pick before lock", async () => {
     const firestore = environment.authenticatedContext("member").firestore();
     let lock = Timestamp.fromMillis(0);
@@ -330,6 +435,35 @@ describe("Firestore security boundary", () => {
     );
   });
 
+  it("enforces and reveals every sibling at the first-game slate lock", async () => {
+    const firestore = environment.authenticatedContext("member").firestore();
+    await assertFails(
+      setDoc(
+        doc(
+          firestore,
+          "leagues/alpha/weeks/week-first-game/entries/member/picks/" +
+            "later-sibling",
+        ),
+        {
+          gameId: "later-sibling",
+          selectedTeamId: "first-home",
+          selectedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          lockAtSnapshot: Timestamp.fromMillis(Date.now() + 60 * 60_000),
+        },
+      ),
+    );
+    await assertSucceeds(
+      getDoc(
+        doc(
+          firestore,
+          "leagues/alpha/weeks/week-first-game/reveals/" +
+            "later-sibling/picks/other",
+        ),
+      ),
+    );
+  });
+
   it("rejects score manipulation and role escalation", async () => {
     const firestore = environment.authenticatedContext("member").firestore();
     await assertFails(
@@ -375,8 +509,32 @@ describe("Firestore security boundary", () => {
     const owner = environment.authenticatedContext("owner").firestore();
     await assertFails(getDoc(doc(owner, "sportsCache/internal")));
     await assertFails(
+      getDoc(
+        doc(owner, "sportsCatalogGames/sportsDataIo:football:401000001"),
+      ),
+    );
+    await assertFails(
+      getDoc(doc(owner, "providerLocks/sportsdataio-score-bucket")),
+    );
+    await assertFails(
+      getDoc(doc(owner, "providerManualRefreshLimits/sportsdataio-owner")),
+    );
+    await assertFails(
+      getDoc(doc(owner, "systemConfig/sportsDataIoCatalog")),
+    );
+    await assertFails(
       setDoc(doc(owner, "providerUsage/apiSports_2099-01-01"), {
         requestCount: 0,
+      }),
+    );
+    await assertFails(
+      setDoc(doc(owner, "providerCircuitStates/sportsDataIo"), {
+        circuitOpenUntil: Timestamp.now(),
+      }),
+    );
+    await assertFails(
+      setDoc(doc(owner, "systemConfig/sportsDataIoCatalog"), {
+        enabled: true,
       }),
     );
   });

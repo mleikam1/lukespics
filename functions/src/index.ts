@@ -1,7 +1,10 @@
 import {logger} from "firebase-functions";
 import {onSchedule} from "firebase-functions/v2/scheduler";
 import {callable} from "./callable.js";
-import {INVITE_CODE_PEPPER} from "./config.js";
+import {
+  INVITE_CODE_PEPPER,
+  SPORTSDATAIO_API_KEY,
+} from "./config.js";
 import {
   assignPickerSchema,
   createDraftWeekSchema,
@@ -41,7 +44,7 @@ import {
 } from "./services/leagues.js";
 import {
   finalizeWeekAuthoritatively,
-  rebuildLeagueStandings,
+  rebuildLeagueStandingsAsNewGeneration,
 } from "./services/scoring.js";
 import {
   advanceRotation,
@@ -258,16 +261,27 @@ export const listSportsCatalog = callable(
       weekId: input.weekId,
       actorUid: user.uid,
       query: {
-        sportCode: input.sportCode,
-        leagueCode: input.leagueCode,
-        leagueId: input.leagueIdForProvider,
-        season: input.season,
-        from: input.from,
-        to: input.to,
+        ...(input.sportCode === undefined
+          ? {}
+          : {sportCode: input.sportCode}),
+        ...(input.leagueCode === undefined
+          ? {}
+          : {leagueCode: input.leagueCode}),
+        ...(input.leagueIdForProvider === undefined
+          ? {}
+          : {providerLeagueId: input.leagueIdForProvider}),
+        ...(input.season === undefined ? {} : {season: input.season}),
+        ...(input.from === undefined ? {} : {from: input.from}),
+        ...(input.to === undefined ? {} : {to: input.to}),
+        ...(input.timezone === undefined
+          ? {}
+          : {timezone: input.timezone}),
+        ...(input.dateMode === undefined ? {} : {dateMode: input.dateMode}),
         forceRefresh: input.forceRefresh,
       },
     });
   },
+  {secrets: [SPORTSDATAIO_API_KEY]},
 );
 
 export const saveDraftSlate = callable(
@@ -327,7 +341,15 @@ function refreshCallable(functionName: string) {
         actorUid: user.uid,
         requestId,
         forceRefresh: input.forceRefresh,
+        ...(input.gameId === undefined ? {} : {gameId: input.gameId}),
       });
+    },
+    {
+      // A slate has no artificial game maximum. Provider requests remain
+      // bounded per cache chunk, while the callable has room to process
+      // multiple chunks and league groups in one claimed operation.
+      timeoutSeconds: 540,
+      secrets: [SPORTSDATAIO_API_KEY],
     },
   );
 }
@@ -378,6 +400,9 @@ export const overrideGameResult = callable(
       gameId: input.gameId,
       actorUid: user.uid,
       requestId,
+      ...(input.scheduledAtUtc === undefined
+        ? {}
+        : {scheduledAtUtc: input.scheduledAtUtc}),
       status: input.status,
       homeScore: input.homeScore,
       awayScore: input.awayScore,
@@ -444,7 +469,9 @@ export const rebuildStandings = callable(
   async (input, request, requestId) => {
     const user = requireUser(request);
     await requireAdmin(input.leagueId, user.uid);
-    const standings = await rebuildLeagueStandings(input.leagueId);
+    const standings = await rebuildLeagueStandingsAsNewGeneration(
+      input.leagueId,
+    );
     await writeAudit({
       leagueId: input.leagueId,
       eventType: "standings_rebuilt",
@@ -508,6 +535,8 @@ export const scheduledResultSync = onSchedule(
     schedule: "every 30 minutes",
     timeZone: "UTC",
     retryCount: 0,
+    timeoutSeconds: 540,
+    secrets: [SPORTSDATAIO_API_KEY],
   },
   async () => {
     const startedAt = Date.now();
@@ -524,6 +553,7 @@ export const scheduledResultSync = onSchedule(
         durationMs: Date.now() - startedAt,
         safeErrorCode: error instanceof Error ? error.name : "UnknownError",
       });
+      throw error;
     }
   },
 );

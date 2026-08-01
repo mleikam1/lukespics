@@ -1,0 +1,112 @@
+{
+  "fixtureType": "synthetic-sanitized-api-baseball-shape",
+  "response": [
+    {
+      "id": 900001,
+      "date": "2030-09-01T18:10:00+00:00",
+      "timestamp": 1914516600,
+      "timezone": "UTC",
+      "week": "Fixture round 1",
+      "status": {
+        "long": "Not Started",
+        "short": "NS"
+      },
+      "league": {
+        "id": 9000,
+        "name": "Sanitized Baseball League",
+        "season": 2030
+      },
+      "teams": {
+        "home": {
+          "id": 9101,
+          "name": "Sanitized Home Club",
+          "code": "SHC",
+          "logo": "https://images.example.test/teams/home.png"
+        },
+        "away": {
+          "id": 9102,
+          "name": "Sanitized Away Club",
+          "code": "SAC",
+          "logo": "https://images.example.test/teams/away.png?credential=removed"
+        }
+      },
+      "scores": {
+        "home": {
+          "total": null
+        },
+        "away": {
+          "total": null
+        }
+      },
+      "venue": {
+        "name": "Sanitized Ballpark"
+      }
+    },
+    {
+      "id": 900002,
+      "date": "2030-08-31T18:10:00+00:00",
+      "timestamp": 1914430200,
+      "timezone": "UTC",
+      "status": {
+        "long": "Finished",
+        "short": "FT"
+      },
+      "league": {
+        "id": 9000,
+        "name": "Sanitized Baseball League",
+        "season": 2030
+      },
+      "teams": {
+        "home": {
+          "id": 9201,
+          "name": "Sanitized Final Home"
+        },
+        "away": {
+          "id": 9202,
+          "name": "Sanitized Final Away"
+        }
+      },
+      "scores": {
+        "home": {
+          "total": 5
+        },
+        "away": {
+          "total": 3
+        }
+      }
+    },
+    {
+      "id": 900003,
+      "date": "2030-08-30T18:10:00+00:00",
+      "timestamp": 1914343800,
+      "timezone": "UTC",
+      "status": {
+        "long": "Finished",
+        "short": "FT"
+      },
+      "league": {
+        "id": 9000,
+        "name": "Sanitized Baseball League",
+        "season": 2030
+      },
+      "teams": {
+        "home": {
+          "id": 9301,
+          "name": "Sanitized Tie Home"
+        },
+        "away": {
+          "id": 9302,
+          "name": "Sanitized Tie Away"
+        }
+      },
+      "scores": {
+        "home": {
+          "total": 2
+        },
+        "away": {
+          "total": 2
+        }
+      }
+    }
+  ]
+}

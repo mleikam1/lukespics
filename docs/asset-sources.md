@@ -12,6 +12,10 @@
 - TheSportsDB marks are internal-test-only, use an API-returned small/tiny URL,
   retain aspect ratio, include attribution, and always fall back on load error.
 
-No ESPN-hosted image may be downloaded, proxied, cached, embedded, or hotlinked.
-No professional league, college league, or team asset is bundled as application
-branding. This file records provenance; it is not legal approval.
+SportsDataIO team schemas expose third-party logo/wordmark and color fields that
+are not used by Luke's Picks. A League API subscription does not by itself prove
+rights to display, hotlink, cache, or redistribute a team image. Remote marks
+therefore stay disabled until a separate review records the exact documented
+image operation, approved host/query policy, permitted handling, and review
+date. No professional league, college league, provider, or team asset is bundled
+as application branding. This file records provenance; it is not legal approval.

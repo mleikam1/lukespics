@@ -150,12 +150,19 @@ class _WeekHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final selected = controller.selectedGames.length;
-    final firstLock = controller.selectedGames.isEmpty
+    final confirmedLocks = controller.selectedGames
+        .map((game) => game.effectiveLockAtUtc)
+        .whereType<DateTime>()
+        .toList(growable: false);
+    final hasMissingLock = confirmedLocks.length != selected;
+    final firstLock = confirmedLocks.isEmpty
         ? null
-        : controller.selectedGames
-              .map((game) => game.effectiveLockAtUtc)
-              .reduce((left, right) => left.isBefore(right) ? left : right);
-    final lockLabel = firstLock == null
+        : confirmedLocks.reduce(
+            (left, right) => left.isBefore(right) ? left : right,
+          );
+    final lockLabel = hasMissingLock
+        ? 'A selected game needs a confirmed pick deadline'
+        : firstLock == null
         ? 'No games selected'
         : 'First pick locks ${formatLeagueTime(firstLock, controller.leagueTimezone, 'EEE h:mm a')}';
     final status = _weekStatusLabel(controller.weekStatus);

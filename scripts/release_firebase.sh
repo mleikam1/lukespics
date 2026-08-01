@@ -25,8 +25,10 @@ Usage:
   ./scripts/release_firebase.sh rules-indexes
   ./scripts/release_firebase.sh functions
   ./scripts/release_firebase.sh preview
+  ./scripts/release_firebase.sh hosting-live
 
-This wrapper never deploys live Hosting and accepts no project override.
+The live action can only clone the fixed connected-picker-flow preview to the
+fixed lukes-picks:live channel. This wrapper accepts no project override.
 USAGE
 }
 
@@ -85,6 +87,16 @@ NODE
     command=("$firebase_cli" hosting:channel:deploy "$preview_channel"
       --project "$project_id"
       --config "$preview_stage/firebase.preview.json"
+      --non-interactive)
+    ;;
+  hosting-live)
+    # Live Hosting must receive the already-reviewed preview bytes rather than
+    # independently enumerating a mutable build directory.
+    ./scripts/check_public_build.sh build/web
+    command=("$firebase_cli" hosting:clone
+      "${project_id}:${preview_channel}"
+      "${project_id}:live"
+      --project "$project_id"
       --non-interactive)
     ;;
   *)

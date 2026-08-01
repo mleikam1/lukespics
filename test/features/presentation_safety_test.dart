@@ -154,10 +154,13 @@ void main() {
     await tester.scrollUntilVisible(find.textContaining('testing-only'), 240);
     expect(find.textContaining('testing-only'), findsOneWidget);
     await tester.scrollUntilVisible(
-      find.textContaining('ESPN-hosted artwork'),
+      find.textContaining('neutral, accessible team initials'),
       240,
     );
-    expect(find.textContaining('ESPN-hosted artwork'), findsOneWidget);
+    expect(
+      find.textContaining('neutral, accessible team initials'),
+      findsOneWidget,
+    );
     expect(find.textContaining('July 2026'), findsNothing);
     expect(tester.takeException(), isNull);
   });

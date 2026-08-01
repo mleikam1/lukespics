@@ -80,9 +80,16 @@ a public preview. Rebuild with `flutter build web --release` before running
   fixtures.
 - `apiSports`: server-only and disabled until an existing key and full
   production gate are available.
+- `sportsDataIo`: server-only NFL/MLB League API integration. Its production
+  path requires the exact project, kill switch, `production` access mode,
+  verified feed/use entitlement, enabled server catalog, and Secret Manager
+  key. Fixture/trial/discovery modes cannot activate production grading.
 
-Do not make live provider calls in CI. Never use ESPN pages or undocumented
-endpoints.
+Do not make live SportsDataIO calls in CI or emulator tests. Use the sanitized
+NFL/MLB fixtures to test strict path construction, nullable/TBD parsing, status
+and closure mapping, reschedules, doubleheaders, UTC/Eastern behavior, and
+normalization. Never add a general proxy, put the API host/header/key in
+Flutter/web code, or accept a user-provided upstream URL.
 
 ## Source and build checks
 
@@ -102,6 +109,12 @@ mode. Generated Firebase client API keys are public app identifiers;
 service-account files, provider keys, private keys, and invite peppers remain
 prohibited.
 
+The source scan allows the exact SportsDataIO API origin and authentication
+header name only in the dedicated server client. Flutter/web and public builds
+reject all provider host/header/secret material. Blocked third-party logo hosts
+remain denied everywhere except the server's literal denylist. Do not evade a
+policy by assembling host strings.
+
 ## Cloud safety
 
 Local development does not need production access. If a read-only cloud check
@@ -109,11 +122,15 @@ is necessary, always include `--project lukes-picks` and never enumerate or
 target unrelated projects.
 
 Only [release_firebase.sh](../scripts/release_firebase.sh) is approved for
-rules/indexes, Functions, and Hosting-preview deployments. It is not a
-development convenience command. A separately authorized prerequisite mutation,
-such as enabling a reviewed API or setting `INVITE_CODE_PEPPER`, must run
-`assert_firebase_project.sh lukes-picks` immediately before its own explicit
-project-targeted write.
+rules/indexes, Functions, Hosting preview, and fixed preview-to-live promotion.
+It is not a development convenience command. Non-interactive production
+Functions deployment requires ignored `functions/.env.lukes-picks` values that
+explicitly keep automatic-provider flags false and SportsDataIO mode at
+`fixture`; never activate it without the complete external and technical
+review. A separately
+authorized prerequisite mutation, such as enabling a reviewed API or setting
+`INVITE_CODE_PEPPER`, must run `assert_firebase_project.sh lukes-picks`
+immediately before its own explicit project-targeted write.
 
 ## Historical dependency-advisory snapshot
 

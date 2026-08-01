@@ -8,6 +8,7 @@ import type {
   Team,
 } from "../types.js";
 import {withSourceHash} from "./normalization.js";
+import {neutralCatalogPresentation} from "./presentation.js";
 
 const LEAGUES: ProviderLeague[] = [
   {
@@ -30,6 +31,13 @@ const LEAGUES: ProviderLeague[] = [
     sportCode: "baseball",
     providerLeagueId: "demo-baseball",
     season: "demo",
+  },
+  {
+    code: "mlb",
+    name: "MLB",
+    sportCode: "baseball",
+    providerLeagueId: "synthetic-mlb-fixture",
+    season: "fixture",
   },
   {
     code: "demo-hockey",
@@ -68,8 +76,53 @@ function parseStart(value: string): Date {
   return Number.isNaN(date.valueOf()) ? new Date() : date;
 }
 
+type FixtureStart = {
+  scheduledAt: Date;
+  slot: number;
+  stableIndex: number;
+};
+
+function fixtureStarts(
+  query: ProviderQuery,
+  league: ProviderLeague,
+): FixtureStart[] {
+  if (league.code !== "mlb") {
+    const start = parseStart(query.from);
+    return Array.from(
+      {length: 8},
+      (_, index) => ({
+        scheduledAt: new Date(start.valueOf() + index * 7_200_000),
+        slot: index,
+        stableIndex: index,
+      }),
+    );
+  }
+  const start = new Date(`${query.from}T00:00:00.000Z`);
+  const end = new Date(`${query.to}T00:00:00.000Z`);
+  const dayCount =
+    Math.floor((end.valueOf() - start.valueOf()) / 86_400_000) + 1;
+  if (
+    Number.isNaN(start.valueOf()) ||
+    Number.isNaN(end.valueOf()) ||
+    dayCount < 1 ||
+    dayCount > 7
+  ) {
+    throw new Error("Synthetic MLB fixture queries must span 1-7 days.");
+  }
+  return Array.from({length: dayCount}, (_, dayIndex) => {
+    const dayStart = start.valueOf() + dayIndex * 86_400_000;
+    const dayOrdinal = Math.floor(dayStart / 86_400_000);
+    return [18, 20, 22].map((hour, slot) => ({
+      scheduledAt: new Date(dayStart + hour * 3_600_000),
+      slot,
+      stableIndex: dayOrdinal * 3 + slot,
+    }));
+  }).flat();
+}
+
 export class MockSportsProvider implements SportsDataProvider {
   readonly name = "mock";
+  readonly presentation = neutralCatalogPresentation(this.name);
 
   async listSupportedSports(): Promise<string[]> {
     return [...new Set(LEAGUES.map((league) => league.sportCode))];
@@ -88,18 +141,21 @@ export class MockSportsProvider implements SportsDataProvider {
         code: query.leagueCode,
         name: `Demo ${query.sportCode}`,
         sportCode: query.sportCode,
-        providerLeagueId: query.leagueId,
+        providerLeagueId: query.providerLeagueId,
         season: query.season,
       } satisfies ProviderLeague);
-    const start = parseStart(query.from);
     const now = new Date();
+    const starts = fixtureStarts(query, league);
 
-    return Array.from({length: 8}, (_, index) => {
-      const scheduledAt = new Date(start.valueOf() + index * 7_200_000);
-      const homeTeam = team(index * 2);
-      const awayTeam = team(index * 2 + 1);
+    return starts.map(({scheduledAt, slot, stableIndex}, index) => {
+      const homeTeam = team(stableIndex * 2);
+      const awayTeam = team(stableIndex * 2 + 1);
+      const fixtureDate = scheduledAt.toISOString().slice(0, 10);
       const source = {
-        providerGameId: `${league.code}-${query.from}-${index + 1}`,
+        providerGameId:
+          league.code === "mlb"
+            ? `${league.code}-${fixtureDate}-slot-${slot + 1}`
+            : `${league.code}-${fixtureDate}-${index + 1}`,
         scheduledAt: scheduledAt.toISOString(),
         home: homeTeam.id,
         away: awayTeam.id,
@@ -109,6 +165,7 @@ export class MockSportsProvider implements SportsDataProvider {
           id: `mock:${query.sportCode}:${source.providerGameId}`,
           provider: "mock",
           providerGameId: source.providerGameId,
+          providerLeagueId: league.providerLeagueId,
           sportCode: query.sportCode,
           leagueCode: league.code,
           leagueName: league.name,
@@ -117,8 +174,11 @@ export class MockSportsProvider implements SportsDataProvider {
           scheduledAtUtc: scheduledAt,
           publishedScheduledAtUtc: scheduledAt,
           effectiveLockAtUtc: scheduledAt,
-          venueName: null,
-          neutralSite: index % 4 === 0,
+          venueName:
+            league.code === "mlb"
+              ? `Sanitized Ballpark ${slot + 1}`
+              : null,
+          neutralSite: stableIndex % 4 === 0,
           homeTeam,
           awayTeam,
           status: "scheduled",
@@ -143,12 +203,26 @@ export class MockSportsProvider implements SportsDataProvider {
     const query: ProviderQuery = {
       sportCode: context?.sportCode ?? "football",
       leagueCode: context?.leagueCode ?? "demo-football",
-      leagueId: context?.leagueId ?? "demo-football",
+      providerLeagueId:
+        context?.providerLeagueId ?? "demo-football",
       season: context?.season ?? "demo",
       from: context?.from ?? new Date().toISOString().slice(0, 10),
       to: context?.to ?? new Date().toISOString().slice(0, 10),
+      timezone: context?.timezone ?? "UTC",
     };
-    const games = await this.listGames(query);
+    const mlbDates = providerGameIds
+      .map((id) => /^mlb-(\d{4}-\d{2}-\d{2})-slot-[1-3]$/.exec(id)?.[1])
+      .filter((value): value is string => value !== undefined);
+    const games =
+      query.leagueCode === "mlb" && mlbDates.length > 0
+        ? (
+            await Promise.all(
+              [...new Set(mlbDates)].map((date) =>
+                this.listGames({...query, from: date, to: date}),
+              ),
+            )
+          ).flat()
+        : await this.listGames(query);
     const byId = new Map(games.map((game) => [game.providerGameId, game]));
     return providerGameIds
       .map((id) => byId.get(id))

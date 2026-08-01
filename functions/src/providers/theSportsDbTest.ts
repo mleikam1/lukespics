@@ -10,6 +10,7 @@ import {
   teamSchema,
 } from "../schemas.js";
 import type {
+  CatalogPresentation,
   GameStatus,
   NormalizedGame,
   ProviderHealth,
@@ -287,6 +288,7 @@ export function normalizeTheSportsDbEvents(
           id: `theSportsDbTest:${context.sportCode}:${event.idEvent}`,
           provider: "theSportsDbTest",
           providerGameId: event.idEvent,
+          providerLeagueId: context.providerLeagueId,
           sportCode: context.sportCode,
           leagueCode: context.leagueCode,
           leagueName:
@@ -416,6 +418,14 @@ function defaultSleep(milliseconds: number): Promise<void> {
 
 export class TheSportsDbTestProvider implements SportsDataProvider {
   readonly name = "theSportsDbTest";
+  readonly presentation: CatalogPresentation = {
+    provider: this.name,
+    attributionText: THE_SPORTS_DB_ATTRIBUTION.text,
+    allowRemoteLogos: true,
+    allowedLogoHosts: ["r2.thesportsdb.com"],
+    allowedLogoQueryParameters: [],
+    logoRightsReviewDate: "2026-07-30",
+  };
   private readonly fetchImpl: FetchLike;
   private readonly reserveRequest: () => Promise<void>;
   private readonly sleep: (milliseconds: number) => Promise<void>;
@@ -489,7 +499,7 @@ export class TheSportsDbTestProvider implements SportsDataProvider {
     if (
       context?.sportCode === undefined ||
       context.leagueCode === undefined ||
-      context.leagueId === undefined ||
+      context.providerLeagueId === undefined ||
       context.season === undefined
     ) {
       throw new HttpsError(
@@ -500,10 +510,11 @@ export class TheSportsDbTestProvider implements SportsDataProvider {
     const config = this.resolveConfig({
       sportCode: context.sportCode,
       leagueCode: context.leagueCode,
-      leagueId: context.leagueId,
+      providerLeagueId: context.providerLeagueId,
       season: context.season,
       from: context.from ?? "2000-01-01",
       to: context.to ?? "2000-01-01",
+      timezone: context.timezone ?? "UTC",
     });
     const rawEvents: unknown[] = [];
     for (const id of uniqueIds) {
@@ -587,8 +598,8 @@ export class TheSportsDbTestProvider implements SportsDataProvider {
       (item) =>
         item.sportCode === query.sportCode &&
         item.leagueCode === query.leagueCode &&
-        (item.providerLeagueId === query.leagueId ||
-          item.leagueCode === query.leagueId) &&
+        (item.providerLeagueId === query.providerLeagueId ||
+          item.leagueCode === query.providerLeagueId) &&
         item.season === query.season,
     );
     if (config === undefined) {

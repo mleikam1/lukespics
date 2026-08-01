@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../app/bootstrap.dart';
 import '../../app/theme/app_theme.dart';
+import '../../core/domain/game_presentation.dart';
 import '../../core/responsive/breakpoints.dart';
+import '../../core/widgets/catalog_logo_policy.dart';
 import '../../core/widgets/ui.dart';
 import '../../data/demo/demo_repository.dart';
 import '../../data/models/game.dart';
@@ -115,23 +116,14 @@ class ResultsScreen extends ConsumerWidget {
               locked: controller.isGameLocked(game),
               showDemoReveals: controller.isDemo,
               revealedPicks: controller.revealsFor(game.id),
-              logoPolicy: _logoPolicy(controller, game),
+              logoPolicy: catalogTeamLogoPolicy(
+                presentation: controller.catalogPresentation,
+                game: game,
+              ),
             ),
             const SizedBox(height: 12),
           ],
       ],
-    );
-  }
-
-  TeamLogoPolicy _logoPolicy(AppController controller, Game game) {
-    if (controller.runtimeMode != AppRuntimeMode.firebaseEmulator ||
-        game.provider != 'theSportsDbTest') {
-      return const TeamLogoPolicy.disabled();
-    }
-    return const TeamLogoPolicy.provider(
-      provider: 'theSportsDbTest',
-      logoRightsVerified: true,
-      allowedHosts: {'r2.thesportsdb.com'},
     );
   }
 }
@@ -481,6 +473,7 @@ class _ResultGameCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasScore = game.homeScore != null || game.awayScore != null;
+    final detail = gameDetailSummary(game);
     final selectedWinner =
         selectedTeamId != null && selectedTeamId == game.winnerTeamId;
     final outcome = game.isVoid
@@ -535,6 +528,22 @@ class _ResultGameCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
+          if (detail != null) ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                detail,
+                key: Key('result-game-context-${game.id}'),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
           Row(
             children: [
               StatusPill(

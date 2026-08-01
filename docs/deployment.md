@@ -1,209 +1,214 @@
 # Deployment and rollback
 
-This project has no automatic deploy. A passing CI run does not authorize a
-cloud write.
+This project has no automatic deploy. A passing local or CI run does not
+authorize a cloud write.
 
-## Connected preview and live web release — 2026-07-31
+## Current SportsDataIO branch status — 2026-08-01
 
-The connected implementation completed its guarded preview release and the
-separately authorized promotion of that exact preview artifact to live:
+This branch adds a server-only SportsDataIO integration for NFL and MLB. It has
+not been deployed to Firebase Hosting, Cloud Functions, Firestore, or Secret
+Manager. The previously deployed web application remains the dated manual-data
+artifact recorded below; none of that evidence applies to this branch.
 
-- the actual Flutter UI and backend passed the isolated three-user browser
-  lifecycle with picker participation disabled and enabled;
-- production bootstrap is pinned to `lukes-picks`;
-- production provider mode is `manual`, with neutral team badges;
-- mock and TheSportsDB test modes fail closed in production;
-- the local manifest contains 29 Gen 2 exports: 28 callables and one scheduled
-  Function;
-- every cloud write used the project guard and explicitly targeted
-  `lukes-picks` (`271408880910`).
+The branch was validated only with sanitized, secret-free fixtures. No API key
+was supplied, read, created, rotated, or used; no authenticated SportsDataIO
+request or live smoke test was run; and no account feed entitlement, quota,
+rate limit, schema stability, service level, or logo right was established.
+The repository contains only an empty secret placeholder. Current cloud secret
+state was not inspected and must not be inferred from source.
 
-Recorded release state:
+Production arenas must remain `manual`. Do not describe the current live site
+as SportsDataIO-backed until an authorized deployment and the complete
+activation process below have both passed.
 
-| Release item | Status |
-|---|---|
-| Pre-write cloud reinspection | Completed against `lukes-picks`; guard required before every write |
-| `INVITE_CODE_PEPPER` | Secret Manager version 1 created; value never printed or recorded |
-| Firestore rules | Active ruleset `projects/lukes-picks/rulesets/93614c6a-add3-47ad-88df-b9d9e18a00fb` |
-| Firestore indexes | Five composite indexes, all `READY` |
-| Functions and deletion review | 29 Functions `ACTIVE` and Cloud Run ready; no unexpected deletion |
-| Scheduled processing | `scheduledResultSync` enabled every 30 minutes UTC |
-| `connected-picker-flow` preview | <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app> |
-| Preview expiry | Firebase output: `2026-08-07 07:50:46` |
-| Preview bundle | `main.dart.js` SHA-256 `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da` |
-| Live promotion | Exact `connected-picker-flow` channel cloned to `lukes-picks:live` at Firebase CLI time `18:10:14` on 2026-07-31 |
-| Permanent live URLs | <https://lukes-picks.web.app> and <https://lukes-picks.firebaseapp.com>; both HTTP 200 |
-| Live bundle and source | `main.dart.js` SHA-256 `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`, identical to preview; source commit `c38136070082a0895c6cca0f118841bb0972520e` |
-| Live security headers | CSP; COOP `same-origin-allow-popups`; HSTS; `nosniff`; `SAMEORIGIN`; Permissions Policy; Referrer Policy; no preview `noindex` header |
-| Live browser smoke | Desktop and `390x844` phone-size sign-in screen rendered; Privacy, Terms, and Data sources passed; zero warning/error console logs |
-| Live Auth configuration | Both permanent domains authorized; Google provider enabled/configured; auth handlers HTTP 200 |
-| Live authenticated smoke | Not claimed; automated in-app browser could not complete the Google popup, so manual live Google sign-in remains a user handoff check |
-| Authenticated preview smoke | Google sign-in, reload/session/membership restore, arena/dashboard, manual catalog, empty-state fix, explicit sign-out, and repeat sign-in passed on the identical artifact |
-| Firestore rollback input | Prior ruleset `projects/lukes-picks/rulesets/5628e0a8-ee8b-4dd9-b8c2-5fbac9fd3213` |
-| Repository handoff | Implementation commit `9df0d38` merged by [PR #1](https://github.com/mleikam1/lukespics/pull/1) into `codex/lukes-picks-mvp`; merge commit `c38136070082a0895c6cca0f118841bb0972520e` |
+## Exact provider surface
 
-The Functions CLI returned exit 1 only because it could not configure an
-automatic cleanup policy after every Function deployment had succeeded. The
-`gcf-artifacts` repository currently has no automatic cleanup policy. This is
-an operational cost/retention warning, not a failed Function rollout.
+The client permits only `https://api.sportsdata.io`, HTTPS, no query string,
+validated season/date path components, and these runtime paths:
 
-App Check enforcement, production sports-data and logo rights, accessibility,
-physical devices, legal approval, operational
-alerts, release signing, and store publication remain separate production/store
-gates. The recorded live web promotion does not satisfy or waive them, and it
-does not authorize future live Hosting writes.
+| League | Exact path | Intended feed use |
+|---|---|---|
+| NFL | `GET /v3/nfl/scores/json/Teams` | Stable team identity and neutral display text |
+| NFL | `GET /v3/nfl/scores/json/SchedulesBasic/{season}` | Schedule, week, stable IDs, TBD and reschedule metadata |
+| NFL | `GET /v3/nfl/scores/json/ScoresByDate/{YYYY-MMM-DD}` | Live/final state and scores for one Eastern day |
+| MLB | `GET /v3/mlb/scores/json/teams` | Stable team identity and neutral display text |
+| MLB | `GET /v3/mlb/scores/json/GamesByDate/{YYYY-MMM-DD}` | Schedule, exception state, stable IDs, and scores for one Eastern day |
 
-## Release gates
+No browser code holds the key, builds a provider URL, or parses raw provider
+JSON. NFL and MLB requests use `America/New_York` calendar buckets and are
+bounded to seven inclusive days. The implementation does not call a
+season-wide MLB feed, box-score feed, final-only feed, or an arbitrary URL.
 
-Do not deploy until all of the following are recorded:
+Team presentation is neutral. SportsDataIO normalization deliberately discards
+remote logo and color fields, and both the server and Flutter presentation
+policy keep remote logos disabled. Schedule/result entitlement does not grant
+team-mark rights.
 
-1. The complete Flutter, Functions, rules, emulator, provider-fixture, secret,
-   and fresh-build matrix passes on the reviewed tree or intended commit.
-2. The three-user browser-to-emulator picker flow passes with picker
-   participation disabled and enabled.
-3. Connected startup uses `lukes-picks`, loads no demo state, and never connects
-   a public build to emulators.
-4. Production provider mode is `manual`; mock and TheSportsDB test modes are
-   server-rejected in `lukes-picks`.
-5. Google Auth and authorized domains are verified.
-6. Required APIs are enabled, `INVITE_CODE_PEPPER` exists, and no unavailable
-   API-Sports key is bound as a deployment requirement.
-7. Existing Firestore data, rules, indexes, Functions, and Hosting releases are
-   inspected for additive compatibility.
-8. The npm advisories are reviewed without a forced upgrade.
-9. The source and fresh public-build scans pass.
+## Activation gates
 
-Stop if a command proposes deleting an unexpected Function, index, site,
-release, secret, or other resource.
+Every gate is fail-closed and all must pass before automatic data can be used:
+
+1. The runtime project is exactly `lukes-picks` and is not an emulator.
+2. `ALLOW_SPORTSDATAIO_PROVIDER=true` is set in an explicitly reviewed
+   deployment; it defaults to `false` and is the immediate technical kill
+   switch.
+3. `SPORTSDATAIO_ACCESS_MODE=production`; the safe default is `fixture`, and
+   `trial` or `discovery` cannot activate production access.
+4. `SPORTSDATAIO_ENTITLEMENT_VERIFIED=true`; the safe default is `false`.
+5. Server-only `systemConfig/sportsDataIoCatalog` exists, parses strictly, has
+   `enabled: true`, has `accessMode: production`, and contains a new cache
+   revision plus reviewed NFL/MLB season definitions.
+6. The catalog records `entitlementVerified: true`, a bounded
+   `entitlementReference`, and an ISO `entitlementReviewedAt` date. Each enabled
+   league records verified Teams, Schedule, and Live & Final feed access.
+7. `SPORTSDATAIO_API_KEY` is available through Secret Manager to only
+   `listSportsCatalog`, `refreshSelectedGames`, `syncSelectedGameResults`, and
+   `scheduledResultSync`.
+8. The actual account and agreement are reviewed for every exact endpoint and
+   the intended caching, public display, historical storage, pick grading, and
+   redistribution use.
+9. A bounded, authenticated non-production endpoint smoke test succeeds, raw
+   responses are not retained, and the sanitized fixtures are regenerated and
+   reviewed.
+10. The complete local, Functions, rules, emulator, browser, scan, and fresh
+    web-build matrix passes on the exact release artifact.
+11. One authorized test arena passes catalog, TBD, publication, refresh,
+    final-result, anomaly, manual-override, and rollback checks before scope is
+    expanded.
+
+Passing fixture tests alone satisfies none of gates 7–11. There is currently no
+evidence that any activation gate requiring a key, entitlement, live response,
+or cloud write has passed.
 
 ## Guarded prerequisite writes
 
-The release wrapper does not enable Google APIs or create secret versions. If a
-reviewed Functions manifest requires one of those prerequisite mutations,
-inspect the existing state first and run:
+Before each authorized write, inspect the existing cloud state and run:
 
 ```bash
 ./scripts/assert_firebase_project.sh lukes-picks
 ```
 
-immediately before each explicit `lukes-picks` write. Record the target and
-command without recording secret values. Do not treat an earlier guard result
-as authorization for a later command.
+The guard must be immediately adjacent to that write. An earlier guard result
+does not authorize a later command.
+
+Creating or rotating `SPORTSDATAIO_API_KEY`, deploying the new secret binding,
+changing the three provider parameters, creating or enabling
+`systemConfig/sportsDataIoCatalog`, changing an arena from `manual`, deploying
+Functions, deploying a preview, and promoting Hosting are separate mutations.
+Each needs its own reviewed target and user authorization. Never put a key or
+raw provider response in a command line, source file, Firestore document, log,
+screenshot, fixture, or report.
+
+## Release gates
+
+Before deploying this branch:
+
+- review the exact Function addition/change/deletion plan, especially the four
+  secret-bearing provider entry points;
+- confirm mock and internal test providers remain production-rejected;
+- confirm all production arenas remain `manual` during deployment and smoke
+  testing;
+- confirm the SportsDataIO parameters remain `false`, `fixture`, and `false`
+  unless a separately authorized activation is being performed;
+- inspect Firestore rules, indexes, Functions, secrets, scheduled jobs, and
+  Hosting versions for additive compatibility;
+- run source, secret, and fresh-build scans on the intended artifact;
+- use only sanitized fixtures in normal tests and CI;
+- retain neutral initials regardless of schedule/result activation; and
+- stop if a command proposes deleting an unexpected Function, index, site,
+  release, secret, document, or other resource.
 
 ## Allowed release commands
 
-The wrapper accepts exactly three actions and no project override:
+The wrapper accepts four fixed actions and no project override:
 
 ```bash
 ./scripts/release_firebase.sh rules-indexes
 ./scripts/release_firebase.sh functions
 ./scripts/release_firebase.sh preview
+./scripts/release_firebase.sh hosting-live
 ```
 
-They resolve to explicit commands targeting `--project lukes-picks`. The
-preview action uses only channel `connected-picker-flow`. There is deliberately
-no general live Hosting action. The recorded `connected-picker-flow` to
-`lukes-picks:live` clone was separately authorized as a one-time promotion and
-does not authorize a future live update.
+They explicitly target `lukes-picks`. The preview action uses only
+`connected-picker-flow`; `hosting-live` clones that reviewed channel to the
+fixed live channel. Do not bypass the wrapper with aliases or a handwritten
+deploy command. A prior deployment authorization does not authorize a new
+preview or live promotion.
 
-The wrapper:
+## Historical manual release evidence — 2026-08-01
 
-- refuses unsupported actions;
-- cannot accept the emulator or forbidden project;
-- verifies gcloud and Firebase CLI use the same account;
-- verifies project ID, display name, number, lifecycle state, and owner role;
-- runs source/build scans before the preview;
-- places the identity guard immediately before the Firebase write.
+The following is retained as dated rollback and provenance evidence for the
+previous manual-data artifact. It is not evidence that this SportsDataIO branch
+was deployed, activated, authenticated, or smoke-tested.
 
-Do not bypass the wrapper with `firebase use`, aliases, or a hand-written deploy
-command.
+| Historical release item | Recorded state |
+|---|---|
+| Target | `lukes-picks` / project number `271408880910` |
+| Provider mode | Two active `America/Chicago` arenas remained `manual` |
+| Firestore rules | `projects/lukes-picks/rulesets/aa52ec56-c549-4e8e-880a-372474e4feeb` |
+| Firestore indexes | Five composite indexes recorded `READY` |
+| Functions | 29 Node 22 Functions recorded `ACTIVE`; 28 callable and one 30-minute scheduled job |
+| Preview | `connected-picker-flow`, released `2026-08-01T13:52:25.814Z`, recorded expiry `2026-08-08T13:52:18.443Z` |
+| Hosting version | Preview and live both `b58df6678863654a` |
+| Bundle | `main.dart.js` SHA-256 `411062a988bf5b8d798b317f118b505966c0d80f9fd07a4f4f4e4762842a1ed6` |
+| Live promotion | Exact preview cloned at `2026-08-01T13:52:56.156Z` |
+| URLs | `https://lukes-picks.web.app` and `https://lukes-picks.firebaseapp.com` returned HTTP 200 at validation time |
+| Prior rules rollback input | `projects/lukes-picks/rulesets/93614c6a-add3-47ad-88df-b9d9e18a00fb` |
 
-## Recorded preview smoke test
+The prior Functions command recorded an exit code of 1 only after Function
+deployment succeeded, when automatic Artifact Registry cleanup policy setup
+failed. `gcf-artifacts` had no automatic cleanup policy at that time. That is a
+historical retention/cost warning, not current branch deployment evidence.
 
-The real-browser pass at the preview URL verified:
-
-- Luke’s Picks branding and `lukes-picks` initialization;
-- no demo data, emulator hosts, test-provider markers, or Wingman references;
-- production Google popup sign-in;
-- reload with the authenticated session and arena membership restored;
-- arena and dashboard loading;
-- production manual-catalog behavior and the corrected useful empty state;
-- explicit sign-out and repeat sign-in/session restoration;
-- no fatal console error during the successful sign-in/reload smoke path.
-
-The automated repeat popup was slow to settle, but a clean reload restored the
-authenticated arena and no console warning or error was recorded. Two empty
-smoke arenas created by the browser retries remain for inspection because
-deletion was not authorized. Each uses the manual provider and contains one
-draft week, one active owner, and no selected games. The complete picker,
-privacy, result, standings, rotation, and next-week lifecycle remains proven
-through the isolated emulator browser test, not through production sports data.
-
-The public preview must remain in manual-provider mode with neutral badges
-unless production data and logo rights have separately passed review.
-
-## Recorded live promotion and unauthenticated smoke
-
-At Firebase CLI time `18:10:14` on 2026-07-31, the exact
-`connected-picker-flow` channel was cloned to `lukes-picks:live`. Both
-<https://lukes-picks.web.app> and <https://lukes-picks.firebaseapp.com>
-returned HTTP 200. The live `main.dart.js` SHA-256 is
-`e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`,
-identical to the authenticated, browser-tested preview artifact, and the
-recorded source commit is `c38136070082a0895c6cca0f118841bb0972520e`.
-
-The live responses included Content Security Policy, COOP
-`same-origin-allow-popups`, HSTS, `nosniff`, `SAMEORIGIN`, Permissions Policy,
-and Referrer Policy headers. Unlike the preview, live did not include a
-`noindex` header. Desktop and `390x844` phone-size sign-in screens rendered;
-Privacy, Terms, and Data sources passed; and the browser recorded zero warning
-or error console logs.
-
-Firebase Auth was independently verified: both permanent domains are
-authorized, the Google provider is enabled/configured, and the auth handlers
-return HTTP 200. The automated in-app browser could not complete the live
-Google popup. Manual Google sign-in on a permanent live URL therefore remains
-a user handoff check, and this record does not claim live authenticated smoke.
-The authenticated preview smoke above remains applicable artifact evidence
-because live has the identical bundle digest.
+The prior browser/emulator lifecycle used sanitized fixtures and manual result
+handling. A historical authenticated preview smoke covered the earlier manual
+artifact. Neither is a live-provider test for this branch.
 
 ## Rollback
 
-Recorded rollback inputs include the active ruleset
-`projects/lukes-picks/rulesets/93614c6a-add3-47ad-88df-b9d9e18a00fb`, the prior
-ruleset `projects/lukes-picks/rulesets/5628e0a8-ee8b-4dd9-b8c2-5fbac9fd3213`,
-five `READY` composite indexes, the 29-Function manifest, the preview URL, both
-permanent live URLs, the bundle digest above, and source commit
-`c38136070082a0895c6cca0f118841bb0972520e`.
+If this branch has not been deployed, there is no SportsDataIO cloud rollback
+to perform. Keep production in `manual` and preserve the historical artifact.
 
-- Hosting preview: let the preview channel expire by default. Deleting it is a
-  destructive cloud action that requires explicit authorization.
-- Live Hosting: any rollback or replacement is a separate cloud write requiring
-  explicit authorization, a fresh project guard, and the exact reviewed
-  artifact/source target. Do not infer rollback authority from this release
-  record.
-- Functions: redeploy only a specifically reviewed backward-compatible source
-  revision. Never roll back by deleting Firestore documents.
-- Firestore rules: if an authorized rollback is required, restore the reviewed
-  prior ruleset above or redeploy its corresponding reviewed rules file after
-  emulator tests. Confirm the exact target with the project guard first.
-- Indexes: avoid removing an index until query usage and deletion impact have
-  been inspected. An index rollback is not a data rollback.
-- Secrets: roll to a previous secret version only through an authorized
-  operational decision; never copy values into source or logs.
-- Artifact Registry: review and deliberately configure a retention policy for
-  `gcf-artifacts` separately if desired; do not delete images as an incidental
-  workaround for the Functions CLI warning.
+If a future authorized activation misbehaves:
 
-If a deployment partially succeeds, stop, inspect the actual project state, and
-use idempotent retries only after the target diff is understood.
+1. set `ALLOW_SPORTSDATAIO_PROVIDER=false` through a guarded Functions
+   deployment;
+2. return every affected arena to `manual`;
+3. stop provider-backed preview/live promotion and scheduled provider refresh;
+4. disable `systemConfig/sportsDataIoCatalog.enabled` as defense in depth only
+   through a separately authorized guarded write; and
+5. preserve normalized caches, provider-qualified IDs, published week
+   snapshots, picks, results, audits, overrides, and standings.
+
+A replacement provider game ID never silently replaces a published selection.
+Use the audited commissioner correction/void workflow. Do not roll back by
+deleting Firestore documents.
+
+Platform rollback remains separate:
+
+- let a preview expire unless deletion is explicitly authorized;
+- clone or restore only an exact reviewed Hosting version;
+- redeploy only a reviewed backward-compatible Functions revision;
+- restore a reviewed prior ruleset only after emulator validation;
+- avoid removing indexes until query and deletion impact are inspected; and
+- rotate or disable a secret version without printing or copying its value.
+
+If deployment partially succeeds, stop and inspect actual state before an
+idempotent retry.
 
 ## Prohibited actions
 
-- any unreviewed or unguarded live Hosting deployment or update;
-- any deployment to `demo-lukes-picks-local`;
-- any access or write to `wingman-interactive-live`;
-- force deployment that deletes unexpected resources;
-- billing, payment, DNS, domain, IAM, or Firestore-location changes;
-- enabling a public TheSportsDB test provider;
-- publishing Android or iOS store builds.
+- claiming this branch is deployed or live-provider-backed before exact cloud
+  state and authenticated behavior are verified;
+- enabling automatic access without the exact project, parameter, catalog,
+  secret, entitlement, endpoint-smoke, and release gates;
+- using trial, discovery, or scrambled data as production evidence;
+- storing or exposing a key or raw provider payload;
+- adding user-supplied provider URLs or a browser-side provider call;
+- enabling remote team marks from schedule/result access;
+- creating a catalog from guessed seasons, IDs, response fields, or hosts;
+- unreviewed or unguarded Hosting, Functions, Firestore, secret, IAM, billing,
+  DNS, or domain changes;
+- deploying to `demo-lukes-picks-local` or accessing an unrelated project;
+- force-deleting unexpected cloud resources; or
+- publishing Android or iOS store builds as part of this web-only release.

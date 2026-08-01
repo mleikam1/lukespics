@@ -1,0 +1,22 @@
+[
+  {
+    "TeamID": 1,
+    "GlobalTeamID": 1001,
+    "Key": "SEN",
+    "City": "Sanitized City",
+    "Name": "Sentinels",
+    "FullName": "Sanitized City Sentinels",
+    "WikipediaLogoUrl": "https://unlicensed.example.test/sentinels.png",
+    "PrimaryColor": "112233",
+    "UnknownAdditiveField": {"ignored": true}
+  },
+  {
+    "TeamID": 2,
+    "GlobalTeamID": 1002,
+    "Key": "VOY",
+    "City": "Fixture Bay",
+    "Name": "Voyagers",
+    "FullName": "Fixture Bay Voyagers",
+    "WikipediaWordMarkUrl": "https://unlicensed.example.test/voyagers.png"
+  }
+]

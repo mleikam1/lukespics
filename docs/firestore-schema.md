@@ -10,7 +10,7 @@ league rules and display names.
 | `leagues/{leagueId}/members/{uid}` | League-safe profile, role/status, rotation order | Active members read |
 | `leagues/{leagueId}/private/invite` | Hashed invite configuration | Server only |
 | `leagues/{leagueId}/weeks/{weekId}` | Explicit week, picker, snapshots, status, winners | Active members read |
-| `.../weeks/{weekId}/games/{gameId}` | Canonical selected-game snapshot and result | Active members read; server writes |
+| `.../weeks/{weekId}/games/{gameId}` | Canonical selected-game snapshot and result | While the week is `draft`: assigned picker and owner/commissioner only; afterward active members read; server writes |
 | `.../weeks/{weekId}/entries/{uid}` | Public completion and graded summary | Active members read; server writes |
 | `.../entries/{uid}/picks/{gameId}` | Private pre-lock team choice | Matching entry user (`uid`) only before lock; arena owners/commissioners denied |
 | `.../weeks/{weekId}/reveals/{gameId}/picks/{uid}` | Post-lock reveal copy | Members after server reveal |
@@ -19,27 +19,146 @@ league rules and display names.
 | `sportsCache/{key}` | Normalized provider cache/content hash | Server only |
 | `sportsCache/{key}/items/{gameId}` | Normalized cached query item | Server only |
 | `sportsCatalogGames/{gameId}` | Canonical catalog eligibility snapshot used to validate a draft | Server only |
-| `providerUsage/{provider}` | Budget, health, quota and breaker | Server only |
+| `providerUsage/{provider}_{UTC-day}` | Daily request budget and quota observations | Server only |
+| `providerCircuitStates/{provider}` | Provider-scoped circuit-breaker state across UTC day rollover | Server only |
 | `providerLocks/{key}` | Distributed refresh lease | Server only |
 | `providerManualRefreshLimits/{id}` | Server-side manual refresh throttle | Server only |
 | `joinCodeMappings/{hash}` | Non-queryable join lookup | Server only |
 | `joinAttemptLimits/{id}` | Hashed join-attempt throttle state | Server only |
-| `systemConfig/{id}` | Server-only provider configuration | Server only |
+| `systemConfig/sportsDataIoCatalog` | Default-off NFL/MLB catalog, entitlement metadata, and kill switch | Server only |
+| `systemConfig/apiSportsCatalog` | Validated API-Sports leagues and fail-closed presentation policy | Server only |
+| `systemConfig/theSportsDbTestCatalog` | Emulator/internal-test provider catalog | Server only |
+| `systemConfig/{id}` | Other server-only runtime configuration | Server only |
 
 ## Canonical game
 
-The game snapshot includes provider identifiers, sport/league/season, optional
-round, scheduled/published/lock timestamps, venue/neutral status, typed teams,
-normalized status, scores/winner, provider and sync timestamps, override data,
-result version, and source payload hash.
+The game snapshot includes `provider`, `providerGameId`, optional provider score,
+league-game, global-game, and game-key cross references, canonical
+`providerLeagueId`, sport/league/season, optional round, nullable
+scheduled/published/lock timestamps, Eastern scheduled day, `timeTbd`,
+closure/reschedule metadata, venue/neutral status, typed teams, normalized status,
+status detail, scores/winner, broadcast/event detail, provider raw-schema
+version, provider and sync timestamps, override data, result version, and source
+payload hash. Teams may include a normalized color and a rights-gated remote
+logo URL. The provider league ID and season are persisted so later
+result refresh can reproduce the exact provider query without guessing from a
+display league code.
 
-Canonical IDs use `{provider}:{sportCode}:{providerGameId}`. Lock timestamps are
-monotonic once the server has locked or revealed the game.
+Canonical IDs use `{provider}:{sportCode}:{providerGameId}`. SportsDataIO keeps
+stable NFL/MLB IDs and never keys a game only by teams/date, so MLB
+doubleheaders remain distinct. Lock timestamps are monotonic once the server has
+locked or revealed the game. A time-TBD catalog record has a known Eastern day
+and null schedule/publication/lock timestamps; it cannot be selected or
+published until a real UTC instant is available.
+
+Published `firstGame` weeks also store `effectiveSlateLockAtUtc` on the week.
+That authoritative deadline starts at the earliest selected kickoff and may
+only move earlier. Pick callables, reveal processing, and Firestore rules all
+consult it. The backend also propagates the protected value to every selected
+game so older clients see a coherent slate, but the week field closes all
+sibling games immediately if a provider refresh or audited manual reschedule
+moves one selected game earlier. `perGame` weeks store this field as null and
+continue to use each game's `effectiveLockAtUtc`.
+
+Historic published snapshots may retain the exact persisted provider value
+`espn` as provenance. That compatibility value is intentionally parse-only: it
+cannot be selected in league settings, constructed by the provider factory, or
+used for a network refresh. Existing picks/results remain readable with neutral
+presentation, so no destructive migration is required.
 
 Catalog documents are not week selections. Draft save validates their
 eligibility, then writes a week-owned canonical snapshot. Deselecting a draft
 game must delete that week snapshot during desired-set reconciliation.
 Publishing grades and displays only the final week snapshots.
+
+When a slate is published, the trusted backend writes
+`catalogProviderSnapshot` and `catalogPresentationSnapshot` atomically with the
+week's `open` status. The presentation snapshot contains only provider name,
+attribution, the remote-logo enable flag, exact allowed hosts/query keys, and
+the rights-review date. It contains no credential, provider endpoint, or raw
+payload. Active members can read it through the existing week rule, but all
+week writes remain server-only. The client requires the two provider fields to
+match; missing or malformed legacy snapshots fail closed to neutral badges.
+
+Multi-step publish, result-sync, reveal, and finalization-follow-up operations
+use unique per-invocation claim IDs plus started/heartbeat timestamps on the
+week. Transactional chunks verify the current claim before every side effect;
+cleanup deletes only the caller's claim. Finalization follow-up completion is
+versioned by `finalizationFollowUpsResultVersion`, while `rotationAdvancedAt`
+and `nextPickerUid` make picker advancement idempotent. These fields are
+operational metadata, never credentials.
+
+The league's monotonic `standingsEpoch` changes atomically with every
+finalized/reopened week transition. Standings chunks commit only while that
+epoch is unchanged; `standingsBuiltEpoch` is written after the final chunk.
+Concurrent cross-week changes therefore restart from the newest finalized-week
+set instead of publishing a stale aggregate. Clients show the standings
+generation only when the two epochs match; legacy arenas treat missing values
+as `0/0`. `previousRank` is derived from the same finalized input set with its
+latest week excluded rather than from mutable standings documents.
+When an incomplete follow-up repair starts with equal current and built epochs,
+claim acquisition increments `standingsEpoch` in the same transaction. A retry
+inherits that dirty generation until it is successfully published.
+
+Every standing snapshot carries its generation's `standingsEpoch`; the league
+completion marker also records `standingsBuiltMemberCount`. Clients require the
+epoch on every document and the expected count, so a league-marker event that
+arrives before the final standings-query event still cannot reveal a partial
+generation. Rebuilds delete obsolete standing documents under the same fence.
+
+## Provider catalog configuration
+
+`systemConfig/sportsDataIoCatalog` is read only by trusted Functions through the
+Admin SDK. Its validated shape contains:
+
+- `enabled`: server-side catalog kill switch;
+- `accessMode`: `fixture`, `trial`, `discovery`, or `production`;
+- `revision`: bounded cache/config revision;
+- `entitlementVerified`, `entitlementReference`, and
+  `entitlementReviewedAt`: non-secret review metadata; and
+- exactly one NFL and one MLB entry when configured, each with `enabled`, a
+  validated season, and booleans confirming team, schedule, and live/final feed
+  entitlement.
+
+The production adapter additionally requires the exact-project check,
+`ALLOW_SPORTSDATAIO_PROVIDER`, environment access mode, environment entitlement
+verification, and Secret Manager key. A missing, disabled, or malformed
+document fails closed. Firestore rules deny all client reads and writes. Store
+only bounded review references and dates—not secret values or contract files.
+
+The catalog/cache documents store normalized Luke's Picks data, timestamps, a
+content hash, and only bounded diagnostics—not unrestricted vendor payloads.
+The raw provider schema is never copied to Flutter. Cache keys include provider,
+canonical league identity, date window, and arena timezone; canonical catalog
+eligibility documents are server-only and are snapshotted into a week only
+after the picker selects them.
+
+The older `systemConfig/apiSportsCatalog` contract remains a dormant,
+replaceable-provider option; it is not the SportsDataIO activation document.
+
+`systemConfig/apiSportsCatalog` is read only by trusted Functions through the
+Admin SDK. Firestore rules deny all client reads and writes. Its implemented
+shape is:
+
+- `leagues`: validated entries containing `sportCode`, `leagueCode`,
+  `leagueName`, `providerLeagueId`, `season`, allowlisted `baseUrl`,
+  `gamesPath`, and `finalStatuses`;
+- `presentation`: optional `attributionText`, `allowRemoteLogos`, exact
+  `allowedLogoHosts`, exact `allowedLogoQueryParameters`, and
+  `logoRightsReviewDate`.
+
+Duplicate sport/league identities, non-allowlisted API-Sports product hosts,
+and incomplete remote-logo policies fail validation. When presentation is
+missing, remote logos default to disabled. Source code and sanitized fixtures
+do not prove that a production document exists; creating or updating one is a
+separately authorized guarded operation after live credential and contract
+validation.
+
+The catalog callable returns only the enabled server-discovered sports and
+leagues. Cache keys incorporate provider, canonical provider league ID, season,
+date window, and timezone. Provider candidates remain in server-only catalog
+and cache collections until draft save copies an exact canonical snapshot into
+the week.
 
 ## Entries and picks
 
