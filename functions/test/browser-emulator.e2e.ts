@@ -62,6 +62,11 @@ function assertLocalTarget() {
     "The browser fixture must keep the production provider disabled.",
   );
   assert.equal(
+    process.env.ALLOW_ESPN_PROVIDER,
+    "false",
+    "The browser fixture must keep the ESPN provider disabled.",
+  );
+  assert.equal(
     new URL(BASE_URL).hostname,
     "127.0.0.1",
     "The browser target must remain on loopback.",
@@ -254,6 +259,23 @@ async function step(name, operation) {
   const result = await operation();
   console.log(`[E2E] PASS ${name} (${Date.now() - startedAt} ms)`);
   return result;
+}
+
+async function captureProof(page, name) {
+  await page.evaluate(async () => {
+    window.scrollTo(0, 0);
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+  });
+  await page.waitForTimeout(500);
+  const screenshot = await page.screenshot({
+    path: `/tmp/lukes-picks-browser-e2e-${name}.png`,
+    fullPage: false,
+  });
+  assert.ok(
+    screenshot.byteLength > 10_000,
+    `The ${name} browser proof screenshot was unexpectedly empty.`,
+  );
 }
 
 async function createBrowserUser(browser, label) {
@@ -667,6 +689,7 @@ async function buildCrossQueryDraftAndPublishOne(
     owner.page,
     /2 games selected.*2 unsaved changes/,
   );
+  await captureProof(owner.page, "catalog-selection");
 
   const later = await selectCatalogFilter(owner.page, "Later");
   assert.equal(later.effectiveQuery?.sportCode, "baseball");
@@ -743,6 +766,7 @@ async function buildCrossQueryDraftAndPublishOne(
   );
   await reviewRemovals.first().click();
   await expectText(owner.page, "1 selected");
+  await captureProof(owner.page, "slate-review");
 
   const publishResponsePromise = callableResponse(
     owner.page,
@@ -822,7 +846,21 @@ async function overrideAsVoid(owner, gameIndex, reason) {
   });
   await overrideButtons.nth(gameIndex).click();
   await expectText(owner.page, /^Override /);
+  const gameState = owner.page
+    .getByRole("button", {name: /Game state.*Scheduled/})
+    .or(owner.page.getByLabel("Game state", {exact: false}))
+    .or(owner.page.getByText("Scheduled", {exact: true}))
+    .first();
+  await gameState.click({force: true});
+  for (let option = 0; option < 4; option += 1) {
+    await owner.page.keyboard.press("ArrowDown");
+  }
+  await owner.page.keyboard.press("Enter");
+  await expectText(owner.page, "Void / canceled");
   await fillFlutterTextbox(owner.page, "Required audit reason", reason);
+  await owner.page
+    .getByRole("checkbox", {name: /I confirm this correction/})
+    .click({force: true});
   const responsePromise = callableResponse(owner.page, "overrideGameResult");
   await button(owner.page, "Save override").click();
   const result = await parseCallable(await responsePromise);
@@ -962,6 +1000,7 @@ async function run() {
       await clickPick(memberA.page, game.awayTeam.name);
       await clickPick(memberA.page, game.homeTeam.name);
       await expectText(memberA.page, "Your entry is complete");
+      await captureProof(memberA.page, "player-picks");
 
       await navigate(memberB.page, "Make picks", "Make your picks");
       await expectText(memberB.page, /0 of 1 picks confirmed/);
@@ -1018,6 +1057,7 @@ async function run() {
       await navigate(memberA.page, "Make picks", "Make your picks");
       await expectLockedPick(memberA.page, game.awayTeam.name);
       await expectText(memberA.page, "Your entry is complete");
+      await captureProof(memberA.page, "locked-pick");
       const persisted = await gameReference.parent.parent
         .collection(`entries/${memberA.uid}/picks`)
         .doc(game.id)
@@ -1047,14 +1087,7 @@ async function run() {
       );
       await navigate(owner.page, "Results", "Weekly results");
       await expectText(owner.page, "Commissioner review");
-      const revealScreenshot = await owner.page.screenshot({
-        path: "/tmp/lukes-picks-browser-e2e-reveals.png",
-        fullPage: true,
-      });
-      assert.ok(
-        revealScreenshot.byteLength > 10_000,
-        "The browser reveal proof screenshot was unexpectedly empty.",
-      );
+      await captureProof(owner.page, "reveals");
     });
 
     await step("manual results and future picker participation via UI", async () => {
@@ -1096,8 +1129,10 @@ async function run() {
         assert.equal(result.nextPickerUid, memberA.uid);
         await expectText(owner.page, "Weekly results");
         await expectText(owner.page, "Final");
+        await captureProof(owner.page, "final-results");
         await navigate(owner.page, "Standings", "Overall standings");
         await expectText(owner.page, "Eligible weeks");
+        await captureProof(owner.page, "standings");
 
         const [weekSnapshot, leagueSnapshot, standingsSnapshot] =
           await Promise.all([

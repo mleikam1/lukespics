@@ -18,28 +18,37 @@ The only cloud project is `lukes-picks` (`271408880910`). Production bootstrap
 must reject another project. Emulator bootstrap must reject anything other than
 `demo-lukes-picks-local`.
 
-Rules/indexes, Functions, and Hosting-preview deployments use
-`scripts/release_firebase.sh`; it has no project override and no live Hosting
-action. Immediately before deploying it confirms the gcloud and Firebase CLI
-accounts match, project identity is exact, lifecycle is active, and the account
-is an owner. Separately authorized prerequisite writes, such as enabling a
-reviewed API or setting `INVITE_CODE_PEPPER`, must run the same project guard
-immediately before an explicit `lukes-picks` write.
+Rules/indexes, Functions, preview, and exact preview-to-live promotion use
+`scripts/release_firebase.sh`; it has no project override. Its live action can
+only clone the fixed `connected-picker-flow` preview to the fixed
+`lukes-picks:live` channel. Immediately before a write it confirms the gcloud
+and Firebase CLI accounts match, project identity is exact, lifecycle is
+active, and the account is an owner. Separately authorized prerequisite writes,
+such as enabling a reviewed API or setting `INVITE_CODE_PEPPER`, must run the
+same project guard immediately before an explicit `lukes-picks` write.
 
 The public source/build scans reject the forbidden Wingman project, emulator
-markers, ESPN hosts, internal-test-provider markers, and likely secrets from a
-public release.
+markers, internal-test-provider markers, and likely secrets from a public
+release. Runtime source permits only the exact scoreboard origin and
+rights-gated logo hostname inside `functions/src/providers/espn.ts`; every ESPN
+host remains forbidden in Flutter/web code and public artifacts.
 
-The live-catalog source candidate has not been deployed. Its Functions manifest
-references `API_SPORTS_KEY`, which does not currently have an approved Secret
-Manager value, so no Functions, preview, or live release of that candidate is
-authorized or claimed.
+The ESPN adapter is deployed but dormant. Every deployed Function has
+`ALLOW_ESPN_PROVIDER=false`, both arenas remain `manual`, and
+`systemConfig/espnCatalog` is absent. Activation additionally requires the
+Admin-only authorization record and retained written ESPN/Disney authorization;
+none of those gates substitutes for the others. No production ESPN request or
+logo publication is part of the dormant release.
 
 ## Firestore rules
 
 Active membership gates league reads. Private user documents permit only the
 owner and backend. Direct client mutation is denied for settings, members,
 scores, outcomes, rankings, standings, audit logs, provider state, and rotation.
+While a week is `draft`, its game documents are readable only by the assigned
+picker and an active owner/commissioner; ordinary members can read them only
+after the trusted backend moves the week out of draft. All week-game writes
+remain server-only.
 
 An eligible member may create/update only their own pick when:
 
@@ -92,25 +101,37 @@ emulator/internal condition. API-Sports requires all of the following:
 The boolean flag, secret binding, and catalog document are independent gates;
 one cannot substitute for another.
 
+ESPN is a separate replaceable provider and requires all of the following:
+
+- non-emulator runtime project exactly `lukes-picks`;
+- deploy-time `ALLOW_ESPN_PROVIDER=true`, whose default is `false`;
+- `systemConfig/espnCatalog.enabled == true` with bounded
+  `authorizationReference` and ISO `authorizationReviewedAt` metadata;
+- retained written authorization covering the intended automated/commercial
+  access, caching, storage, and distribution; and
+- the existing authorization, cache, soft-budget, timeout, retry, lease, and
+  circuit-breaker controls.
+
+No secret or legal-document contents belong in the Firestore authorization
+record. ESPN logo display additionally requires the separate rights-review
+date and exact static adapter policy.
+
 ## Secrets
 
-The previously deployed manual-provider release binds
-`INVITE_CODE_PEPPER`, which is required for production invite-code hashing.
+The deployed dormant-provider release binds `INVITE_CODE_PEPPER`, which is
+required for production invite-code hashing.
 
-The current source candidate additionally declares `API_SPORTS_KEY` with
-`defineSecret` and binds it only to provider-bearing Functions:
+The current ESPN adapter needs no credential, and provider-bearing Functions do
+not bind `API_SPORTS_KEY`. That absence is not permission to access ESPN; its
+written-authorization and technical gates remain mandatory. The dormant
+API-Sports adapter remains replaceable-provider code, but no
+`API_SPORTS_KEY` declaration, binding, or approved value is present. A future
+activation must add an explicit Secret Manager binding as a separately reviewed
+change.
 
-- `listSportsCatalog`;
-- `refreshSelectedGames`;
-- `syncSelectedGameResults`; and
-- `scheduledResultSync`.
-
-Unrelated account, membership, slate, pick, scoring, and administration
-Functions do not receive the provider secret. `COLLEGE_FOOTBALL_DATA_KEY`
-remains a future name only and is not declared or bound. The approved
-`API_SPORTS_KEY` value is currently absent, making the candidate Functions
-deployment a release blocker. Emulator-only defaults and sanitized fixtures are
-not production secret substitutes.
+`COLLEGE_FOOTBALL_DATA_KEY` remains a future name only and is not declared or
+bound. Emulator-only defaults and sanitized fixtures are not production
+authorization substitutes.
 
 No service-account file is needed in source control. Local emulator credentials
 use the Firebase emulators and ignored files.
@@ -131,13 +152,13 @@ bypass the server-authoritative prevention.
 
 ## Team marks
 
-Remote marks require HTTPS, a reviewed host allowlist, and confirmed use rights.
-API-Sports presentation defaults to `allowRemoteLogos=false`; enabling it also
-requires a rights-review date and exact permitted query-parameter names in the
-server-owned catalog. Provider normalization strips unapproved URLs, and the
-Flutter policy independently requires the response provider to match the game,
-rechecks HTTPS/host/query restrictions, and permanently denies ESPN hosts. Do
-not store credential-bearing image query strings or log image URLs. Missing,
+Remote marks require HTTPS, an exact reviewed host policy, and confirmed use
+rights. ESPN and API-Sports presentation both default to
+`allowRemoteLogos=false`; ESPN additionally fixes the eligible hostname in
+server code and requires a rights-review date. Provider normalization strips
+unapproved URLs, and the Flutter policy independently requires the response
+provider to match the game and rechecks HTTPS/host/query restrictions. Do not
+store credential-bearing image query strings or log image URLs. Missing,
 broken, mismatched, or unapproved images fall back to a neutral initials badge.
 At slate publication, Functions persist only that safe policy metadata and its
 provider identity on the server-owned week document. Ordinary members consume

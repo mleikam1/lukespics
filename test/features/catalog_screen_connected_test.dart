@@ -81,6 +81,9 @@ void main() {
           abbreviation: 'MS',
         ),
         venueName: 'Harbor Ballpark',
+        statusDetail: 'First pitch delayed',
+        broadcast: 'ESPN+',
+        eventDetail: 'Doubleheader · Game 2',
       );
       final filteredGame = _game(
         id: 'mlb-filtered-date',
@@ -251,6 +254,14 @@ void main() {
       expect(find.text('Major League Baseball'), findsOneWidget);
       expect(find.text('Scheduled'), findsOneWidget);
       expect(find.textContaining('Harbor Ballpark'), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const Key('catalog-game-context-mlb-all-dates')),
+            )
+            .data,
+        'Doubleheader · Game 2 · First pitch delayed · Broadcast: ESPN+',
+      );
 
       final visibleQuery = controller.activeCatalogQuery!;
       final refreshCall = await _tapAndReadCall(
@@ -319,12 +330,28 @@ void main() {
         const Key('catalog-checkbox-mlb-all-dates'),
       );
       expect(tester.widget<Checkbox>(restoredCheckbox).value, isTrue);
-      await tester.tap(restoredCheckbox);
-      await tester.pump();
-      expect(controller.selectedGameIds, isEmpty);
-      expect(find.textContaining('0 games selected'), findsOneWidget);
+      expect(controller.selectedGameIds, {'mlb-all-dates'});
 
-      await _tapAndReadCall(tester, calls, const Key('date-filter-tomorrow'));
+      final tomorrowCall = await _tapAndReadCall(
+        tester,
+        calls,
+        const Key('date-filter-tomorrow'),
+      );
+      final tomorrowQuery = tomorrowCall.$3.query!;
+      final nextDayCall = await _tapAndReadCall(
+        tester,
+        calls,
+        const Key('catalog-next-day-button'),
+      );
+      final nextDayQuery = nextDayCall.$3.query!;
+      expect(nextDayQuery.dateMode, CatalogDateMode.custom);
+      expect(
+        nextDayQuery.from,
+        tomorrowQuery.from.add(const Duration(days: 1)),
+      );
+      expect(nextDayQuery.to, nextDayQuery.from);
+      expect(controller.selectedGameIds, {'mlb-all-dates'});
+
       await tester.pumpWidget(
         ProviderScope(
           overrides: [appControllerProvider.overrideWith((ref) => controller)],
@@ -335,9 +362,7 @@ void main() {
       );
       await _pumpCatalogFrames(tester);
       expect(
-        tester
-            .widget<ChoiceChip>(find.byKey(const Key('date-filter-tomorrow')))
-            .selected,
+        controller.activeCatalogQuery?.sameVisibleQuery(nextDayQuery),
         isTrue,
       );
       expect(
@@ -346,6 +371,19 @@ void main() {
             .selected,
         isFalse,
       );
+      expect(find.byKey(const Key('catalog-single-day-label')), findsOneWidget);
+      expect(controller.selectedGameIds, {'mlb-all-dates'});
+
+      final previousDayCall = await _tapAndReadCall(
+        tester,
+        calls,
+        const Key('catalog-previous-day-button'),
+      );
+      final previousDayQuery = previousDayCall.$3.query!;
+      expect(previousDayQuery.dateMode, CatalogDateMode.custom);
+      expect(previousDayQuery.from, tomorrowQuery.from);
+      expect(previousDayQuery.to, tomorrowQuery.to);
+      expect(controller.selectedGameIds, {'mlb-all-dates'});
       expect(tester.takeException(), isNull);
     },
   );
@@ -531,6 +569,9 @@ Game _game({
   required Team awayTeam,
   required Team homeTeam,
   required String venueName,
+  String? statusDetail,
+  String? broadcast,
+  String? eventDetail,
 }) => Game(
   id: id,
   provider: 'theSportsDbTest',
@@ -546,6 +587,9 @@ Game _game({
   homeTeam: homeTeam,
   awayTeam: awayTeam,
   status: GameStatus.scheduled,
+  statusDetail: statusDetail,
+  broadcast: broadcast,
+  eventDetail: eventDetail,
   providerLastUpdatedAt: DateTime.now().toUtc(),
   lastSyncedAt: DateTime.now().toUtc(),
   resultVersion: 1,

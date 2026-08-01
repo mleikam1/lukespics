@@ -47,6 +47,7 @@ export FUNCTIONS_EMULATOR_HOST="$functions_host"
 export FIREBASE_HOSTING_EMULATOR_HOST="$hosting_host"
 export ALLOW_THESPORTSDB_TEST_PROVIDER="true"
 export ALLOW_API_SPORTS_PROVIDER="false"
+export ALLOW_ESPN_PROVIDER="false"
 export USE_SANITIZED_MLB_FIXTURE="true"
 export INVITE_CODE_PEPPER="${project_id}-browser-e2e-invite-pepper"
 unset GOOGLE_APPLICATION_CREDENTIALS
@@ -60,7 +61,8 @@ cleanup_browser_e2e_env() {
 }
 trap cleanup_browser_e2e_env EXIT
 umask 077
-printf 'ALLOW_API_SPORTS_PROVIDER=false\n' > "$functions_emulator_env"
+printf 'ALLOW_API_SPORTS_PROVIDER=false\nALLOW_ESPN_PROVIDER=false\n' \
+  > "$functions_emulator_env"
 printf 'INVITE_CODE_PEPPER=%s\nAPI_SPORTS_KEY=%s\n' \
   "$INVITE_CODE_PEPPER" \
   "$disabled_provider_credential" > "$functions_emulator_secrets"

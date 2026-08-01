@@ -1,7 +1,7 @@
 import {HttpsError} from "firebase-functions/v2/https";
 import {z} from "zod";
 import {
-  API_SPORTS_KEY,
+  apiSportsKey,
   positiveIntegerSetting,
 } from "../config.js";
 import {normalizedGameSchema} from "../schemas.js";
@@ -12,21 +12,21 @@ import type {
   ProviderHealth,
   ProviderLeague,
   ProviderQuery,
+  ProviderRequestEstimate,
+  ProviderRequestOperation,
   SportsDataProvider,
   Team,
 } from "../types.js";
 import {finalWinner, normalizeTeam, withSourceHash} from "./normalization.js";
 import {neutralCatalogPresentation} from "./presentation.js";
+import {isEspnOwnedHost} from "./espn.js";
+import {ProviderRetryAuthorizationError} from "./retry.js";
 
 const API_SPORTS_HOST_PATTERN =
   /^https:\/\/v1\.(american-football|basketball|baseball|hockey)\.api-sports\.io$/;
 const DEFAULT_FINAL_STATUSES = ["FT", "AOT", "AP", "FINAL"];
 export const API_SPORTS_MAX_REQUEST_ATTEMPTS = 3;
 export const API_SPORTS_SELECTED_GAME_CONCURRENCY = 10;
-const FORBIDDEN_LOGO_HOSTS = [
-  ["espn", "com"].join("."),
-  ["espncdn", "com"].join("."),
-];
 const SENSITIVE_LOGO_QUERY_KEYS = new Set([
   "access_token",
   "api-key",
@@ -42,12 +42,6 @@ const SENSITIVE_LOGO_QUERY_KEYS = new Set([
   "signature",
   "token",
 ]);
-
-function forbiddenLogoHost(host: string): boolean {
-  return FORBIDDEN_LOGO_HOSTS.some(
-    (forbidden) => host === forbidden || host.endsWith(`.${forbidden}`),
-  );
-}
 
 function sensitiveLogoQueryKey(value: string): boolean {
   const normalized = value.trim().toLowerCase();
@@ -126,7 +120,7 @@ const hostSchema = z
   .toLowerCase()
   .regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/)
   .refine(
-    (host) => !forbiddenLogoHost(host),
+    (host) => !isEspnOwnedHost(host),
     "Broadcaster-owned image hosts are not permitted.",
   );
 
@@ -220,9 +214,9 @@ type ApiSportsEnvelope = z.infer<typeof envelopeSchema>;
 
 class NonRetryableProviderError extends Error {}
 
-export class ApiSportsRetryAuthorizationError extends Error {
-  constructor(readonly authorizationCause: unknown) {
-    super("API-Sports retry authorization failed.");
+export class ApiSportsRetryAuthorizationError extends ProviderRetryAuthorizationError {
+  constructor(authorizationCause: unknown) {
+    super(authorizationCause);
     this.name = "ApiSportsRetryAuthorizationError";
   }
 }
@@ -285,7 +279,7 @@ function permittedLogoUrl(
       url.username.length > 0 ||
       url.password.length > 0 ||
       !presentation.allowedLogoHosts.includes(hostname) ||
-      forbiddenLogoHost(hostname)
+      isEspnOwnedHost(hostname)
     ) {
       return null;
     }
@@ -491,6 +485,11 @@ export function normalizeApiSportsGame(
 
 export class ApiSportsProvider implements SportsDataProvider {
   readonly name = "apiSports";
+  readonly usagePolicy = {
+    softDailyLimitSetting: "API_SPORTS_SOFT_DAILY_LIMIT",
+    defaultSoftDailyLimit: 80,
+    maximumSoftDailyLimit: 10_000,
+  } as const;
   private observedQuotaRemaining: number | null = null;
   private requestAttemptCount = 0;
   private retryAuthorizer: (() => Promise<void>) | null = null;
@@ -618,6 +617,19 @@ export class ApiSportsProvider implements SportsDataProvider {
     return games;
   }
 
+  requestEstimate(
+    operation: ProviderRequestOperation,
+    itemCount: number,
+  ): ProviderRequestEstimate {
+    const baseRequestCount =
+      operation === "fetchGames" ? Math.max(1, itemCount) : 1;
+    return {
+      baseRequestCount,
+      maximumRequestCount:
+        baseRequestCount * API_SPORTS_MAX_REQUEST_ATTEMPTS,
+    };
+  }
+
   getRequestAttemptCount(): number {
     return this.requestAttemptCount;
   }
@@ -672,7 +684,7 @@ export class ApiSportsProvider implements SportsDataProvider {
     query: Record<string, string>,
   ): Promise<ApiSportsEnvelope> {
     const url = resolveApiSportsGamesUrl(config);
-    const key = API_SPORTS_KEY.value().trim();
+    const key = apiSportsKey();
     if (key.length === 0) {
       throw new Error("API-Sports secret is not configured.");
     }

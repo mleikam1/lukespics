@@ -137,6 +137,7 @@ abstract interface class LeagueRepository {
     required String leagueId,
     required String weekId,
     bool forceRefresh,
+    String? gameId,
   });
 
   Future<FinalizeResult> finalizeWeek({
@@ -153,6 +154,7 @@ abstract interface class LeagueRepository {
     required int? awayScore,
     required String? winnerTeamId,
     required String reason,
+    DateTime? scheduledAtUtc,
   });
 
   Future<void> reopenWeek({

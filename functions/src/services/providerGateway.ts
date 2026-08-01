@@ -7,14 +7,12 @@ import {
 } from "firebase-admin/firestore";
 import {HttpsError} from "firebase-functions/v2/https";
 import {db, positiveIntegerSetting} from "../config.js";
-import {
-  API_SPORTS_MAX_REQUEST_ATTEMPTS,
-  ApiSportsRetryAuthorizationError,
-} from "../providers/apiSports.js";
+import {ProviderRetryAuthorizationError} from "../providers/retry.js";
 import {normalizedGameSchema} from "../schemas.js";
 import type {
   NormalizedGame,
   ProviderQuery,
+  ProviderRequestOperation,
   SportsDataProvider,
 } from "../types.js";
 import {commitWritesInChunks, sha256} from "../utils.js";
@@ -22,6 +20,12 @@ import {commitWritesInChunks, sha256} from "../utils.js";
 export const PROVIDER_CACHE_LOCK_LEASE_MS = 660_000;
 export const SELECTED_GAMES_TERMINAL_CACHE_DURATION_MS =
   12 * 60 * 60 * 1000;
+export const ESPN_FUTURE_CACHE_DURATION_MS = 60 * 60 * 1000;
+export const ESPN_UPCOMING_CACHE_DURATION_MS = 30 * 60 * 1000;
+export const ESPN_LIVE_CACHE_DURATION_MS = 10 * 60 * 1000;
+export const ESPN_EMPTY_CACHE_DURATION_MS = 30 * 60 * 1000;
+const DEFAULT_SELECTED_GAME_MAXIMUM_IDS = 20;
+const ABSOLUTE_SELECTED_GAME_MAXIMUM_IDS = 500;
 
 export type CachedGamesResult = {
   games: NormalizedGame[];
@@ -49,13 +53,43 @@ export function providerCacheKey(
   return sha256({
     provider: provider.name,
     requestType: "games",
+    ...providerQueryCacheIdentity(provider.name, query),
+  });
+}
+
+export function providerQueryCacheIdentity(
+  providerName: string,
+  query: ProviderQuery,
+): Record<string, unknown> {
+  const upstreamIdentity = {
     sportCode: query.sportCode,
     leagueCode: query.leagueCode,
     providerLeagueId: query.providerLeagueId,
-    season: query.season,
     from: query.from,
     to: query.to,
-    timezone: query.timezone,
+  };
+  // ESPN's allowlisted scoreboard URL is fully identified by league and date
+  // range. Season and timezone are local query context and must not fragment
+  // identical upstream scoreboard reads.
+  return providerName === "espn"
+    ? upstreamIdentity
+    : {
+        ...upstreamIdentity,
+        season: query.season,
+        timezone: query.timezone,
+      };
+}
+
+export function selectedGamesCacheKey(
+  provider: SportsDataProvider,
+  providerGameIds: string[],
+  context: ProviderQuery,
+): string {
+  return sha256({
+    provider: provider.name,
+    requestType: "selectedGames",
+    providerGameIds: [...new Set(providerGameIds)].sort(),
+    ...providerQueryCacheIdentity(provider.name, context),
   });
 }
 
@@ -131,6 +165,7 @@ export function assertCompleteSelectedGamesResponse(
   providerName: string,
   requestedIds: ReadonlySet<string>,
   games: NormalizedGame[],
+  allowPartial = false,
 ): void {
   const returnedIds = new Set<string>();
   for (const game of games) {
@@ -144,10 +179,10 @@ export function assertCompleteSelectedGamesResponse(
     }
     returnedIds.add(game.providerGameId);
   }
-  if (
-    returnedIds.size !== requestedIds.size ||
-    [...requestedIds].some((id) => !returnedIds.has(id))
-  ) {
+  const missingRequestedGame = [...requestedIds].some(
+    (id) => !returnedIds.has(id),
+  );
+  if (returnedIds.size === 0 || (!allowPartial && missingRequestedGame)) {
     throw new Error(
       "Provider returned an incomplete selected-game refresh.",
     );
@@ -158,8 +193,13 @@ export function providerCacheDurationMs(
   games: NormalizedGame[],
   requestType: "games" | "selectedGames",
   now = new Date(),
+  providerName?: string,
 ): number {
-  if (games.length === 0) return 2 * 60 * 60 * 1000;
+  if (games.length === 0) {
+    return providerName === "espn"
+      ? ESPN_EMPTY_CACHE_DURATION_MS
+      : 2 * 60 * 60 * 1000;
+  }
   if (games.every((game) => ["final", "void"].includes(game.status))) {
     // Terminal result feeds can be corrected or reinstate a game. Selected
     // games therefore remain discoverable by the scheduled result sync.
@@ -169,7 +209,9 @@ export function providerCacheDurationMs(
     return 10 * 365 * 24 * 60 * 60 * 1000;
   }
   if (games.some((game) => game.status === "live")) {
-    return 15 * 60 * 1000;
+    return providerName === "espn"
+      ? ESPN_LIVE_CACHE_DURATION_MS
+      : 15 * 60 * 1000;
   }
   if (
     games.some((game) =>
@@ -183,9 +225,37 @@ export function providerCacheDurationMs(
     .filter((difference) => difference > 0);
   if (futureTimes.length === 0) return 30 * 60 * 1000;
   const nearest = Math.min(...futureTimes);
+  if (providerName === "espn") {
+    if (nearest > 24 * 60 * 60 * 1000) {
+      return ESPN_FUTURE_CACHE_DURATION_MS;
+    }
+    if (nearest > 2 * 60 * 60 * 1000) {
+      return ESPN_UPCOMING_CACHE_DURATION_MS;
+    }
+    return 15 * 60 * 1000;
+  }
   if (nearest > 24 * 60 * 60 * 1000) return 12 * 60 * 60 * 1000;
   if (nearest > 2 * 60 * 60 * 1000) return 2 * 60 * 60 * 1000;
   return 15 * 60 * 1000;
+}
+
+export function selectedGameRefreshMaximumIds(
+  provider: SportsDataProvider,
+): number {
+  const maximum =
+    provider.selectedGameRefreshMaximumIds ??
+    DEFAULT_SELECTED_GAME_MAXIMUM_IDS;
+  if (
+    !Number.isSafeInteger(maximum) ||
+    maximum < 1 ||
+    maximum > ABSOLUTE_SELECTED_GAME_MAXIMUM_IDS
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Sports provider selected-game batching is invalid.",
+    );
+  }
+  return maximum;
 }
 
 export type CatalogTrustDecision = {
@@ -361,6 +431,7 @@ type QuotaReservation = {
   maximumRetryRequestCount: number;
   authorizedRetryRequestCount: number;
   pendingRetryAuthorizationCount: number;
+  softLimit: number;
 };
 
 export type QuotaReservationSettlement = {
@@ -438,16 +509,41 @@ export function minimumProviderQuotaRemaining(
 function providerRequestAttemptCount(
   provider: SportsDataProvider,
 ): number | null {
-  const metered = provider as SportsDataProvider & {
-    getRequestAttemptCount?: () => number;
-  };
-  if (typeof metered.getRequestAttemptCount !== "function") return null;
+  if (typeof provider.getRequestAttemptCount !== "function") return null;
   try {
-    const count = metered.getRequestAttemptCount();
+    const count = provider.getRequestAttemptCount();
     return Number.isSafeInteger(count) && count >= 0 ? count : null;
   } catch {
     return null;
   }
+}
+
+export function providerRequestEstimate(
+  provider: SportsDataProvider,
+  operation: ProviderRequestOperation,
+  itemCount: number,
+  context: Partial<ProviderQuery>,
+): {baseRequestCount: number; maximumRequestCount: number} {
+  const estimate = provider.requestEstimate?.(
+    operation,
+    itemCount,
+    context,
+  ) ?? {
+    baseRequestCount: 1,
+    maximumRequestCount: 1,
+  };
+  if (
+    !Number.isSafeInteger(estimate.baseRequestCount) ||
+    estimate.baseRequestCount < 1 ||
+    !Number.isSafeInteger(estimate.maximumRequestCount) ||
+    estimate.maximumRequestCount < estimate.baseRequestCount
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Sports provider request accounting is invalid.",
+    );
+  }
+  return estimate;
 }
 
 async function reserveQuotaAmount(input: {
@@ -455,12 +551,8 @@ async function reserveQuotaAmount(input: {
   providerName: string;
   requestCount: number;
   kind: "base" | "retry";
+  softLimit: number;
 }): Promise<void> {
-  const softLimit = positiveIntegerSetting(
-    "API_SPORTS_SOFT_DAILY_LIMIT",
-    80,
-    10_000,
-  );
   await db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(input.reference);
     const data = snapshot.data() ?? {};
@@ -488,7 +580,7 @@ async function reserveQuotaAmount(input: {
       !providerQuotaReservationAllowed({
         requestCount: count,
         requestedCount: input.requestCount,
-        softLimit,
+        softLimit: input.softLimit,
         providerReportedRemaining: reportedRemaining,
         unreportedRequestCount: unreported,
       })
@@ -524,7 +616,7 @@ async function reserveQuotaAmount(input: {
         ...(input.kind === "base"
           ? {lastBaseReservedRequestCount: input.requestCount}
           : {lastRetryReservedRequestCount: input.requestCount}),
-        softLimit,
+        softLimit: input.softLimit,
         providerReportedRemaining: reportedRemaining,
         lastAttempt: FieldValue.serverTimestamp(),
         circuitState: "closed",
@@ -539,7 +631,13 @@ async function reserveQuota(
   baseRequestCount: number,
   maximumRequestCount: number,
 ): Promise<QuotaReservation | null> {
-  if (provider.name !== "apiSports") return null;
+  const policy = provider.usagePolicy;
+  if (policy === undefined) return null;
+  const softLimit = positiveIntegerSetting(
+    policy.softDailyLimitSetting,
+    policy.defaultSoftDailyLimit,
+    policy.maximumSoftDailyLimit,
+  );
   const baseReservation = Math.max(1, Math.floor(baseRequestCount));
   const maximumReservation = Math.max(
     baseReservation,
@@ -551,6 +649,7 @@ async function reserveQuota(
     providerName: provider.name,
     requestCount: baseReservation,
     kind: "base",
+    softLimit,
   });
   return {
     reference,
@@ -559,6 +658,7 @@ async function reserveQuota(
     maximumRetryRequestCount: maximumReservation - baseReservation,
     authorizedRetryRequestCount: 0,
     pendingRetryAuthorizationCount: 0,
+    softLimit,
   };
 }
 
@@ -582,6 +682,7 @@ async function authorizeRetryQuota(
       providerName: reservation.providerName,
       requestCount: 1,
       kind: "retry",
+      softLimit: reservation.softLimit,
     });
     reservation.authorizedRetryRequestCount += 1;
   } finally {
@@ -641,7 +742,7 @@ async function recordProviderSuccess(
   reservation: QuotaReservation | null,
   actualRequestCount: number,
 ): Promise<void> {
-  if (provider.name !== "apiSports" || reservation === null) return;
+  if (provider.usagePolicy === undefined || reservation === null) return;
   const health = await provider.getHealth();
   await db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(reservation.reference);
@@ -680,7 +781,7 @@ async function recordProviderFailure(
   provider: SportsDataProvider,
   error: unknown,
 ): Promise<void> {
-  if (provider.name !== "apiSports") return;
+  if (provider.usagePolicy === undefined) return;
   const reference = usageReference(provider.name);
   const threshold = positiveIntegerSetting(
     "PROVIDER_CIRCUIT_FAILURE_THRESHOLD",
@@ -758,20 +859,21 @@ async function writeCatalogTrust(input: {
           if (decision.action === "keep") continue;
           if (decision.action === "extend") {
             transaction.set(
-            reference,
-            {
-              ...(input.eligibleUntil >= decision.eligibleUntil
-                ? {cacheKey: input.cacheKey}
-                : {}),
-              ...(decision.observationUpdate === null
-                ? {}
-                : {
-                    providerLastUpdatedAt:
-                      decision.observationUpdate.providerLastUpdatedAt.toISOString(),
-                    lastSyncedAt:
-                      decision.observationUpdate.lastSyncedAt.toISOString(),
-                  }),
-              catalogUpdatedAt: FieldValue.serverTimestamp(),
+              reference,
+              {
+                ...(input.eligibleUntil >= decision.eligibleUntil
+                  ? {cacheKey: input.cacheKey}
+                  : {}),
+                ...(decision.observationUpdate === null
+                  ? {}
+                  : {
+                      providerLastUpdatedAt:
+                        decision.observationUpdate.providerLastUpdatedAt
+                          .toISOString(),
+                      lastSyncedAt:
+                        decision.observationUpdate.lastSyncedAt.toISOString(),
+                    }),
+                catalogUpdatedAt: FieldValue.serverTimestamp(),
                 catalogEligibleUntil: Timestamp.fromDate(
                   decision.eligibleUntil,
                 ),
@@ -811,7 +913,8 @@ async function writeCache(
 ): Promise<CachedGamesResult> {
   const now = new Date();
   const expiresAt = new Date(
-    now.valueOf() + providerCacheDurationMs(games, requestType, now),
+    now.valueOf() +
+      providerCacheDurationMs(games, requestType, now, provider.name),
   );
   const contentHash = providerGamesContentHash(games);
   if (contentHash !== existingHash) {
@@ -858,29 +961,25 @@ async function writeCache(
   };
 }
 
-type RetryAuthorizingProvider = SportsDataProvider & {
-  setRetryAuthorizer?: (authorizer: (() => Promise<void>) | null) => void;
-};
-
 function installRetryAuthorizer(
   provider: SportsDataProvider,
   reservation: QuotaReservation | null,
 ): () => void {
-  if (provider.name !== "apiSports") return () => undefined;
-  const retryProvider = provider as RetryAuthorizingProvider;
+  if (reservation === null || reservation.maximumRetryRequestCount === 0) {
+    return () => undefined;
+  }
   if (
-    reservation === null ||
-    typeof retryProvider.setRetryAuthorizer !== "function"
+    typeof provider.setRetryAuthorizer !== "function"
   ) {
     throw new HttpsError(
       "failed-precondition",
       "Sports data retry accounting is unavailable.",
     );
   }
-  retryProvider.setRetryAuthorizer(
+  provider.setRetryAuthorizer(
     async () => authorizeRetryQuota(reservation),
   );
-  return () => retryProvider.setRetryAuthorizer?.(null);
+  return () => provider.setRetryAuthorizer?.(null);
 }
 
 export function shouldRecordProviderFailure(
@@ -889,12 +988,12 @@ export function shouldRecordProviderFailure(
 ): boolean {
   return (
     actualRequestCount > 0 &&
-    !(error instanceof ApiSportsRetryAuthorizationError)
+    !(error instanceof ProviderRetryAuthorizationError)
   );
 }
 
 function publicProviderError(error: unknown): unknown {
-  return error instanceof ApiSportsRetryAuthorizationError
+  return error instanceof ProviderRetryAuthorizationError
     ? error.authorizationCause
     : error;
 }
@@ -932,11 +1031,21 @@ async function loadProviderGamesWithCache(input: {
   forceRefresh: boolean;
   baseRequestCount: number;
   maximumRequestCount: number;
+  expectedItemCount?: number;
   load: () => Promise<NormalizedGame[]>;
 }): Promise<CachedGamesResult> {
   const startedAt = Date.now();
   const reference = db.collection("sportsCache").doc(input.key);
   let cached = await readCache(reference);
+  if (
+    cached !== null &&
+    input.expectedItemCount !== undefined &&
+    cached.games.length < input.expectedItemCount
+  ) {
+    // A partial provider response is useful, but its missing games must remain
+    // eligible for retry on the next selected-game refresh.
+    cached = {...cached, stale: true};
+  }
   if (cached !== null && !cached.stale && !input.forceRefresh) {
     try {
       const cacheRemainsCanonical = await writeCatalogTrust({
@@ -1049,8 +1158,8 @@ async function loadProviderGamesWithCache(input: {
         cacheKey: input.key,
       });
     } finally {
-      // ApiSportsProvider waits for every launched sibling via allSettled, so
-      // no retry can race after this hook is cleared and quota is settled.
+      // Providers finish all launched requests before returning, so no retry
+      // can race after this hook is cleared and quota is settled.
       clearRetryAuthorizer();
     }
 
@@ -1104,7 +1213,10 @@ async function loadProviderGamesWithCache(input: {
         actualRequestCount: settlement.actualRequestCount,
         durationMs: Date.now() - startedAt,
       });
-      return result;
+      return input.expectedItemCount !== undefined &&
+        games.length < input.expectedItemCount
+        ? {...result, delayed: true}
+        : result;
     } catch (error: unknown) {
       return delayedCacheOrThrow({
         cached: cacheFallbackAfterRefreshError(cached, error),
@@ -1123,6 +1235,12 @@ export async function listGamesWithCache(
   provider: SportsDataProvider,
   query: ProviderQuery,
 ): Promise<CachedGamesResult> {
+  const estimate = providerRequestEstimate(
+    provider,
+    "listGames",
+    1,
+    query,
+  );
   const cacheQuery = {
     sportCode: query.sportCode,
     leagueCode: query.leagueCode,
@@ -1138,8 +1256,8 @@ export async function listGamesWithCache(
     requestType: "games",
     query: cacheQuery,
     forceRefresh: query.forceRefresh === true,
-    baseRequestCount: 1,
-    maximumRequestCount: API_SPORTS_MAX_REQUEST_ATTEMPTS,
+    baseRequestCount: estimate.baseRequestCount,
+    maximumRequestCount: estimate.maximumRequestCount,
     load: () => provider.listGames(query),
   });
 }
@@ -1150,25 +1268,30 @@ export async function fetchGamesByIdsWithCache(
   context: ProviderQuery,
 ): Promise<CachedGamesResult> {
   const uniqueIds = [...new Set(providerGameIds)].sort();
-  if (uniqueIds.length === 0 || uniqueIds.length > 20) {
+  const maximumIds = selectedGameRefreshMaximumIds(provider);
+  if (uniqueIds.length === 0 || uniqueIds.length > maximumIds) {
     throw new HttpsError(
       "invalid-argument",
-      "Selected-game refreshes require between one and 20 provider game IDs.",
+      `Selected-game refreshes require between one and ${maximumIds} provider game IDs.`,
     );
   }
+  const estimate = providerRequestEstimate(
+    provider,
+    "fetchGames",
+    uniqueIds.length,
+    context,
+  );
   const cacheQuery = {
     providerGameIds: uniqueIds,
     sportCode: context.sportCode,
     leagueCode: context.leagueCode,
     providerLeagueId: context.providerLeagueId,
     season: context.season,
+    from: context.from,
+    to: context.to,
     timezone: context.timezone,
   };
-  const key = sha256({
-    provider: provider.name,
-    requestType: "selectedGames",
-    ...cacheQuery,
-  });
+  const key = selectedGamesCacheKey(provider, uniqueIds, context);
   const requestedIds = new Set(uniqueIds);
   return loadProviderGamesWithCache({
     provider,
@@ -1176,17 +1299,33 @@ export async function fetchGamesByIdsWithCache(
     requestType: "selectedGames",
     query: cacheQuery,
     forceRefresh: context.forceRefresh === true,
-    // ApiSportsProvider uses one bounded-retry lookup per ID.
-    baseRequestCount: uniqueIds.length,
-    maximumRequestCount:
-      uniqueIds.length * API_SPORTS_MAX_REQUEST_ATTEMPTS,
+    baseRequestCount: estimate.baseRequestCount,
+    maximumRequestCount: estimate.maximumRequestCount,
+    ...(provider.selectedGameRefreshMode === "partial"
+      ? {expectedItemCount: uniqueIds.length}
+      : {}),
     load: async () => {
       const games = await provider.fetchGames(uniqueIds, context);
+      const allowPartial = provider.selectedGameRefreshMode === "partial";
       assertCompleteSelectedGamesResponse(
         provider.name,
         requestedIds,
         games,
+        allowPartial,
       );
+      if (allowPartial && games.length < uniqueIds.length) {
+        const returnedIds = new Set(
+          games.map((game) => game.providerGameId),
+        );
+        logger.warn("Provider selected-game refresh was partial", {
+          provider: provider.name,
+          requestedGameCount: uniqueIds.length,
+          returnedGameCount: games.length,
+          missingProviderGameIds: uniqueIds.filter(
+            (id) => !returnedIds.has(id),
+          ),
+        });
+      }
       return games;
     },
   });

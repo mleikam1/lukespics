@@ -32,6 +32,7 @@ export type Team = {
   shortName: string;
   abbreviation: string;
   logoUrl: string | null;
+  color?: string | null;
 };
 
 export type NormalizedGame = {
@@ -43,6 +44,7 @@ export type NormalizedGame = {
   leagueCode: string;
   leagueName: string;
   season: string;
+  seasonType?: string | null;
   weekOrRound: string | null;
   scheduledAtUtc: Date;
   publishedScheduledAtUtc: Date;
@@ -52,9 +54,13 @@ export type NormalizedGame = {
   homeTeam: Team;
   awayTeam: Team;
   status: GameStatus;
+  statusDetail?: string | null;
   homeScore: number | null;
   awayScore: number | null;
   winnerTeamId: string | null;
+  broadcast?: string | null;
+  eventDetail?: string | null;
+  rawResponseVersion?: number;
   providerLastUpdatedAt: Date;
   lastSyncedAt: Date;
   manualOverride: boolean;
@@ -138,6 +144,9 @@ export type ProviderHealth = {
 export type SportsDataProvider = {
   readonly name: string;
   readonly presentation: CatalogPresentation;
+  readonly usagePolicy?: ProviderUsagePolicy;
+  readonly selectedGameRefreshMode?: "strict" | "partial";
+  readonly selectedGameRefreshMaximumIds?: number;
   listSupportedSports(): Promise<string[]>;
   listLeagues(sportCode?: string): Promise<ProviderLeague[]>;
   listGames(query: ProviderQuery): Promise<NormalizedGame[]>;
@@ -148,6 +157,26 @@ export type SportsDataProvider = {
   getTeamMetadata(teamId: string): Promise<Team | null>;
   getHealth(): Promise<ProviderHealth>;
   mapStatus(providerStatus: string): GameStatus;
+  requestEstimate?(
+    operation: ProviderRequestOperation,
+    itemCount: number,
+    context?: Partial<ProviderQuery>,
+  ): ProviderRequestEstimate;
+  getRequestAttemptCount?(): number;
+  setRetryAuthorizer?(authorizer: (() => Promise<void>) | null): void;
+};
+
+export type ProviderRequestOperation = "listGames" | "fetchGames";
+
+export type ProviderRequestEstimate = {
+  baseRequestCount: number;
+  maximumRequestCount: number;
+};
+
+export type ProviderUsagePolicy = {
+  softDailyLimitSetting: string;
+  defaultSoftDailyLimit: number;
+  maximumSoftDailyLimit: number;
 };
 
 export const PROVIDER_NAMES = [
@@ -155,6 +184,7 @@ export const PROVIDER_NAMES = [
   "manual",
   "theSportsDbTest",
   "apiSports",
+  "espn",
 ] as const;
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 

@@ -199,31 +199,29 @@ finalization nor refresh may silently create duplicate weeks.
 | `manual` | Emulator and production fallback | Required production mode until a provider is approved |
 | `theSportsDbTest` | Emulator/internal test only | Requires `ALLOW_THESPORTSDB_TEST_PROVIDER=true`, documented API use, fixtures, and a hard rejection in `lukes-picks` |
 | `apiSports` | Production adapter in source | Disabled until an approved secret, validated server catalog, authenticated contract/quota checks, explicit deploy parameter, and terms gate all pass |
+| `espn` | Server-only Site API adapter in source | Default-off until written authorization, exact project/flag, enabled authorization record, live contract validation, and separate logo-rights gates pass |
 
-The previously deployed connected release contains mock, manual, API-Sports,
-and TheSportsDB test adapters. Its dated fixture, policy, and three-user browser
-evidence verifies the internal TheSportsDB path through the actual Flutter UI.
-The current source adds API-Sports baseball fixtures and focused catalog,
-binding, query, and logo-policy tests; their final pass results must be recorded
-separately. Production remains `manual`.
+The deployed connected release contains mock, manual, API-Sports, TheSportsDB
+test, and dormant ESPN adapters. Its fixture, policy, and three-user browser
+evidence verifies the complete sanitized schedule-to-standings flow through the
+actual Flutter UI. Production remains `manual`; both external-provider deploy
+flags are false and neither activation document exists.
 
-The current source defines `API_SPORTS_KEY` as a Firebase secret and binds it
-only to `listSportsCatalog`, `refreshSelectedGames`,
-`syncSelectedGameResults`, and `scheduledResultSync`. A separate deploy-time
-boolean, `ALLOW_API_SPORTS_PROVIDER`, defaults to `false`; API-Sports is allowed
-only when that value is explicitly true, the runtime is not an emulator, and
-the project is exactly `lukes-picks`. Provider discovery reads the server-only
-`systemConfig/apiSportsCatalog` document rather than accepting base URLs,
-league IDs, seasons, final statuses, or logo policy from Flutter.
+API-Sports remains a dormant alternative with its own default-false flag and
+server-only catalog, but the current provider-bearing Function declarations do
+not bind `API_SPORTS_KEY`. Flutter never supplies base URLs, request paths,
+league identities, result mappings, or logo policy for either adapter.
 
-No approved `API_SPORTS_KEY` currently exists. The source candidate must not be
-deployed or described as a working production schedule until the key handoff,
-authenticated provider validation, server configuration, full test matrix,
-guarded preview, and smoke test are complete.
+The API-Sports paragraph above describes a dormant alternative path. The ESPN
+candidate binds no provider secret, but must not be enabled or described as an
+authorized production schedule until written permission, server authorization
+metadata, live contract validation, the full test matrix, guarded preview, and
+smoke test are complete.
 
-No client calls a sports provider directly. No ESPN website, internal API,
-fantasy endpoint, logo host, or undocumented JSON endpoint may be scraped,
-proxied, cached, embedded, or hotlinked.
+No client calls a sports provider directly. Only the server adapter may call the
+exact allowlisted Site API scoreboard route after activation; no ESPN HTML,
+fantasy endpoint, arbitrary JSON endpoint, or user-supplied URL may be scraped
+or proxied. ESPN-hosted artwork remains disabled absent separate rights review.
 
 ## Team marks
 
@@ -238,7 +236,8 @@ until rights are confirmed. API-Sports presentation defaults to
 `allowRemoteLogos=false`. Enabling remote marks requires a server-reviewed date
 and exact host/query-parameter allowlists; provider normalization strips URLs
 that do not match, and Flutter independently requires a matching provider,
-HTTPS, the exact host, permitted query keys, and the permanent ESPN denylist.
+HTTPS, the exact host, and permitted query keys. ESPN marks additionally require
+the adapter's separate rights gate; public bundles contain no ESPN hostname.
 Remote images also require fixed dimensions, preserved aspect ratio, a loading
 placeholder, an error fallback, and an accessible team-name label.
 TheSportsDB image URLs are internal-test-only and require attribution.

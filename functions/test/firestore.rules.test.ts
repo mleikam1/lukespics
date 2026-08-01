@@ -64,6 +64,12 @@ async function seed(): Promise<void> {
         role: "member",
         status: "active",
       }),
+      setDoc(doc(firestore, "leagues/alpha/members/commissioner"), {
+        uid: "commissioner",
+        displayName: "Commissioner",
+        role: "commissioner",
+        status: "active",
+      }),
       setDoc(doc(firestore, "leagues/alpha/members/member"), {
         uid: "member",
         displayName: "Member",
@@ -79,6 +85,22 @@ async function seed(): Promise<void> {
       setDoc(doc(firestore, "leagues/alpha/weeks/week-0001"), {
         status: "open",
         pickerUid: "picker",
+      }),
+      setDoc(doc(firestore, "leagues/alpha/weeks/week-draft"), {
+        status: "draft",
+        pickerUid: "picker",
+      }),
+      setDoc(doc(firestore, "leagues/alpha/weeks/week-draft/games/hidden"), {
+        status: "scheduled",
+        effectiveLockAtUtc: future,
+        homeTeam: {id: "draft-home"},
+        awayTeam: {id: "draft-away"},
+      }),
+      setDoc(doc(firestore, "leagues/alpha/weeks/week-orphan/games/orphan"), {
+        status: "scheduled",
+        effectiveLockAtUtc: future,
+        homeTeam: {id: "orphan-home"},
+        awayTeam: {id: "orphan-away"},
       }),
       setDoc(doc(firestore, "leagues/alpha/weeks/week-0001/games/future"), {
         status: "scheduled",
@@ -147,6 +169,23 @@ async function seed(): Promise<void> {
       ),
       setDoc(doc(firestore, "sportsCache/internal"), {
         secret: "server-only",
+      }),
+      setDoc(doc(firestore, "sportsCatalogGames/espn:football:401000001"), {
+        provider: "espn",
+        providerGameId: "401000001",
+      }),
+      setDoc(doc(firestore, "providerLocks/espn-scoreboard"), {
+        owner: "server",
+        expiresAt: future,
+      }),
+      setDoc(doc(firestore, "providerManualRefreshLimits/espn-owner"), {
+        actorUid: "owner",
+        nextAllowedAt: future,
+      }),
+      setDoc(doc(firestore, "systemConfig/espnCatalog"), {
+        enabled: false,
+        authorizationReference: "not-approved-test-fixture",
+        authorizationReviewedAt: "2026-08-01",
       }),
     ]);
   });
@@ -265,6 +304,30 @@ describe("Firestore security boundary", () => {
     );
   });
 
+  it("keeps draft game contents limited to the picker and arena admins", async () => {
+    const member = environment.authenticatedContext("member").firestore();
+    const picker = environment.authenticatedContext("picker").firestore();
+    const owner = environment.authenticatedContext("owner").firestore();
+    const commissioner = environment
+      .authenticatedContext("commissioner")
+      .firestore();
+    const draftGame = "leagues/alpha/weeks/week-draft/games/hidden";
+
+    await assertFails(getDoc(doc(member, draftGame)));
+    await assertFails(
+      getDocs(collection(member, "leagues/alpha/weeks/week-draft/games")),
+    );
+    await assertFails(
+      getDoc(doc(owner, "leagues/alpha/weeks/week-orphan/games/orphan")),
+    );
+    await assertSucceeds(
+      getDoc(doc(member, "leagues/alpha/weeks/week-0001/games/future")),
+    );
+    await assertSucceeds(getDoc(doc(picker, draftGame)));
+    await assertSucceeds(getDoc(doc(owner, draftGame)));
+    await assertSucceeds(getDoc(doc(commissioner, draftGame)));
+  });
+
   it("accepts a valid own pick before lock", async () => {
     const firestore = environment.authenticatedContext("member").firestore();
     let lock = Timestamp.fromMillis(0);
@@ -375,8 +438,21 @@ describe("Firestore security boundary", () => {
     const owner = environment.authenticatedContext("owner").firestore();
     await assertFails(getDoc(doc(owner, "sportsCache/internal")));
     await assertFails(
+      getDoc(doc(owner, "sportsCatalogGames/espn:football:401000001")),
+    );
+    await assertFails(getDoc(doc(owner, "providerLocks/espn-scoreboard")));
+    await assertFails(
+      getDoc(doc(owner, "providerManualRefreshLimits/espn-owner")),
+    );
+    await assertFails(getDoc(doc(owner, "systemConfig/espnCatalog")));
+    await assertFails(
       setDoc(doc(owner, "providerUsage/apiSports_2099-01-01"), {
         requestCount: 0,
+      }),
+    );
+    await assertFails(
+      setDoc(doc(owner, "systemConfig/espnCatalog"), {
+        enabled: true,
       }),
     );
   });

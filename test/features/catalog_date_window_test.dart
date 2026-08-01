@@ -75,4 +75,44 @@ void main() {
 
     expect(range, isNull);
   });
+
+  test('single-day stepping follows arena dates and stops at week bounds', () {
+    final previous = catalogSteppedDate(
+      currentDate: DateTime.utc(2026, 8, 1),
+      dayDelta: -1,
+      timezone: timezone,
+      weekStartAt: weekStart,
+      weekEndAt: weekEnd,
+    );
+    final next = catalogSteppedDate(
+      currentDate: DateTime.utc(2026, 8, 1),
+      dayDelta: 1,
+      timezone: timezone,
+      weekStartAt: weekStart,
+      weekEndAt: weekEnd,
+    );
+
+    expect(previous, DateTime.utc(2026, 7, 31));
+    expect(next, DateTime.utc(2026, 8, 2));
+    expect(
+      catalogSteppedDate(
+        currentDate: DateTime.utc(2026, 7, 30),
+        dayDelta: -1,
+        timezone: timezone,
+        weekStartAt: weekStart,
+        weekEndAt: weekEnd,
+      ),
+      isNull,
+    );
+    expect(
+      catalogSteppedDate(
+        currentDate: DateTime.utc(2026, 8, 6),
+        dayDelta: 1,
+        timezone: timezone,
+        weekStartAt: weekStart,
+        weekEndAt: weekEnd,
+      ),
+      isNull,
+    );
+  });
 }

@@ -479,11 +479,13 @@ final class FirebaseLeagueRepository implements LeagueRepository {
     required String leagueId,
     required String weekId,
     bool forceRefresh = false,
+    String? gameId,
   }) async {
     final result = await _call('refreshSelectedGames', {
       'leagueId': leagueId,
       'weekId': weekId,
       'forceRefresh': forceRefresh,
+      if (gameId != null) 'gameId': gameId,
     });
     return RefreshResult(
       updatedGameCount: _int(result, 'updatedGameCount'),
@@ -519,11 +521,14 @@ final class FirebaseLeagueRepository implements LeagueRepository {
     required int? awayScore,
     required String? winnerTeamId,
     required String reason,
+    DateTime? scheduledAtUtc,
   }) async {
     final result = await _call('overrideGameResult', {
       'leagueId': leagueId,
       'weekId': weekId,
       'gameId': gameId,
+      if (scheduledAtUtc != null)
+        'scheduledAtUtc': scheduledAtUtc.toUtc().toIso8601String(),
       'status': _overrideStatus(status),
       'homeScore': homeScore,
       'awayScore': awayScore,
@@ -1162,6 +1167,7 @@ Map<String, Object?> _gameToJson(
   'providerLeagueId': game.providerLeagueId,
   'leagueName': game.leagueName,
   'season': game.season,
+  'seasonType': game.seasonType,
   'weekOrRound': game.weekOrRound,
   'scheduledAtUtc': game.scheduledAtUtc.toIso8601String(),
   'publishedScheduledAtUtc': game.publishedScheduledAtUtc.toIso8601String(),
@@ -1171,12 +1177,16 @@ Map<String, Object?> _gameToJson(
   'homeTeam': game.homeTeam.toJson(),
   'awayTeam': game.awayTeam.toJson(),
   'status': _gameStatus(game.status),
+  'statusDetail': game.statusDetail,
   'homeScore': game.homeScore,
   'awayScore': game.awayScore,
   'winnerTeamId': game.winnerTeamId,
+  'broadcast': game.broadcast,
+  'eventDetail': game.eventDetail,
   'providerLastUpdatedAt': game.providerLastUpdatedAt.toIso8601String(),
   'lastSyncedAt': game.lastSyncedAt.toIso8601String(),
   'resultVersion': wireResultVersion,
+  'rawResponseVersion': game.rawResponseVersion,
   'sourcePayloadHash': game.sourcePayloadHash,
 };
 
@@ -1192,23 +1202,27 @@ Game _gameFromJson(String id, Map<String, Object?> data) {
     providerLeagueId: data['providerLeagueId'] as String?,
     leagueName: data['leagueName'] as String? ?? 'Sports',
     season: '${data['season'] ?? ''}',
-    weekOrRound: data['weekOrRound'] as String?,
+    seasonType: _nonEmptyString(data['seasonType']),
+    weekOrRound: _nonEmptyString(data['weekOrRound']),
     scheduledAtUtc: scheduled,
     publishedScheduledAtUtc:
         _dateOrNull(data['publishedScheduledAtUtc']) ?? scheduled,
     effectiveLockAtUtc: _dateOrNull(data['effectiveLockAtUtc']) ?? scheduled,
-    venueName: data['venueName'] as String?,
+    venueName: _nonEmptyString(data['venueName']),
     neutralSite: data['neutralSite'] as bool? ?? false,
     homeTeam: _team(_map(data['homeTeam'])),
     awayTeam: _team(_map(data['awayTeam'])),
     status: _parseGameStatus(data['status'] as String?),
+    statusDetail: _nonEmptyString(data['statusDetail']),
     homeScore: data['homeScore'] is num
         ? (data['homeScore'] as num).toInt()
         : null,
     awayScore: data['awayScore'] is num
         ? (data['awayScore'] as num).toInt()
         : null,
-    winnerTeamId: data['winnerTeamId'] as String?,
+    winnerTeamId: _nonEmptyString(data['winnerTeamId']),
+    broadcast: _nonEmptyString(data['broadcast']),
+    eventDetail: _nonEmptyString(data['eventDetail']),
     providerLastUpdatedAt:
         _dateOrNull(data['providerLastUpdatedAt']) ?? scheduled,
     lastSyncedAt: _dateOrNull(data['lastSyncedAt']) ?? scheduled,
@@ -1217,6 +1231,10 @@ Game _gameFromJson(String id, Map<String, Object?> data) {
     manualOverrideBy: data['manualOverrideBy'] as String?,
     resultVersion: _versionNumber(wireVersion),
     resultVersionToken: wireVersion,
+    rawResponseVersion: switch (data['rawResponseVersion']) {
+      final num value when value.toInt() > 0 => value.toInt(),
+      _ => 1,
+    },
     sourcePayloadHash: data['sourcePayloadHash'] as String? ?? '',
     pickRevealCompletedAt: _dateOrNull(data['pickRevealCompletedAt']),
   );
@@ -1231,6 +1249,7 @@ Team _team(Map<String, Object?> data) => Team(
     final value? => Uri.tryParse(value),
     null => null,
   },
+  color: _nonEmptyString(data['color']),
 );
 
 LeagueMember _memberFromJson(String uid, Map<String, Object?> data) =>
@@ -1373,9 +1392,13 @@ String _gameStatus(GameStatus status) => switch (status) {
 };
 
 String _overrideStatus(GameStatus status) => switch (status) {
+  GameStatus.scheduled => 'scheduled',
+  GameStatus.delayed => 'delayed',
+  GameStatus.postponed => 'postponed',
+  GameStatus.suspended => 'suspended',
   GameStatus.finalStatus => 'final',
   GameStatus.voided || GameStatus.cancelled => 'void',
-  _ => 'reviewRequired',
+  GameStatus.reviewRequired || GameStatus.live => 'reviewRequired',
 };
 
 GameStatus _parseGameStatus(String? value) => switch (value) {

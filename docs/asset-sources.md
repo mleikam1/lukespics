@@ -13,5 +13,9 @@
   retain aspect ratio, include attribution, and always fall back on load error.
 
 No ESPN-hosted image may be downloaded, proxied, cached, embedded, or hotlinked.
+The default-off ESPN data adapter does not change that rule. Even after data
+access is authorized, remote marks stay disabled until a separate written
+rights review records the exact approved hosts/query keys and review date.
+Luke's Picks does not use ESPN branding or claim affiliation or endorsement.
 No professional league, college league, or team asset is bundled as application
 branding. This file records provenance; it is not legal approval.

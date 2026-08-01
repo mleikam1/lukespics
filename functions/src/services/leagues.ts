@@ -12,6 +12,7 @@ import {
   type AuthenticatedUser,
 } from "../authz.js";
 import {auth, db} from "../config.js";
+import {getProvider} from "../providers/factory.js";
 import {assertProviderAllowedForRuntime} from "../providers/policy.js";
 import type {LeagueSettings, MemberRole} from "../types.js";
 import {
@@ -422,7 +423,9 @@ export async function updateSettings(input: {
 }): Promise<void> {
   await requireOwner(input.leagueId, input.actorUid);
   if (input.settings.providerName !== undefined) {
-    assertProviderAllowedForRuntime(input.settings.providerName);
+    // Resolve the provider before committing the setting so a runtime flag
+    // cannot strand an arena whose catalog activation is still incomplete.
+    await getProvider(input.settings.providerName);
   }
   const reference = db.collection("leagues").doc(input.leagueId);
   await db.runTransaction(async (transaction) => {

@@ -33,6 +33,7 @@ import {
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from "vitest";
 import {repairFinalizedWeekFollowUps} from "../src/services/scoring.js";
 import {
+  MAX_GAME_RESCHEDULE_OFFSET_MS,
   publishSlate,
   reopenWeekRecord,
   revealLockedPicks,
@@ -521,6 +522,205 @@ describe("emulator pick'em lifecycle", () => {
       });
       await weekReference.update({status: "open"});
 
+      const gameReference = adminDb.doc(
+        `leagues/${created.leagueId}/weeks/${week.weekId}/games/${gameId}`,
+      );
+      await expect(
+        httpsCallable(
+          getFunctions(memberA, "us-central1"),
+          "refreshSelectedGames",
+        )({
+          requestId: requestId("member-game-refresh"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          gameId,
+          forceRefresh: true,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        call<{updatedGameCount: number; delayed: boolean}>(
+          owner,
+          "refreshSelectedGames",
+          {
+            requestId: requestId("admin-game-refresh"),
+            leagueId: created.leagueId,
+            weekId: week.weekId,
+            gameId,
+            forceRefresh: true,
+          },
+        ),
+      ).resolves.toMatchObject({delayed: false});
+
+      const originalGame = await gameReference.get();
+      const originalScheduledAt = originalGame.data()?.scheduledAtUtc;
+      const originalPublishedAt = originalGame.data()?.publishedScheduledAtUtc;
+      const originalLockAt = originalGame.data()?.effectiveLockAtUtc;
+      expect(originalScheduledAt).toBeInstanceOf(Timestamp);
+      expect(originalPublishedAt).toBeInstanceOf(Timestamp);
+      expect(originalLockAt).toBeInstanceOf(Timestamp);
+      if (
+        !(originalScheduledAt instanceof Timestamp) ||
+        !(originalPublishedAt instanceof Timestamp) ||
+        !(originalLockAt instanceof Timestamp)
+      ) {
+        throw new Error("Published integration game timestamps are missing.");
+      }
+      const laterStart = Timestamp.fromMillis(
+        originalScheduledAt.toMillis() + 30 * 60_000,
+      );
+      const earlierStart = Timestamp.fromMillis(
+        originalScheduledAt.toMillis() - 15 * 60_000,
+      );
+      await expect(
+        httpsCallable(
+          getFunctions(memberA, "us-central1"),
+          "overrideGameResult",
+        )({
+          requestId: requestId("member-reschedule"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          gameId,
+          scheduledAtUtc: laterStart.toDate().toISOString(),
+          status: "delayed",
+          homeScore: null,
+          awayScore: null,
+          winnerTeamId: null,
+          reason: "Member cannot reschedule a published game.",
+        }),
+      ).rejects.toThrow();
+      await expect(
+        httpsCallable(
+          getFunctions(owner, "us-central1"),
+          "overrideGameResult",
+        )({
+          requestId: requestId("invalid-status-score"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          gameId,
+          status: "suspended",
+          homeScore: 1,
+          awayScore: null,
+          winnerTeamId: null,
+          reason: "A suspended game cannot carry a score.",
+        }),
+      ).rejects.toThrow();
+      const outsideWeekStart = Timestamp.fromMillis(end.valueOf() + 1);
+      await call(owner, "overrideGameResult", {
+        requestId: requestId("outside-week-reschedule"),
+        leagueId: created.leagueId,
+        weekId: week.weekId,
+        gameId,
+        scheduledAtUtc: outsideWeekStart.toDate().toISOString(),
+        status: "postponed",
+        homeScore: null,
+        awayScore: null,
+        winnerTeamId: null,
+        reason: "Postponed game moved beyond the original arena week.",
+      });
+      expect((await gameReference.get()).data()).toMatchObject({
+        scheduledAtUtc: outsideWeekStart,
+        publishedScheduledAtUtc: originalPublishedAt,
+        effectiveLockAtUtc: originalLockAt,
+        status: "postponed",
+      });
+      await expect(
+        httpsCallable(
+          getFunctions(owner, "us-central1"),
+          "overrideGameResult",
+        )({
+          requestId: requestId("absurd-reschedule"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          gameId,
+          scheduledAtUtc: new Date(
+            originalPublishedAt.toMillis() +
+              MAX_GAME_RESCHEDULE_OFFSET_MS +
+              1,
+          ).toISOString(),
+          status: "postponed",
+          homeScore: null,
+          awayScore: null,
+          winnerTeamId: null,
+          reason: "Implausible reschedule must fail the sanity bound.",
+        }),
+      ).rejects.toThrow();
+      await call(owner, "overrideGameResult", {
+        requestId: requestId("later-reschedule"),
+        leagueId: created.leagueId,
+        weekId: week.weekId,
+        gameId,
+        scheduledAtUtc: laterStart.toDate().toISOString(),
+        status: "delayed",
+        homeScore: null,
+        awayScore: null,
+        winnerTeamId: null,
+        reason: "Provider announced a delayed scheduled start.",
+      });
+      const laterGame = await gameReference.get();
+      expect(laterGame.data()).toMatchObject({
+        scheduledAtUtc: laterStart,
+        publishedScheduledAtUtc: originalPublishedAt,
+        effectiveLockAtUtc: originalLockAt,
+        status: "delayed",
+        homeScore: null,
+        awayScore: null,
+        winnerTeamId: null,
+        manualOverride: true,
+      });
+      const earlierRequestId = requestId("earlier-reschedule");
+      await call(owner, "overrideGameResult", {
+        requestId: earlierRequestId,
+        leagueId: created.leagueId,
+        weekId: week.weekId,
+        gameId,
+        scheduledAtUtc: earlierStart.toDate().toISOString(),
+        status: "scheduled",
+        homeScore: null,
+        awayScore: null,
+        winnerTeamId: null,
+        reason: "Provider corrected the game to an earlier start.",
+      });
+      const [earlierGame, rescheduleAudits] = await Promise.all([
+        gameReference.get(),
+        adminDb
+          .collection(`leagues/${created.leagueId}/auditLogs`)
+          .where("requestId", "==", earlierRequestId)
+          .get(),
+      ]);
+      expect(earlierGame.data()).toMatchObject({
+        scheduledAtUtc: earlierStart,
+        publishedScheduledAtUtc: originalPublishedAt,
+        effectiveLockAtUtc: earlierStart,
+        status: "scheduled",
+        homeScore: null,
+        awayScore: null,
+        winnerTeamId: null,
+      });
+      expect(rescheduleAudits.size).toBe(1);
+      expect(rescheduleAudits.docs[0]?.data()).toMatchObject({
+        eventType: "game_overridden",
+        before: {
+          scheduledAtUtc: laterStart.toDate().toISOString(),
+          publishedScheduledAtUtc: originalPublishedAt.toDate().toISOString(),
+          effectiveLockAtUtc: originalLockAt.toDate().toISOString(),
+          status: "delayed",
+          homeScore: null,
+          awayScore: null,
+          winnerTeamId: null,
+          manualOverride: true,
+        },
+        after: {
+          scheduledAtUtc: earlierStart.toDate().toISOString(),
+          publishedScheduledAtUtc: originalPublishedAt.toDate().toISOString(),
+          effectiveLockAtUtc: earlierStart.toDate().toISOString(),
+          status: "scheduled",
+          homeScore: null,
+          awayScore: null,
+          winnerTeamId: null,
+          manualOverride: true,
+        },
+      });
+
       const homeTeamId = String(
         (selectedGame?.homeTeam as {id: string}).id,
       );
@@ -564,9 +764,6 @@ describe("emulator pick'em lifecycle", () => {
         ),
       ).rejects.toThrow();
 
-      const gameReference = adminDb.doc(
-        `leagues/${created.leagueId}/weeks/${week.weekId}/games/${gameId}`,
-      );
       await call(owner, "overrideGameResult", {
         requestId: requestId("future-override"),
         leagueId: created.leagueId,
@@ -612,7 +809,7 @@ describe("emulator pick'em lifecycle", () => {
       expect(futureWeek.data()?.winnerUids).toEqual([]);
       expect(futureWeek.data()?.highScore).toBeNull();
       expect(futureWeek.data()?.resultMutationRequestId).toBeUndefined();
-      expect(futureWeek.data()?.gameResultsVersion).toBe(1);
+      expect(futureWeek.data()?.gameResultsVersion).toBe(4);
       expect(futurePickA.data()?.outcome).toBe("pending");
       expect(futurePickA.data()?.points).toBe(0);
       await weekReference.update({

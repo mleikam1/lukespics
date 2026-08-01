@@ -4,14 +4,71 @@ Baseline validation date: 2026-07-27
 
 Connected preview and live web release record updated: 2026-07-31
 
+Dormant-provider release record updated: 2026-08-01
+
 This report separates local/emulator evidence, the guarded connected-preview
 and live web release, and still-deferred provider/store behavior. A passing
 live web smoke is not a claim of live authenticated smoke, production sports
 provider readiness, or app-store readiness.
 
-## Connected-flow release, preview, and live web — 2026-07-30/31
+## Dormant-provider release, preview, and live web — 2026-08-01
 
-### Current identity and runtimes
+### Release boundary
+
+The reviewed provider-capable source is deployed, but production sports access
+remains dormant. All 29 Functions have
+`ALLOW_API_SPORTS_PROVIDER=false` and `ALLOW_ESPN_PROVIDER=false`; neither
+`systemConfig/espnCatalog` nor `systemConfig/apiSportsCatalog` exists; and the
+two retained production arenas remain `manual`. `API_SPORTS_KEY` is not
+declared or bound in the Functions manifest, and its absence does not block
+this dormant deployment.
+
+No live ESPN call, provider activation, remote ESPN logo publication, live ESPN
+contract validation, or legal-authorization approval is claimed. The connected
+browser lifecycle below is isolated emulator evidence, not an authenticated
+preview/live lifecycle.
+
+### Final 2026-08-01 local validation matrix
+
+| Command or layer | Result | Evidence |
+|---|---|---|
+| Dart format | Pass | 62 files checked; 0 changes |
+| Flutter analysis | Pass | No issues found |
+| Flutter tests | Pass | 105/105 |
+| Functions lint, typecheck, build, and unit/contract tests | Pass | All commands exited successfully; 84/84 tests |
+| Firestore rules | Pass | 11/11 tests |
+| Functions emulator integration | Pass | 8/8 tests |
+| Connected browser-to-emulator lifecycle | Pass | 13 checkpoints with three isolated users |
+| Android debug and iOS simulator | Pass | Both builds completed; no store build published |
+| Fresh public source/build scans | Pass | Released `main.dart.js` SHA-256 `411062a988bf5b8d798b317f118b505966c0d80f9fd07a4f4f4e4762842a1ed6` |
+| npm production audit | Pass | 0 vulnerabilities |
+| npm full audit | Reviewed | Three moderate development-only findings; no forced change applied |
+
+### Guarded cloud release state
+
+| Item | Verified 2026-08-01 state |
+|---|---|
+| Functions deployment | 29 Functions deployed; both provider flags false |
+| Functions deploy exit | Exit 1 only because the post-success Artifact Registry cleanup policy could not be configured |
+| Firestore rules | Active ruleset `projects/lukes-picks/rulesets/aa52ec56-c549-4e8e-880a-372474e4feeb` |
+| Firestore rollback | Prior ruleset `projects/lukes-picks/rulesets/93614c6a-add3-47ad-88df-b9d9e18a00fb` |
+| Firestore indexes | Five composite indexes, all `READY` |
+| Scheduled processing | `scheduledResultSync` enabled every 30 minutes UTC |
+| Hosting version | Preview and live both use `b58df6678863654a` |
+| Preview URL | <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app> |
+| Preview release | `2026-08-01T13:52:25.814Z`; expiry `2026-08-08T13:52:18Z` |
+| Live release | `2026-08-01T13:52:56.156Z` |
+| Permanent live URLs | <https://lukes-picks.web.app> and <https://lukes-picks.firebaseapp.com> returned HTTP 200 and served the exact recorded bundle hash |
+| Production arenas | Two retained arenas; both remain `manual` |
+| Provider configuration | `systemConfig/espnCatalog` and `systemConfig/apiSportsCatalog` absent |
+
+This is a successful dormant-provider release. ESPN activation, live calls,
+remote logos, and written legal authorization remain blocked independently of
+the deployed code and passing sanitized/emulator coverage.
+
+## Historical connected-flow release, preview, and live web — 2026-07-30/31
+
+### Historical identity and runtimes
 
 | Component | Verified value |
 |---|---|
@@ -26,7 +83,7 @@ provider readiness, or app-store readiness.
 | Firebase CLI | Repository CLI 15.24.0; global CLI 15.9.0 |
 | Browser | Installed system Chrome 151 |
 
-### Verified connected implementation
+### Historical verified connected implementation
 
 - The actual Flutter UI and Firebase backend passed
   `./scripts/test_browser_e2e.sh` against Auth, Firestore, Functions, and Hosting
@@ -53,7 +110,7 @@ provider readiness, or app-store readiness.
   the production preview smoke covered the manual catalog and corrected empty
   state, not a complete production manual-game lifecycle.
 
-### Final local validation matrix
+### Historical final local validation matrix
 
 | Command or layer | Result | Evidence |
 |---|---|---|
@@ -71,7 +128,7 @@ provider readiness, or app-store readiness.
 Earlier backend, rules, provider-fixture, emulator, responsive, native, and
 audit evidence remains valid and is preserved in the dated sections below.
 
-### Guarded cloud release and handoff
+### Historical guarded cloud release and handoff
 
 | Item | Status |
 |---|---|

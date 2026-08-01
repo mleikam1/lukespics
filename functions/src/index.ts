@@ -1,7 +1,7 @@
 import {logger} from "firebase-functions";
 import {onSchedule} from "firebase-functions/v2/scheduler";
 import {callable} from "./callable.js";
-import {API_SPORTS_KEY, INVITE_CODE_PEPPER} from "./config.js";
+import {INVITE_CODE_PEPPER} from "./config.js";
 import {
   assignPickerSchema,
   createDraftWeekSchema,
@@ -278,7 +278,6 @@ export const listSportsCatalog = callable(
       },
     });
   },
-  {secrets: [API_SPORTS_KEY]},
 );
 
 export const saveDraftSlate = callable(
@@ -338,10 +337,10 @@ function refreshCallable(functionName: string) {
         actorUid: user.uid,
         requestId,
         forceRefresh: input.forceRefresh,
+        ...(input.gameId === undefined ? {} : {gameId: input.gameId}),
       });
     },
     {
-      secrets: [API_SPORTS_KEY],
       // A slate has no artificial game maximum. Provider requests remain
       // bounded per cache chunk, while the callable has room to process
       // multiple chunks and league groups in one claimed operation.
@@ -396,6 +395,9 @@ export const overrideGameResult = callable(
       gameId: input.gameId,
       actorUid: user.uid,
       requestId,
+      ...(input.scheduledAtUtc === undefined
+        ? {}
+        : {scheduledAtUtc: input.scheduledAtUtc}),
       status: input.status,
       homeScore: input.homeScore,
       awayScore: input.awayScore,
@@ -529,7 +531,6 @@ export const scheduledResultSync = onSchedule(
     timeZone: "UTC",
     retryCount: 0,
     timeoutSeconds: 540,
-    secrets: [API_SPORTS_KEY],
   },
   async () => {
     const startedAt = Date.now();
@@ -546,6 +547,7 @@ export const scheduledResultSync = onSchedule(
         durationMs: Date.now() - startedAt,
         safeErrorCode: error instanceof Error ? error.name : "UnknownError",
       });
+      throw error;
     }
   },
 );

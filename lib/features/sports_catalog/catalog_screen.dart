@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/domain/game_presentation.dart';
 import '../../core/domain/league_time.dart';
 import '../../core/responsive/breakpoints.dart';
 import '../../core/widgets/catalog_logo_policy.dart';
@@ -62,13 +63,12 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
         : activeQuery?.dateMode == CatalogDateMode.custom
         ? DateTimeRange(start: activeQuery!.from, end: activeQuery.to)
         : _customDateRange;
-    final hasDateWindow =
-        _dateWindow(
-          controller,
-          mode: visibleDateMode,
-          customDateRange: visibleCustomRange,
-        ) !=
-        null;
+    final visibleDateWindow = _dateWindow(
+      controller,
+      mode: visibleDateMode,
+      customDateRange: visibleCustomRange,
+    );
+    final hasDateWindow = visibleDateWindow != null;
 
     if (controller.slatePublished) {
       return ListView(
@@ -277,11 +277,36 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
               );
             },
           ),
+          const SizedBox(height: 6),
           Align(
             alignment: Alignment.centerLeft,
             child: Wrap(
+              spacing: 10,
+              runSpacing: 6,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                if (selectedLeague != null && visibleDateWindow != null)
+                  _SingleDayNavigator(
+                    date: visibleDateWindow.from,
+                    previousDate: _steppedDate(
+                      controller,
+                      visibleDateWindow.from,
+                      -1,
+                    ),
+                    nextDate: _steppedDate(
+                      controller,
+                      visibleDateWindow.from,
+                      1,
+                    ),
+                    loading: controller.catalogLoading,
+                    onSelectDate: (date) => unawaited(
+                      _requestSingleDayCatalog(
+                        controller,
+                        league: selectedLeague,
+                        date: date,
+                      ),
+                    ),
+                  ),
                 TextButton.icon(
                   key: const Key('custom-date-range-button'),
                   onPressed: selectedLeague == null
@@ -295,6 +320,11 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                   label: Text(
                     visibleCustomRange == null
                         ? 'Choose date range'
+                        : _isSameCalendarDate(
+                            visibleCustomRange.start,
+                            visibleCustomRange.end,
+                          )
+                        ? DateFormat('MMM d').format(visibleCustomRange.start)
                         : '${DateFormat('MMM d').format(visibleCustomRange.start)} – '
                               '${DateFormat('MMM d').format(visibleCustomRange.end)}',
                   ),
@@ -462,6 +492,39 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
       weekEndAt: weekEndAt,
       customFrom: (customDateRange ?? _customDateRange)?.start,
       customTo: (customDateRange ?? _customDateRange)?.end,
+    );
+  }
+
+  DateTime? _steppedDate(
+    AppController controller,
+    DateTime currentDate,
+    int dayDelta,
+  ) {
+    final weekStartAt = controller.weekStartAt;
+    final weekEndAt = controller.weekEndAt;
+    if (weekStartAt == null || weekEndAt == null) return null;
+    return catalogSteppedDate(
+      currentDate: currentDate,
+      dayDelta: dayDelta,
+      timezone: controller.leagueTimezone,
+      weekStartAt: weekStartAt,
+      weekEndAt: weekEndAt,
+    );
+  }
+
+  Future<void> _requestSingleDayCatalog(
+    AppController controller, {
+    required CatalogLeague league,
+    required DateTime date,
+  }) async {
+    setState(() {
+      _customDateRange = DateTimeRange(start: date, end: date);
+    });
+    await _requestCatalog(
+      controller,
+      sportCode: league.sportCode,
+      league: league,
+      dateMode: CatalogDateMode.custom,
     );
   }
 
@@ -731,6 +794,63 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   }
 }
 
+class _SingleDayNavigator extends StatelessWidget {
+  const _SingleDayNavigator({
+    required this.date,
+    required this.previousDate,
+    required this.nextDate,
+    required this.loading,
+    required this.onSelectDate,
+  });
+
+  final DateTime date;
+  final DateTime? previousDate;
+  final DateTime? nextDate;
+  final bool loading;
+  final ValueChanged<DateTime> onSelectDate;
+
+  @override
+  Widget build(BuildContext context) {
+    final formattedDate = DateFormat('EEE, MMM d').format(date);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton.outlined(
+          key: const Key('catalog-previous-day-button'),
+          tooltip: 'Previous day',
+          onPressed: loading || previousDate == null
+              ? null
+              : () => onSelectDate(previousDate!),
+          icon: const Icon(Icons.chevron_left_rounded),
+        ),
+        const SizedBox(width: 10),
+        Semantics(
+          label: 'Single-day schedule for $formattedDate',
+          child: Text(
+            formattedDate,
+            key: const Key('catalog-single-day-label'),
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+        ),
+        const SizedBox(width: 10),
+        IconButton.outlined(
+          key: const Key('catalog-next-day-button'),
+          tooltip: 'Next day',
+          onPressed: loading || nextDate == null
+              ? null
+              : () => onSelectDate(nextDate!),
+          icon: const Icon(Icons.chevron_right_rounded),
+        ),
+      ],
+    );
+  }
+}
+
+bool _isSameCalendarDate(DateTime first, DateTime second) =>
+    first.year == second.year &&
+    first.month == second.month &&
+    first.day == second.day;
+
 class _FilterRow extends StatelessWidget {
   const _FilterRow({
     required this.keyPrefix,
@@ -945,6 +1065,14 @@ class _CatalogGameCard extends StatelessWidget {
       timezone,
       'EEE, MMM d · h:mm a',
     );
+    final detail = gameDetailSummary(game);
+    final broadcast = gameBroadcastSummary(game);
+    final contextSummary = switch ((detail, broadcast)) {
+      (final detail?, final broadcast?) => '$detail · Broadcast: $broadcast',
+      (final detail?, null) => detail,
+      (null, final broadcast?) => 'Broadcast: $broadcast',
+      (null, null) => null,
+    };
     return Semantics(
       container: true,
       button: enabled,
@@ -1037,6 +1165,22 @@ class _CatalogGameCard extends StatelessWidget {
                                 ).colorScheme.onSurfaceVariant,
                               ),
                         ),
+                        if (contextSummary != null) ...[
+                          const SizedBox(height: 5),
+                          Text(
+                            contextSummary,
+                            key: Key('catalog-game-context-${game.id}'),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                        ],
                       ],
                     ),
                   ),

@@ -51,6 +51,8 @@ import {
   enforceManualRefreshRateLimit,
   fetchGamesByIdsWithCache,
   listGamesWithCache,
+  providerQueryCacheIdentity,
+  selectedGameRefreshMaximumIds,
   type CachedGamesResult,
 } from "./providerGateway.js";
 
@@ -1795,12 +1797,17 @@ function materialSyncHash(value: DocumentData | NormalizedGame): string {
     ),
     venueName: value.venueName ?? null,
     neutralSite: value.neutralSite === true,
+    seasonType: value.seasonType ?? null,
     homeTeam: value.homeTeam,
     awayTeam: value.awayTeam,
     status: value.status,
+    statusDetail: value.statusDetail ?? null,
     homeScore: value.homeScore ?? null,
     awayScore: value.awayScore ?? null,
     winnerTeamId: value.winnerTeamId ?? null,
+    broadcast: value.broadcast ?? null,
+    eventDetail: value.eventDetail ?? null,
+    rawResponseVersion: value.rawResponseVersion ?? null,
     resultVersion: value.resultVersion,
   });
 }
@@ -1847,21 +1854,44 @@ export function protectedSelectedGameLock(input: {
     : input.refreshedLockAt;
 }
 
+export function selectedGameRefreshDateRange(input: {
+  provider: string;
+  scheduledAtUtc: Date;
+  timezone: string;
+}): {from: string; to: string} {
+  const storedArenaDate = calendarDateInTimezone(
+    input.scheduledAtUtc,
+    input.timezone,
+  );
+  if (input.provider !== "espn") {
+    return {from: storedArenaDate, to: storedArenaDate};
+  }
+  return {
+    from: addCalendarDays(storedArenaDate, -1),
+    to: addCalendarDays(storedArenaDate, 5),
+  };
+}
+
 function selectedGameToQuery(
   game: QueryDocumentSnapshot,
   forceRefresh: boolean,
   timezone: string,
+  provider: string,
 ): ProviderQuery {
   const data = game.data();
   const scheduled = asDate(data.scheduledAtUtc, "scheduledAtUtc");
-  const date = calendarDateInTimezone(scheduled, timezone);
+  const range = selectedGameRefreshDateRange({
+    provider,
+    scheduledAtUtc: scheduled,
+    timezone,
+  });
   return {
     sportCode: String(data.sportCode),
     leagueCode: String(data.leagueCode),
     providerLeagueId: String(data.providerLeagueId ?? data.leagueCode),
     season: String(data.season),
-    from: date,
-    to: date,
+    from: range.from,
+    to: range.to,
     timezone,
     forceRefresh,
   };
@@ -1873,10 +1903,17 @@ export async function refreshWeekGames(input: {
   actorUid: string;
   requestId: string;
   forceRefresh: boolean;
+  gameId?: string;
   skipAuthorization?: boolean;
 }): Promise<RefreshResult> {
   if (input.skipAuthorization !== true) {
     await requireAdmin(input.leagueId, input.actorUid);
+  }
+  if (input.gameId !== undefined && !input.forceRefresh) {
+    throw new HttpsError(
+      "invalid-argument",
+      "A one-game provider refresh must be forced.",
+    );
   }
   if (input.forceRefresh && input.skipAuthorization !== true) {
     await enforceManualRefreshRateLimit({
@@ -1892,10 +1929,19 @@ export async function refreshWeekGames(input: {
     claimId,
   );
   try {
+    const gamesReference = reference.collection("games");
     const [selected, league] = await Promise.all([
-      reference.collection("games").get(),
+      input.gameId === undefined
+        ? gamesReference.get()
+        : gamesReference
+            .where(FieldPath.documentId(), "==", input.gameId)
+            .limit(1)
+            .get(),
       db.collection("leagues").doc(input.leagueId).get(),
     ]);
+    if (input.gameId !== undefined && selected.empty) {
+      throw new HttpsError("not-found", "Selected game not found.");
+    }
     const timezone = String(league.data()?.timezone ?? "").trim();
     try {
       new Intl.DateTimeFormat("en-US", {timeZone: timezone}).format();
@@ -1909,17 +1955,30 @@ export async function refreshWeekGames(input: {
       string,
       {query: ProviderQuery; documents: QueryDocumentSnapshot[]}
     >();
+    // ESPN targets intentionally retain distinct, maximum-seven-day
+    // discovery windows. Adjacent dates can overlap, but coalescing their
+    // union could exceed the reviewed bound and turn a selected refresh into
+    // an unbounded schedule scan.
     for (const game of selected.docs) {
       const provider = String(game.data().provider);
-      if (provider === "manual") continue;
-      const query = selectedGameToQuery(game, input.forceRefresh, timezone);
+      if (provider === "manual") {
+        if (input.gameId !== undefined) {
+          throw new HttpsError(
+            "failed-precondition",
+            "Manual games do not have a provider result to refresh.",
+          );
+        }
+        continue;
+      }
+      const query = selectedGameToQuery(
+        game,
+        input.forceRefresh,
+        timezone,
+        provider,
+      );
       const key = sha256({
         provider,
-        sportCode: query.sportCode,
-        leagueCode: query.leagueCode,
-        providerLeagueId: query.providerLeagueId,
-        season: query.season,
-        timezone: query.timezone,
+        ...providerQueryCacheIdentity(provider, query),
         forceRefresh: query.forceRefresh === true,
       });
       const group = groups.get(key) ?? {query, documents: []};
@@ -1937,8 +1996,13 @@ export async function refreshWeekGames(input: {
         );
       }
       const provider = await getProvider(providerName as ProviderName);
-      for (let offset = 0; offset < group.documents.length; offset += 20) {
-        const documents = group.documents.slice(offset, offset + 20);
+      const maximumIds = selectedGameRefreshMaximumIds(provider);
+      for (
+        let offset = 0;
+        offset < group.documents.length;
+        offset += maximumIds
+      ) {
+        const documents = group.documents.slice(offset, offset + maximumIds);
         let refreshed: CachedGamesResult;
         try {
           refreshed = await fetchGamesByIdsWithCache(
@@ -1964,7 +2028,26 @@ export async function refreshWeekGames(input: {
             String(current.providerGameId),
           );
           if (providerUpdate === undefined) continue;
-          const currentGame = normalizedGameSchema.parse(current);
+          const currentGame = normalizedGameSchema.parse({
+            ...current,
+            scheduledAtUtc: asDate(
+              current.scheduledAtUtc,
+              "scheduledAtUtc",
+            ),
+            publishedScheduledAtUtc: asDate(
+              current.publishedScheduledAtUtc,
+              "publishedScheduledAtUtc",
+            ),
+            effectiveLockAtUtc: asDate(
+              current.effectiveLockAtUtc,
+              "effectiveLockAtUtc",
+            ),
+            providerLastUpdatedAt: asDate(
+              current.providerLastUpdatedAt,
+              "providerLastUpdatedAt",
+            ),
+            lastSyncedAt: asDate(current.lastSyncedAt, "lastSyncedAt"),
+          });
           const next = preserveSelectedGameParticipants(
             currentGame,
             providerUpdate,
@@ -2029,9 +2112,16 @@ export async function refreshWeekGames(input: {
       leagueId: input.leagueId,
       eventType: "provider_results_synced",
       actorUid: input.actorUid,
-      target: `weeks/${input.weekId}/games`,
+      target:
+        input.gameId === undefined
+          ? `weeks/${input.weekId}/games`
+          : `weeks/${input.weekId}/games/${input.gameId}`,
       requestId: input.requestId,
-      after: {updatedGameCount, delayed},
+      after: {
+        updatedGameCount,
+        delayed,
+        gameId: input.gameId ?? null,
+      },
     });
     return {updatedGameCount, delayed};
   } finally {
@@ -2578,13 +2668,137 @@ export async function revealLockedPicks(input: {
   };
 }
 
+export type OverrideGameStatus =
+  | "scheduled"
+  | "delayed"
+  | "postponed"
+  | "suspended"
+  | "final"
+  | "void"
+  | "reviewRequired";
+
+export type ResolvedGameOverride = {
+  scheduledAtUtc: Date;
+  publishedScheduledAtUtc: Date;
+  effectiveLockAtUtc: Date;
+  status: OverrideGameStatus;
+  homeScore: number | null;
+  awayScore: number | null;
+  winnerTeamId: string | null;
+  resultVersion: string;
+};
+
+export const MAX_GAME_RESCHEDULE_OFFSET_MS = 366 * 24 * 60 * 60 * 1000;
+
+export function resolveGameOverride(input: {
+  currentScheduledAtUtc: Date;
+  currentPublishedScheduledAtUtc: Date;
+  currentEffectiveLockAtUtc: Date;
+  homeTeamId: string;
+  awayTeamId: string;
+  scheduledAtUtc?: Date;
+  status: OverrideGameStatus;
+  homeScore: number | null;
+  awayScore: number | null;
+  winnerTeamId: string | null;
+}): ResolvedGameOverride {
+  const scheduledAtUtc = input.scheduledAtUtc ?? input.currentScheduledAtUtc;
+  if (
+    Number.isNaN(scheduledAtUtc.valueOf()) ||
+    Number.isNaN(input.currentPublishedScheduledAtUtc.valueOf()) ||
+    Number.isNaN(input.currentEffectiveLockAtUtc.valueOf()) ||
+    (input.scheduledAtUtc !== undefined &&
+      Math.abs(
+        scheduledAtUtc.valueOf() -
+          input.currentPublishedScheduledAtUtc.valueOf(),
+      ) > MAX_GAME_RESCHEDULE_OFFSET_MS)
+  ) {
+    throw new HttpsError(
+      "invalid-argument",
+      "The corrected game time is outside the permitted reschedule window.",
+    );
+  }
+  for (const score of [input.homeScore, input.awayScore]) {
+    if (score !== null && (!Number.isInteger(score) || score < 0)) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Game scores must be non-negative integers.",
+      );
+    }
+  }
+  const validTeamIds = [input.homeTeamId, input.awayTeamId];
+  if (input.status === "final") {
+    const expectedWinnerTeamId =
+      input.homeScore !== null &&
+      input.awayScore !== null &&
+      input.homeScore !== input.awayScore
+        ? input.homeScore > input.awayScore
+          ? input.homeTeamId
+          : input.awayTeamId
+        : null;
+    if (
+      input.homeScore === null ||
+      input.awayScore === null ||
+      input.homeScore === input.awayScore ||
+      input.winnerTeamId === null ||
+      !validTeamIds.includes(input.winnerTeamId) ||
+      input.winnerTeamId !== expectedWinnerTeamId
+    ) {
+      throw new HttpsError(
+        "invalid-argument",
+        "A final result needs non-tied scores and the matching winning team.",
+      );
+    }
+  } else if (input.status === "reviewRequired") {
+    if (input.winnerTeamId !== null) {
+      throw new HttpsError(
+        "invalid-argument",
+        "A review-required game cannot have a winner.",
+      );
+    }
+  } else if (
+    input.homeScore !== null ||
+    input.awayScore !== null ||
+    input.winnerTeamId !== null
+  ) {
+    throw new HttpsError(
+      "invalid-argument",
+      "This game status cannot carry scores or a winner.",
+    );
+  }
+
+  const effectiveLockAtUtc =
+    input.scheduledAtUtc !== undefined &&
+    input.scheduledAtUtc < input.currentEffectiveLockAtUtc
+      ? input.scheduledAtUtc
+      : input.currentEffectiveLockAtUtc;
+  const resultVersion = resultVersionFor({
+    status: input.status,
+    homeScore: input.homeScore,
+    awayScore: input.awayScore,
+    winnerTeamId: input.winnerTeamId,
+    manualOverride: true,
+  });
+  return {
+    scheduledAtUtc,
+    publishedScheduledAtUtc: input.currentPublishedScheduledAtUtc,
+    effectiveLockAtUtc,
+    status: input.status,
+    homeScore: input.homeScore,
+    awayScore: input.awayScore,
+    winnerTeamId: input.winnerTeamId,
+    resultVersion,
+  };
+}
+
 export async function overrideResult(input: {
   leagueId: string;
   weekId: string;
   gameId: string;
   actorUid: string;
   requestId: string;
-  status: "final" | "void" | "reviewRequired";
+  scheduledAtUtc?: Date;
+  status: OverrideGameStatus;
   homeScore: number | null;
   awayScore: number | null;
   winnerTeamId: string | null;
@@ -2606,61 +2820,86 @@ export async function overrideResult(input: {
       if (current === undefined) {
         throw new HttpsError("not-found", "Game not found.");
       }
-      const validTeamIds = [current.homeTeam?.id, current.awayTeam?.id];
-      if (input.status === "final") {
-        const expectedWinnerTeamId =
-          input.homeScore !== null &&
-          input.awayScore !== null &&
-          input.homeScore !== input.awayScore
-            ? input.homeScore > input.awayScore
-              ? current.homeTeam?.id
-              : current.awayTeam?.id
-            : null;
-        if (
-          input.homeScore === null ||
-          input.awayScore === null ||
-          input.homeScore === input.awayScore ||
-          input.winnerTeamId === null ||
-          !validTeamIds.includes(input.winnerTeamId) ||
-          input.winnerTeamId !== expectedWinnerTeamId
-        ) {
-          throw new HttpsError(
-            "invalid-argument",
-            "A final result needs non-tied scores and the matching winning team.",
-          );
-        }
-      } else if (input.winnerTeamId !== null) {
+      const weekData = week.data();
+      const homeTeamId = current.homeTeam?.id;
+      const awayTeamId = current.awayTeam?.id;
+      if (
+        weekData === undefined ||
+        typeof homeTeamId !== "string" ||
+        typeof awayTeamId !== "string"
+      ) {
         throw new HttpsError(
-          "invalid-argument",
-          "Void or review-required games cannot have a winner.",
+          "failed-precondition",
+          "The stored game cannot be safely overridden.",
         );
       }
-      const resultVersion = resultVersionFor({
+      const resolved = resolveGameOverride({
+        currentScheduledAtUtc: asDate(
+          current.scheduledAtUtc,
+          "scheduledAtUtc",
+        ),
+        currentPublishedScheduledAtUtc: asDate(
+          current.publishedScheduledAtUtc,
+          "publishedScheduledAtUtc",
+        ),
+        currentEffectiveLockAtUtc: asDate(
+          current.effectiveLockAtUtc,
+          "effectiveLockAtUtc",
+        ),
+        homeTeamId,
+        awayTeamId,
+        ...(input.scheduledAtUtc === undefined
+          ? {}
+          : {scheduledAtUtc: input.scheduledAtUtc}),
         status: input.status,
         homeScore: input.homeScore,
         awayScore: input.awayScore,
         winnerTeamId: input.winnerTeamId,
-        manualOverride: true,
       });
+      const changedAt = Timestamp.now();
       transaction.update(gameReference, {
-        status: input.status,
-        homeScore: input.homeScore,
-        awayScore: input.awayScore,
-        winnerTeamId: input.winnerTeamId,
+        scheduledAtUtc: Timestamp.fromDate(resolved.scheduledAtUtc),
+        effectiveLockAtUtc: Timestamp.fromDate(resolved.effectiveLockAtUtc),
+        status: resolved.status,
+        statusDetail: null,
+        homeScore: resolved.homeScore,
+        awayScore: resolved.awayScore,
+        winnerTeamId: resolved.winnerTeamId,
         manualOverride: true,
         manualOverrideReason: input.reason,
         manualOverrideBy: input.actorUid,
-        resultVersion,
-        providerLastUpdatedAt: FieldValue.serverTimestamp(),
-        lastSyncedAt: FieldValue.serverTimestamp(),
+        resultVersion: resolved.resultVersion,
+        providerLastUpdatedAt: changedAt,
+        lastSyncedAt: changedAt,
       });
       transaction.update(reference, {
         gameResultsVersion: FieldValue.increment(1),
         resultMutationHeartbeatAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       });
-      return {current, resultVersion};
+      return {current, resolved, changedAt};
     });
+    const beforeScheduledAt = asDate(
+      mutation.current.scheduledAtUtc,
+      "scheduledAtUtc",
+    );
+    const beforePublishedScheduledAt = asDate(
+      mutation.current.publishedScheduledAtUtc,
+      "publishedScheduledAtUtc",
+    );
+    const beforeEffectiveLockAt = asDate(
+      mutation.current.effectiveLockAtUtc,
+      "effectiveLockAtUtc",
+    );
+    const beforeProviderUpdatedAt = asDate(
+      mutation.current.providerLastUpdatedAt,
+      "providerLastUpdatedAt",
+    );
+    const beforeSyncedAt = asDate(
+      mutation.current.lastSyncedAt,
+      "lastSyncedAt",
+    );
+    const changedAt = mutation.changedAt.toDate().toISOString();
     await writeAudit({
       leagueId: input.leagueId,
       eventType: input.status === "void" ? "game_voided" : "game_overridden",
@@ -2669,22 +2908,42 @@ export async function overrideResult(input: {
       requestId: input.requestId,
       reason: input.reason,
       before: {
+        scheduledAtUtc: beforeScheduledAt.toISOString(),
+        publishedScheduledAtUtc: beforePublishedScheduledAt.toISOString(),
+        effectiveLockAtUtc: beforeEffectiveLockAt.toISOString(),
         status: mutation.current.status,
+        statusDetail: mutation.current.statusDetail ?? null,
         homeScore: mutation.current.homeScore,
         awayScore: mutation.current.awayScore,
         winnerTeamId: mutation.current.winnerTeamId,
+        manualOverride: mutation.current.manualOverride === true,
+        manualOverrideReason: mutation.current.manualOverrideReason ?? null,
+        manualOverrideBy: mutation.current.manualOverrideBy ?? null,
         resultVersion: mutation.current.resultVersion,
+        providerLastUpdatedAt: beforeProviderUpdatedAt.toISOString(),
+        lastSyncedAt: beforeSyncedAt.toISOString(),
       },
       after: {
-        status: input.status,
-        homeScore: input.homeScore,
-        awayScore: input.awayScore,
-        winnerTeamId: input.winnerTeamId,
-        resultVersion: mutation.resultVersion,
+        scheduledAtUtc: mutation.resolved.scheduledAtUtc.toISOString(),
+        publishedScheduledAtUtc:
+          mutation.resolved.publishedScheduledAtUtc.toISOString(),
+        effectiveLockAtUtc:
+          mutation.resolved.effectiveLockAtUtc.toISOString(),
+        status: mutation.resolved.status,
+        statusDetail: null,
+        homeScore: mutation.resolved.homeScore,
+        awayScore: mutation.resolved.awayScore,
+        winnerTeamId: mutation.resolved.winnerTeamId,
+        manualOverride: true,
+        manualOverrideReason: input.reason,
+        manualOverrideBy: input.actorUid,
+        resultVersion: mutation.resolved.resultVersion,
+        providerLastUpdatedAt: changedAt,
+        lastSyncedAt: changedAt,
       },
     });
     await gradeWeek(input.leagueId, input.weekId);
-    return {resultVersion: mutation.resultVersion};
+    return {resultVersion: mutation.resolved.resultVersion};
   } finally {
     await releaseResultMutationClaim(reference, claimId);
   }

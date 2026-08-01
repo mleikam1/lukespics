@@ -10,7 +10,7 @@ league rules and display names.
 | `leagues/{leagueId}/members/{uid}` | League-safe profile, role/status, rotation order | Active members read |
 | `leagues/{leagueId}/private/invite` | Hashed invite configuration | Server only |
 | `leagues/{leagueId}/weeks/{weekId}` | Explicit week, picker, snapshots, status, winners | Active members read |
-| `.../weeks/{weekId}/games/{gameId}` | Canonical selected-game snapshot and result | Active members read; server writes |
+| `.../weeks/{weekId}/games/{gameId}` | Canonical selected-game snapshot and result | While the week is `draft`: assigned picker and owner/commissioner only; afterward active members read; server writes |
 | `.../weeks/{weekId}/entries/{uid}` | Public completion and graded summary | Active members read; server writes |
 | `.../entries/{uid}/picks/{gameId}` | Private pre-lock team choice | Matching entry user (`uid`) only before lock; arena owners/commissioners denied |
 | `.../weeks/{weekId}/reveals/{gameId}/picks/{uid}` | Post-lock reveal copy | Members after server reveal |
@@ -24,6 +24,7 @@ league rules and display names.
 | `providerManualRefreshLimits/{id}` | Server-side manual refresh throttle | Server only |
 | `joinCodeMappings/{hash}` | Non-queryable join lookup | Server only |
 | `joinAttemptLimits/{id}` | Hashed join-attempt throttle state | Server only |
+| `systemConfig/espnCatalog` | Default-off ESPN activation and fail-closed presentation policy | Server only |
 | `systemConfig/apiSportsCatalog` | Validated API-Sports leagues and fail-closed presentation policy | Server only |
 | `systemConfig/theSportsDbTestCatalog` | Emulator/internal-test provider catalog | Server only |
 | `systemConfig/{id}` | Other server-only runtime configuration | Server only |
@@ -33,13 +34,17 @@ league rules and display names.
 The game snapshot includes `provider`, `providerGameId`, canonical
 `providerLeagueId`, sport/league/season, optional round, scheduled/published/lock
 timestamps, venue/neutral status, typed teams, normalized status,
-scores/winner, provider and sync timestamps, override data, result version, and
-source payload hash. The provider league ID and season are persisted so later
+status detail, scores/winner, broadcast/event detail, provider raw-schema
+version, provider and sync timestamps, override data, result version, and source
+payload hash. Teams may include a normalized color and a rights-gated remote
+logo URL. The provider league ID and season are persisted so later
 result refresh can reproduce the exact provider query without guessing from a
 display league code.
 
-Canonical IDs use `{provider}:{sportCode}:{providerGameId}`. Lock timestamps are
-monotonic once the server has locked or revealed the game.
+Canonical IDs use `{provider}:{sportCode}:{providerGameId}`. ESPN documents use
+`espn:{sportCode}:{eventId}`; the ESPN event ID, not team names and date, keeps
+doubleheaders and rescheduled games distinct. Lock timestamps are monotonic once
+the server has locked or revealed the game.
 
 Catalog documents are not week selections. Draft save validates their
 eligibility, then writes a week-owned canonical snapshot. Deselecting a draft
@@ -82,6 +87,39 @@ arrives before the final standings-query event still cannot reveal a partial
 generation. Rebuilds delete obsolete standing documents under the same fence.
 
 ## Provider catalog configuration
+
+`systemConfig/espnCatalog` is read only by trusted Functions through the Admin
+SDK. The exact activation shape is intentionally small:
+
+- `enabled`: must be exactly `true`, in addition to the default-false
+  `ALLOW_ESPN_PROVIDER` deploy flag and exact-production-project check;
+- `authorizationReference`: a bounded, non-secret identifier for the retained
+  written-authorization/legal approval record;
+- `authorizationReviewedAt`: the ISO review date for that record; and
+- `presentation`: optional fail-closed attribution and remote-logo policy with
+  `attributionText`, `allowRemoteLogos`, and `logoRightsReviewDate`. The adapter,
+  not Firestore, fixes the only eligible logo hostname to `a.espncdn.com` and
+  rejects every query parameter.
+
+The eight sport/league identities, ESPN slugs, optional query parameters, tie
+behavior, and enabled defaults are centralized in static server code rather
+than accepted from Firestore or Flutter. A missing, disabled, malformed, or
+logo-policy-incomplete document leaves the adapter unavailable or remote logos
+off. Firestore rules deny all client reads and writes. Creating or enabling the
+document is a separately authorized production write and must not occur before
+written ESPN/Disney authorization and legal/product approval. Store only the
+bounded reference and date—not secret values or the authorization/legal
+document contents.
+
+The catalog/cache documents store normalized Luke's Picks data, timestamps, a
+content hash, and only bounded diagnostics—not an unrestricted raw ESPN payload.
+The raw provider schema is never copied to Flutter. Cache keys include provider,
+canonical league identity, date window, and arena timezone; canonical catalog
+eligibility documents are server-only and are snapshotted into a week only
+after the picker selects them.
+
+The older `systemConfig/apiSportsCatalog` contract remains documented below as
+a dormant replaceable-provider option; it is not the ESPN activation document.
 
 `systemConfig/apiSportsCatalog` is read only by trusted Functions through the
 Admin SDK. Firestore rules deny all client reads and writes. Its implemented

@@ -46,18 +46,18 @@ void main() {
       );
     });
 
-    test('blocks ESPN hosts even when a caller allowlists one', () {
-      const mistakenPolicy = TeamLogoPolicy.provider(
-        provider: 'testProvider',
+    test('permits a provider host only when it is explicitly allowlisted', () {
+      const reviewedPolicy = TeamLogoPolicy.provider(
+        provider: 'espn',
         logoRightsVerified: true,
         allowedHosts: {'a.espncdn.com'},
       );
 
       expect(
-        mistakenPolicy.permittedUri(
+        reviewedPolicy.permittedUri(
           Uri.parse('https://a.espncdn.com/i/teamlogos/harbor.png'),
         ),
-        isNull,
+        isNotNull,
       );
     });
 
@@ -125,22 +125,14 @@ void main() {
     for (final blockedCase in <(String, String)>[
       ('HTTP', 'http://logos.example.test/team/harbor.png'),
       ('disallowed host', 'https://other.example.test/team/harbor.png'),
-      ('ESPN host', 'https://a.espncdn.com/i/teamlogos/harbor.png'),
     ]) {
       testWidgets('${blockedCase.$1} logo falls back without loading it', (
         tester,
       ) async {
-        final policy = blockedCase.$1 == 'ESPN host'
-            ? const TeamLogoPolicy.provider(
-                provider: 'testProvider',
-                logoRightsVerified: true,
-                allowedHosts: {'a.espncdn.com'},
-              )
-            : permittedPolicy;
         await _pumpBadge(
           tester,
           team: _team(logoUrl: blockedCase.$2),
-          policy: policy,
+          policy: permittedPolicy,
         );
 
         expect(find.text('HH'), findsOneWidget);

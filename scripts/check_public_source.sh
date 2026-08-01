@@ -97,12 +97,77 @@ if ! grep -Fq "defaultValue: true" lib/app/build_profile.dart ||
   exit 1
 fi
 
-if grep -REqi \
-  'wingman-interactive-live|site\.api\.espn\.com|site\.web\.api\.espn\.com|https?://[^[:space:]"'\'']*(espn\.com|espncdn\.com)' \
-  "$options_file" lib web functions/src; then
-  echo "Forbidden project or ESPN host detected in runtime source." >&2
-  exit 1
-fi
+node - <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const allowedEspnProvider = path.resolve("functions/src/providers/espn.ts");
+const allowedEspnProviderHosts = new Map([
+  ["site.api.espn.com", "https://site.api.espn.com"],
+  ["a.espncdn.com", "a.espncdn.com"],
+  ["espn.com", "espn.com"],
+  ["espncdn.com", "espncdn.com"],
+]);
+const runtimeRoots = [
+  path.resolve("lib"),
+  path.resolve("web"),
+  path.resolve("functions/src"),
+];
+const files = [];
+
+function visit(candidate) {
+  const stat = fs.statSync(candidate);
+  if (stat.isDirectory()) {
+    for (const entry of fs.readdirSync(candidate)) {
+      visit(path.join(candidate, entry));
+    }
+    return;
+  }
+  if (stat.isFile()) files.push(candidate);
+}
+
+for (const root of runtimeRoots) visit(root);
+
+const violations = [];
+const espnHostToken = /[A-Za-z0-9.-]*(?:espn\.com|espncdn\.com)[A-Za-z0-9.-]*/gi;
+function isExactQuotedLiteral(source, hostIndex, host, expectedValue) {
+  const hostOffset = expectedValue.indexOf(host);
+  const literalStart = hostIndex - hostOffset - 1;
+  if (literalStart < 0) return false;
+  return ["\"", "'", "`"].some((quote) =>
+    source.slice(literalStart, literalStart + expectedValue.length + 2) ===
+      `${quote}${expectedValue}${quote}`,
+  );
+}
+
+for (const file of files) {
+  const source = fs.readFileSync(file, "utf8");
+  if (source.includes("wingman-interactive-live")) {
+    violations.push(`${path.relative(process.cwd(), file)}: forbidden project`);
+  }
+  for (const match of source.matchAll(espnHostToken)) {
+    const host = match[0].toLowerCase();
+    const expectedValue = allowedEspnProviderHosts.get(host);
+    const isReviewedLiteral =
+      match.index !== undefined &&
+      expectedValue !== undefined &&
+      isExactQuotedLiteral(source, match.index, host, expectedValue);
+    if (
+      file !== allowedEspnProvider ||
+      expectedValue === undefined ||
+      !isReviewedLiteral
+    ) {
+      violations.push(
+        `${path.relative(process.cwd(), file)}: unapproved ESPN runtime host`,
+      );
+    }
+  }
+}
+
+if (violations.length > 0) {
+  throw new Error(`Runtime source policy failed:\n${violations.join("\n")}`);
+}
+NODE
 
 if grep -Eqi \
   'firebase(-app)?\.(initializeApp|initialize_app)|initializeApp[[:space:]]*\(' \

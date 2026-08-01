@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/domain/game_presentation.dart';
 import '../../core/domain/league_time.dart';
 import '../../core/responsive/breakpoints.dart';
 import '../../core/widgets/catalog_logo_policy.dart';
@@ -247,6 +248,7 @@ class _ReviewGameCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final detail = gameDetailSummary(game);
     return SectionCard(
       padding: const EdgeInsets.all(16),
       child: Row(
@@ -276,6 +278,19 @@ class _ReviewGameCard extends StatelessWidget {
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
+                if (detail != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    detail,
+                    key: Key('review-game-context-${game.id}'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

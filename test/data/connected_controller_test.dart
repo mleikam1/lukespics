@@ -300,6 +300,126 @@ void main() {
     },
   );
 
+  test('ordinary member never watches games while the week is draft', () async {
+    when(() => user.uid).thenReturn('member');
+    when(() => user.displayName).thenReturn('Connected Member');
+    _stubArena(
+      repository,
+      catalogGames: const [],
+      selectedGames: const [],
+      weekStatus: 'draft',
+      memberUid: 'member',
+      memberRole: LeagueRole.member,
+      pickerUid: 'picker',
+    );
+    when(
+      () => repository.watchWeekGames('league-1', 'week-0001'),
+    ).thenThrow(StateError('Draft games are not readable by this member.'));
+
+    final controller = AppController.connected(
+      runtimeMode: AppRuntimeMode.firebaseEmulator,
+      repository: repository,
+      auth: auth,
+    );
+    addTearDown(controller.dispose);
+    await _flush();
+
+    expect(await controller.joinArena('ABC12345'), isTrue);
+    await _flush();
+
+    expect(controller.weekStatus, 'draft');
+    expect(controller.canDraftSlate, isFalse);
+    expect(controller.selectedWeekGames, isEmpty);
+    expect(controller.offline, isFalse);
+    expect(controller.errorMessage, isNull);
+    expect(await controller.watchGamesForWeek('week-0001').first, isEmpty);
+    verifyNever(() => repository.watchWeekGames('league-1', 'week-0001'));
+  });
+
+  test(
+    'ordinary member starts one game stream when a draft publishes',
+    () async {
+      when(() => user.uid).thenReturn('member');
+      when(() => user.displayName).thenReturn('Connected Member');
+      var currentWeek = _weekSummary(pickerUid: 'picker', status: 'draft');
+      late StreamController<WeekSummary?> weeks;
+      weeks = StreamController<WeekSummary?>.broadcast(
+        onListen: () => scheduleMicrotask(() {
+          if (!weeks.isClosed) weeks.add(currentWeek);
+        }),
+      );
+      final games = StreamController<List<Game>>.broadcast();
+      addTearDown(() async {
+        await Future.wait([weeks.close(), games.close()]);
+      });
+      _stubArena(
+        repository,
+        catalogGames: const [],
+        selectedGames: const [],
+        weekStatus: 'draft',
+        memberUid: 'member',
+        memberRole: LeagueRole.member,
+        pickerUid: 'picker',
+        weekStream: weeks.stream,
+      );
+      var published = false;
+      var gameWatchCount = 0;
+      when(() => repository.watchWeekGames('league-1', 'week-0001')).thenAnswer(
+        (_) {
+          if (!published) {
+            throw StateError('Draft games are not readable by this member.');
+          }
+          gameWatchCount += 1;
+          return games.stream;
+        },
+      );
+
+      final controller = AppController.connected(
+        runtimeMode: AppRuntimeMode.firebaseEmulator,
+        repository: repository,
+        auth: auth,
+      );
+      addTearDown(controller.dispose);
+      await _flush();
+      expect(await controller.joinArena('ABC12345'), isTrue);
+      await _flush();
+      expect(gameWatchCount, 0);
+      expect(controller.errorMessage, isNull);
+
+      final publishedGame = _game(
+        'newly-published-game',
+        const Duration(days: 1),
+      );
+      published = true;
+      currentWeek = _weekSummary(
+        pickerUid: 'picker',
+        status: 'open',
+        selectedGameCount: 1,
+      );
+      weeks.add(currentWeek);
+      await _flush();
+      expect(gameWatchCount, 1);
+      expect(games.hasListener, isTrue);
+
+      games.add([publishedGame]);
+      await _flush();
+      expect(controller.selectedWeekGames, [publishedGame]);
+
+      weeks.add(currentWeek);
+      weeks.add(currentWeek);
+      await _flush();
+      expect(gameWatchCount, 1);
+
+      currentWeek = _weekSummary(pickerUid: 'picker', status: 'draft');
+      weeks.add(currentWeek);
+      await _flush();
+      expect(games.hasListener, isFalse);
+      expect(controller.selectedWeekGames, isEmpty);
+      expect(controller.offline, isFalse);
+      expect(controller.errorMessage, isNull);
+    },
+  );
+
   test('published week rejects a late draft catalog presentation', () async {
     var currentWeek = _weekSummary();
     late StreamController<WeekSummary?> weeks;
@@ -698,11 +818,13 @@ void main() {
     expect(weekTwo.hasListener, isFalse);
     expect(weekTwoGames.hasListener, isFalse);
     expect(weekThree.hasListener, isTrue);
-    expect(weekThreeGames.hasListener, isTrue);
+    expect(weekThreeGames.hasListener, isFalse);
     final newestGame = _game('week-three-game', const Duration(days: 3));
     weekThree.add(
       _weekSummary(id: 'week-0003', sequentialNumber: 3, status: 'open'),
     );
+    await _flush();
+    expect(weekThreeGames.hasListener, isTrue);
     weekThreeGames.add([newestGame]);
     await _flush();
     expect(controller.weekLabel, 'Week 3');
@@ -1591,6 +1713,58 @@ void main() {
     },
   );
 
+  test(
+    'private pick stream retains the authoritative graded outcome',
+    () async {
+      final scheduledGame = _game('graded-pick', const Duration(days: -1));
+      final game = scheduledGame.copyWith(
+        status: GameStatus.finalStatus,
+        homeScore: 4,
+        awayScore: 2,
+        winnerTeamId: scheduledGame.homeTeam.id,
+        resultVersion: 3,
+      );
+      final pick = Pick(
+        gameId: game.id,
+        selectedTeamId: game.homeTeam.id,
+        selectedAt: game.scheduledAtUtc.subtract(const Duration(hours: 2)),
+        updatedAt: game.scheduledAtUtc,
+        serverConfirmedAt: game.scheduledAtUtc.subtract(
+          const Duration(hours: 2),
+        ),
+        lockAtSnapshot: game.effectiveLockAtUtc,
+        lockedAt: game.effectiveLockAtUtc,
+        outcome: PickOutcome.correct,
+        points: 1,
+        outcomeVersion: 3,
+      );
+      _stubArena(
+        repository,
+        catalogGames: const [],
+        selectedGames: [game],
+        weekStatus: 'review',
+        ownPicks: [pick],
+      );
+      when(
+        () => repository.watchRevealedPicks('league-1', 'week-0001', game.id),
+      ).thenAnswer((_) => Stream.value(const <RevealedPick>[]));
+
+      final controller = AppController.connected(
+        runtimeMode: AppRuntimeMode.firebaseEmulator,
+        repository: repository,
+        auth: auth,
+      );
+      addTearDown(controller.dispose);
+      await _flush();
+      expect(await controller.joinArena('ABC12345'), isTrue);
+      await _flush();
+
+      expect(controller.pickFor(game.id), same(pick));
+      expect(controller.pickFor(game.id)?.outcome, PickOutcome.correct);
+      expect(controller.pickFor(game.id)?.outcomeVersion, 3);
+    },
+  );
+
   test('reveal processing hydrates even with a stale client lock', () async {
     // The callable is authoritative. The browser may still hold the pre-lock
     // game snapshot for a moment when the server has already revealed it.
@@ -1874,6 +2048,101 @@ void main() {
     expect(requestIds.toSet(), hasLength(1));
     expect(requestIds.first, matches(RegExp(r'^[A-Za-z0-9_-]{8,128}$')));
   });
+
+  test('scoped refresh retains the authoritative delayed result', () async {
+    final game = _game('refresh-game', const Duration(hours: 2));
+    _stubArena(
+      repository,
+      catalogGames: const [],
+      selectedGames: [game],
+      weekStatus: 'open',
+    );
+    const refreshResult = RefreshResult(updatedGameCount: 0, delayed: true);
+    when(
+      () => repository.refreshSelectedGames(
+        leagueId: 'league-1',
+        weekId: 'week-0001',
+        forceRefresh: true,
+        gameId: game.id,
+      ),
+    ).thenAnswer((_) async => refreshResult);
+    final controller = AppController.connected(
+      runtimeMode: AppRuntimeMode.firebaseEmulator,
+      repository: repository,
+      auth: auth,
+    );
+    addTearDown(controller.dispose);
+    await _flush();
+    expect(await controller.joinArena('ABC12345'), isTrue);
+    await _flush();
+
+    final result = await controller.refreshWeekResults(gameId: game.id);
+
+    expect(result, same(refreshResult));
+    expect(controller.latestRefreshResult, same(refreshResult));
+  });
+
+  test('non-final override clears scores and forwards corrected UTC', () async {
+    final scheduled = _game('override-game', const Duration(hours: 2));
+    final game = scheduled.copyWith(
+      status: GameStatus.finalStatus,
+      homeScore: 3,
+      awayScore: 1,
+      winnerTeamId: scheduled.homeTeam.id,
+    );
+    final correctedAt = game.scheduledAtUtc.add(const Duration(days: 8));
+    _stubArena(
+      repository,
+      catalogGames: const [],
+      selectedGames: [game],
+      weekStatus: 'open',
+    );
+    when(
+      () => repository.overrideGameResult(
+        leagueId: 'league-1',
+        weekId: 'week-0001',
+        gameId: game.id,
+        status: GameStatus.postponed,
+        homeScore: null,
+        awayScore: null,
+        winnerTeamId: null,
+        reason: 'Official postponement notice',
+        scheduledAtUtc: correctedAt,
+      ),
+    ).thenAnswer((_) async => 'version-2');
+    final controller = AppController.connected(
+      runtimeMode: AppRuntimeMode.firebaseEmulator,
+      repository: repository,
+      auth: auth,
+    );
+    addTearDown(controller.dispose);
+    await _flush();
+    expect(await controller.joinArena('ABC12345'), isTrue);
+    await _flush();
+
+    expect(
+      await controller.recordOverride(
+        game.id,
+        'Official postponement notice',
+        status: GameStatus.postponed,
+        scheduledAtUtc: correctedAt,
+      ),
+      isTrue,
+    );
+    verify(
+      () => repository.overrideGameResult(
+        leagueId: 'league-1',
+        weekId: 'week-0001',
+        gameId: game.id,
+        status: GameStatus.postponed,
+        homeScore: null,
+        awayScore: null,
+        winnerTeamId: null,
+        reason: 'Official postponement notice',
+        scheduledAtUtc: correctedAt,
+      ),
+    ).called(1);
+  });
 }
 
 LeagueSummary _leagueSummary({
@@ -1955,6 +2224,7 @@ void _stubArena(
   Stream<WeekSummary?>? weekStream,
   List<Standing> standings = const <Standing>[],
   Stream<List<Standing>>? standingsStream,
+  List<Pick> ownPicks = const <Pick>[],
 }) {
   final league = leagueSummary ?? _leagueSummary(pickerUid: pickerUid);
   final week =
@@ -2002,7 +2272,7 @@ void _stubArena(
   ).thenAnswer((_) => Stream.value(const <EntrySummary>[]));
   when(
     () => repository.watchOwnPrivatePicks('league-1', 'week-0001'),
-  ).thenAnswer((_) => Stream.value(const <Pick>[]));
+  ).thenAnswer((_) => Stream.value(ownPicks));
   when(
     () => repository.listSportsCatalog(
       leagueId: 'league-1',

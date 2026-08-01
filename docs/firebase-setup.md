@@ -61,31 +61,34 @@ At the 2026-07-30 read-only audit:
   explicit release comparison.
 
 That snapshot is retained for provenance and was superseded by the guarded
-2026-07-30/31 release record below. Do not use it as the current cloud state.
+2026-08-01 release record below. Do not use it as the current cloud state.
 
-## Guarded cloud deployment record — 2026-07-30/31
+## Guarded cloud deployment record — 2026-08-01
 
 | Item | Status |
 |---|---|
 | Required API enablement | Completed for the reviewed 29-Function manifest |
 | `INVITE_CODE_PEPPER` | Secret Manager version 1 created; value never recorded |
-| Rules | Active ruleset `projects/lukes-picks/rulesets/93614c6a-add3-47ad-88df-b9d9e18a00fb` |
-| Rules rollback | Prior ruleset `projects/lukes-picks/rulesets/5628e0a8-ee8b-4dd9-b8c2-5fbac9fd3213` |
+| Rules | Active ruleset `projects/lukes-picks/rulesets/aa52ec56-c549-4e8e-880a-372474e4feeb` |
+| Rules rollback | Prior ruleset `projects/lukes-picks/rulesets/93614c6a-add3-47ad-88df-b9d9e18a00fb` |
 | Indexes | Five composite indexes, all `READY` |
 | 29-function deployment | All 29 `ACTIVE` and Cloud Run ready |
 | Scheduled Function | `scheduledResultSync`, every 30 minutes UTC |
 | Unexpected deletion review | Completed; no unexpected deletion |
 | `connected-picker-flow` preview | <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app> |
-| Preview expiry | Firebase output: `2026-08-07 07:50:46` |
-| Preview bundle | `main.dart.js` SHA-256 `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da` |
-| Preview browser smoke | Google sign-in, reload/session/membership restoration, arena/dashboard, manual catalog, corrected empty state, explicit sign-out, and repeat sign-in passed |
-| Live promotion | Exact preview channel cloned to `lukes-picks:live` at Firebase CLI time `18:10:14` on 2026-07-31 |
+| Preview expiry | Firebase output: `2026-08-08 13:52:18 UTC` |
+| Hosting version | Preview/live both `b58df6678863654a` |
+| Preview bundle | `main.dart.js` SHA-256 `411062a988bf5b8d798b317f118b505966c0d80f9fd07a4f4f4e4762842a1ed6` |
+| Browser lifecycle | Three-user schedule-to-standings flow passed against Firebase emulators and sanitized fixtures |
+| Live promotion | Exact preview channel cloned to `lukes-picks:live` at `2026-08-01T13:52:56.156Z` |
 | Permanent live URLs | <https://lukes-picks.web.app> and <https://lukes-picks.firebaseapp.com>; both HTTP 200 |
-| Live bundle and source | Preview-identical SHA-256 `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`; source commit `c38136070082a0895c6cca0f118841bb0972520e` |
+| Live bundle | Preview-identical SHA-256 `411062a988bf5b8d798b317f118b505966c0d80f9fd07a4f4f4e4762842a1ed6` |
 | Live response verification | CSP, COOP `same-origin-allow-popups`, HSTS, `nosniff`, `SAMEORIGIN`, Permissions Policy, and Referrer Policy present; no preview `noindex` header |
-| Live browser smoke | Desktop and `390x844` phone-size sign-in screen rendered; Privacy, Terms, and Data sources passed; zero warning/error console logs |
+| Current live smoke boundary | HTTP, security headers, and exact bundle identity verified; current browser/authenticated lifecycle not rerun |
 
-The exact preview artifact was promoted to live as recorded above. The
+The exact preview artifact was promoted to live as recorded above. Both
+provider deploy flags remained false, both arenas remained manual, and neither
+provider activation document existed after release. The
 Functions CLI returned exit 1 solely for its post-deployment cleanup-policy
 prompt after all 29 Functions had deployed successfully. Artifact Registry
 repository `gcf-artifacts` has no automatic cleanup policy; that retention/cost
@@ -95,19 +98,22 @@ unreviewed images.
 ## Authentication and platform status
 
 Google sign-in is enabled with the Luke’s Picks public name and configured
-support email. An authenticated popup sign-in succeeded on the preview, and
+support email. On the prior 2026-07-31 artifact, an authenticated popup sign-in
+succeeded on the preview, and
 reload restored the authenticated session and arena membership. Explicit
 sign-out and repeat sign-in also passed. The automated repeat popup was slow to
 settle, but a clean reload restored the authenticated arena without a console
 warning or error.
 
-For live, Firebase configuration was independently verified: authorized domains
+For live, Firebase configuration was independently verified on that prior
+release: authorized domains
 include both `lukes-picks.web.app` and `lukes-picks.firebaseapp.com`, the Google
 provider is enabled/configured, and the auth handlers return HTTP 200. The
 automated in-app browser could not complete the live Google popup. Manual Google
 sign-in on a permanent live URL remains the user handoff check; live
 authenticated smoke is not claimed. The authenticated preview smoke remains
-relevant because the live bundle digest is identical.
+historical only; current live authenticated sign-in was not rerun after the
+2026-08-01 artifact replacement.
 
 The Android debug SHA-1 is registered. The Firebase app IDs and native
 package/bundle identifiers match the checked-in Flutter configuration. Add only
@@ -128,6 +134,12 @@ Never print, retrieve into documentation, or commit the value.
 authorized key and production plan are supplied. API-Sports remains disabled
 until its full gate passes. TheSportsDB test mode does not use production
 Secret Manager and must be rejected by `lukes-picks`.
+
+The ESPN adapter uses no credential, but it remains default-off. It requires
+written authorization plus `ALLOW_ESPN_PROVIDER=true` and an Admin-only
+`systemConfig/espnCatalog` document with `enabled: true`, bounded
+`authorizationReference`, and ISO `authorizationReviewedAt`. Store only the
+approval identifier/date in Firestore, not secret or legal-document contents.
 
 The reviewed 29-export manifest requires only `INVITE_CODE_PEPPER` for the
 invite-code callables. No unavailable API-Sports or CFBD secret is a deployment

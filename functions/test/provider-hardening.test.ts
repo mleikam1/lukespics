@@ -615,12 +615,14 @@ describe("provider runtime policy", () => {
     emulator: false,
     allowTheSportsDbTest: false,
     allowApiSports: false,
+    allowEspn: false,
   };
   const local: ProviderRuntime = {
     projectId: "demo-lukes-picks-local",
     emulator: true,
     allowTheSportsDbTest: false,
     allowApiSports: false,
+    allowEspn: false,
   };
 
   it("defaults arenas to manual and rejects test modes in production", () => {
@@ -1171,10 +1173,13 @@ describe("catalog input and provider response hardening", () => {
     expect(gatewaySource).toContain(
       "cached: cacheFallbackAfterRefreshError(cached, error)",
     );
-    expect(gatewaySource).toContain("baseRequestCount: uniqueIds.length");
     expect(gatewaySource).toContain(
-      "uniqueIds.length * API_SPORTS_MAX_REQUEST_ATTEMPTS",
+      "const estimate = providerRequestEstimate(",
     );
+    expect(gatewaySource).toContain(
+      "baseRequestCount: estimate.baseRequestCount",
+    );
+    expect(gatewaySource).not.toContain("API_SPORTS_MAX_REQUEST_ATTEMPTS");
   });
 
   it("separates cache entries by canonical provider metadata and timezone", () => {
@@ -1210,7 +1215,7 @@ function sourceFiles(directory: string): string[] {
 }
 
 describe("provider source allowlist", () => {
-  it("contains no forbidden broadcaster API or image hosts", () => {
+  it("contains ESPN hosts only in the literal allowlisted adapter", () => {
     const sourceRoot = fileURLToPath(new URL("../src", import.meta.url));
     const broadcasterDomain = ["espn", "com"].join(".");
     const forbiddenHosts = [
@@ -1220,18 +1225,24 @@ describe("provider source allowlist", () => {
     ];
     for (const path of sourceFiles(sourceRoot)) {
       const source = readFileSync(path, "utf8").toLowerCase();
+      if (path.endsWith(join("providers", "espn.ts"))) {
+        expect(source).toContain("https://site.api.espn.com");
+        expect(source).toContain('const espn_logo_host = "a.espncdn.com"');
+        continue;
+      }
       for (const host of forbiddenHosts) {
         expect(source).not.toContain(host);
       }
     }
   });
 
-  it("declares the API-Sports secret and deployable fail-closed flag", () => {
+  it("declares only required secrets and deployable fail-closed flags", () => {
     const configPath = fileURLToPath(new URL("../src/config.ts", import.meta.url));
     const configSource = readFileSync(configPath, "utf8");
-    expect(configSource).toMatch(
+    expect(configSource).not.toMatch(
       /defineSecret\(\s*["']API_SPORTS_KEY["']\s*\)/,
     );
+    expect(configSource).toMatch(/process\.env\.API_SPORTS_KEY/);
     expect(configSource).not.toMatch(/defineSecret\(\s*["']COLLEGE_FOOTBALL_DATA_KEY/);
     expect(configSource).toMatch(
       /defineSecret\(\s*["']INVITE_CODE_PEPPER["']\s*\)/,
@@ -1239,10 +1250,13 @@ describe("provider source allowlist", () => {
     expect(configSource).toMatch(
       /defineBoolean\(\s*["']ALLOW_API_SPORTS_PROVIDER["'][\s\S]*default:\s*false/,
     );
+    expect(configSource).toMatch(
+      /defineBoolean\(\s*["']ALLOW_ESPN_PROVIDER["'][\s\S]*default:\s*false/,
+    );
   });
 
-  it("binds API_SPORTS_KEY only to provider-bearing Functions", () => {
-    const required = new Set([
+  it("does not bind an optional provider secret to generic Functions", () => {
+    const genericFunctions = new Set([
       "listSportsCatalog",
       "refreshSelectedGames",
       "syncSelectedGameResults",
@@ -1261,10 +1275,10 @@ describe("provider source allowlist", () => {
         endpoint?.secretEnvironmentVariables?.map((secret) => secret.key) ?? [],
       );
       if (secrets.has("API_SPORTS_KEY")) observed.add(name);
-      if (!required.has(name)) {
+      if (genericFunctions.has(name)) {
         expect(secrets.has("API_SPORTS_KEY"), name).toBe(false);
       }
     }
-    expect(observed).toEqual(required);
+    expect(observed).toEqual(new Set());
   });
 });

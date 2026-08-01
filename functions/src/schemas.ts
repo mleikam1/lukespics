@@ -27,6 +27,11 @@ export const teamSchema = z.object({
   shortName: z.string().trim().min(1).max(80),
   abbreviation: z.string().trim().min(1).max(12),
   logoUrl: z.url().nullable().default(null),
+  color: z
+    .string()
+    .regex(/^#[0-9a-f]{6}$/)
+    .nullable()
+    .default(null),
 });
 
 export const normalizedGameSchema = z
@@ -42,6 +47,7 @@ export const normalizedGameSchema = z
     leagueCode: idSchema,
     leagueName: z.string().trim().min(1).max(120),
     season: z.string().trim().min(1).max(32),
+    seasonType: z.string().trim().min(1).max(40).nullable().default(null),
     weekOrRound: z.string().trim().max(80).nullable().default(null),
     scheduledAtUtc: dateSchema,
     publishedScheduledAtUtc: dateSchema,
@@ -51,9 +57,13 @@ export const normalizedGameSchema = z
     homeTeam: teamSchema,
     awayTeam: teamSchema,
     status: z.enum(GAME_STATUSES),
+    statusDetail: z.string().trim().max(120).nullable().default(null),
     homeScore: z.number().int().nonnegative().nullable().default(null),
     awayScore: z.number().int().nonnegative().nullable().default(null),
     winnerTeamId: idSchema.nullable().default(null),
+    broadcast: z.string().trim().max(240).nullable().default(null),
+    eventDetail: z.string().trim().max(160).nullable().default(null),
+    rawResponseVersion: z.number().int().positive().max(100).default(1),
     providerLastUpdatedAt: dateSchema,
     lastSyncedAt: dateSchema,
     manualOverride: z.boolean().default(false),
@@ -286,21 +296,80 @@ export const sportsCatalogSchema = providerQuerySchema
     }
   });
 
-export const selectedGamesSchema = weekMutationSchema.extend({
-  forceRefresh: z.boolean().default(false),
-});
+export const selectedGamesSchema = weekMutationSchema
+  .extend({
+    forceRefresh: z.boolean().default(false),
+    gameId: idSchema.optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.gameId !== undefined && !value.forceRefresh) {
+      context.addIssue({
+        code: "custom",
+        path: ["forceRefresh"],
+        message: "A one-game provider refresh must be forced.",
+      });
+    }
+  });
 
 export const gameMutationSchema = weekMutationSchema.extend({
   gameId: idSchema,
 });
 
-export const overrideGameSchema = gameMutationSchema.extend({
-  status: z.enum(["final", "void", "reviewRequired"]),
-  homeScore: z.number().int().nonnegative().nullable(),
-  awayScore: z.number().int().nonnegative().nullable(),
-  winnerTeamId: idSchema.nullable(),
-  reason: z.string().trim().min(10).max(500),
-});
+export const overrideGameSchema = gameMutationSchema
+  .extend({
+    scheduledAtUtc: dateSchema.optional(),
+    status: z.enum([
+      "scheduled",
+      "delayed",
+      "postponed",
+      "suspended",
+      "final",
+      "void",
+      "reviewRequired",
+    ]),
+    homeScore: z.number().int().nonnegative().nullable(),
+    awayScore: z.number().int().nonnegative().nullable(),
+    winnerTeamId: idSchema.nullable(),
+    reason: z.string().trim().min(10).max(500),
+  })
+  .superRefine((value, context) => {
+    if (value.status === "final") {
+      if (
+        value.homeScore === null ||
+        value.awayScore === null ||
+        value.homeScore === value.awayScore ||
+        value.winnerTeamId === null
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["status"],
+          message: "A final override needs non-tied scores and a winner.",
+        });
+      }
+      return;
+    }
+    if (value.status === "reviewRequired") {
+      if (value.winnerTeamId !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["winnerTeamId"],
+          message: "A review-required game cannot have a winner.",
+        });
+      }
+      return;
+    }
+    if (
+      value.homeScore !== null ||
+      value.awayScore !== null ||
+      value.winnerTeamId !== null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["status"],
+        message: "This game status cannot carry scores or a winner.",
+      });
+    }
+  });
 
 export const reasonSchema = weekMutationSchema.extend({
   reason: z.string().trim().min(10).max(500),

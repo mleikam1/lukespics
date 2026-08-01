@@ -6,8 +6,9 @@ import 'ui.dart';
 ///
 /// Server metadata is necessary but never sufficient on its own: the
 /// provider must match the game and the underlying [TeamLogoPolicy] still
-/// enforces HTTPS, exact hosts, safe query keys, and the permanent ESPN deny
-/// list for every individual URL.
+/// enforces HTTPS, exact hosts, and safe query keys for every individual URL.
+/// Provider presentation remains disabled unless the server supplies a
+/// reviewed date and an exact host allowlist.
 TeamLogoPolicy catalogTeamLogoPolicy({
   required CatalogPresentation presentation,
   required Game game,

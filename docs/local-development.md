@@ -80,9 +80,16 @@ a public preview. Rebuild with `flutter build web --release` before running
   fixtures.
 - `apiSports`: server-only and disabled until an existing key and full
   production gate are available.
+- `espn`: server-only, default-off, and fixture-tested only. It requires both
+  `ALLOW_ESPN_PROVIDER=true` and an Admin-owned
+  `systemConfig/espnCatalog` document with `enabled: true`, a bounded
+  authorization reference, and an ISO authorization review date; neither
+  technical gate substitutes for the retained written ESPN/Disney approval.
 
-Do not make live provider calls in CI. Never use ESPN pages or undocumented
-endpoints.
+Do not make live ESPN calls in CI or emulator tests. Use sanitized saved
+fixtures to test league query construction, nullable parsing, status mapping,
+doubleheaders, and normalization. Never use ESPN HTML pages, add arbitrary
+endpoints, put the scoreboard host in Flutter/web code, or inject a user URL.
 
 ## Source and build checks
 
@@ -102,6 +109,12 @@ mode. Generated Firebase client API keys are public app identifiers;
 service-account files, provider keys, private keys, and invite peppers remain
 prohibited.
 
+The source scan allows only the literal `https://site.api.espn.com` scoreboard
+origin and exact `a.espncdn.com` rights-gated logo hostname, both only in
+`functions/src/providers/espn.ts`; every Flutter, web, and other Functions
+source location remains forbidden. The public-build scan continues to reject
+every ESPN host. Do not evade either policy by assembling host strings.
+
 ## Cloud safety
 
 Local development does not need production access. If a read-only cloud check
@@ -109,11 +122,14 @@ is necessary, always include `--project lukes-picks` and never enumerate or
 target unrelated projects.
 
 Only [release_firebase.sh](../scripts/release_firebase.sh) is approved for
-rules/indexes, Functions, and Hosting-preview deployments. It is not a
-development convenience command. A separately authorized prerequisite mutation,
-such as enabling a reviewed API or setting `INVITE_CODE_PEPPER`, must run
-`assert_firebase_project.sh lukes-picks` immediately before its own explicit
-project-targeted write.
+rules/indexes, Functions, Hosting preview, and fixed preview-to-live promotion.
+It is not a development convenience command. Non-interactive production
+Functions deployment requires ignored `functions/.env.lukes-picks` values that
+explicitly pin both provider flags to `false`; never change either to `true`
+without its complete external and technical activation review. A separately
+authorized prerequisite mutation, such as enabling a reviewed API or setting
+`INVITE_CODE_PEPPER`, must run `assert_firebase_project.sh lukes-picks`
+immediately before its own explicit project-targeted write.
 
 ## Historical dependency-advisory snapshot
 

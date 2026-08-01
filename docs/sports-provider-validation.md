@@ -1,5 +1,127 @@
 # Sports provider validation
 
+## ESPN Site API candidate — default-off
+
+Research date: 2026-08-01.
+
+The deployed code isolates the ESPN Site API v2 scoreboard behind the
+server-side provider interface, but the adapter is not production-enabled. On
+2026-08-01 every deployed Function had `ALLOW_ESPN_PROVIDER=false`, both arenas
+remained `manual`, and `systemConfig/espnCatalog` was absent. No live ESPN
+request was made. The reference documentation describes these endpoints as
+unofficial and unsupported, says they may change without notice, and reports no
+official rate limit. There is no SLA, stability commitment, commercial license,
+or logo license associated with unauthenticated technical access.
+
+The applicable Disney terms also restrict commercial/business use and access,
+copying, or extraction by automated means for data mining or compiling a data
+collection/database without express written permission. This repository does
+not interpret a technically public response as that permission. Before any
+production activation, retain written ESPN/Disney authorization that expressly
+covers the intended schedule/result requests, cache, normalized Firestore
+storage, historical snapshots, and commercial distribution, then record legal
+and product approval. Logo use is a separate rights decision.
+
+The only implemented route is:
+
+```text
+GET https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard
+    ?dates=YYYYMMDD[-YYYYMMDD]&{allowlistedLeagueParameters}
+```
+
+No Flutter code constructs this URL or parses ESPN JSON. The server accepts a
+centralized league identity and date, constructs the URL itself, validates the
+response defensively, and returns only the normalized Luke's Picks contract.
+It is not an open proxy and does not scrape HTML.
+
+### Centralized league configuration
+
+The static server catalog is the authority for these eight entries:
+
+| Internal league | ESPN sport/league slugs | Extra query parameters | Ties possible |
+|---|---|---|---|
+| NFL | `football/nfl` | `limit=100` | Yes |
+| MLB | `baseball/mlb` | `limit=100` | No |
+| NBA | `basketball/nba` | `limit=100` | No |
+| NHL | `hockey/nhl` | `limit=100` | No |
+| WNBA | `basketball/wnba` | `limit=100` | No |
+| NCAA football | `football/college-football` | `groups=80`, `limit=500` | No |
+| NCAA men's basketball | `basketball/mens-college-basketball` | `groups=50`, `limit=500` | No |
+| NCAA women's basketball | `basketball/womens-college-basketball` | `groups=50`, `limit=500` | No |
+
+All use date-based scoreboard discovery. League strings, groups, limits, tie
+policy, enabled defaults, and fallback icon policy must be changed in this one
+server catalog and its tests—not in Flutter. A terminal tied response for a
+league configured without ties is anomalous and remains `reviewRequired`; it
+never produces a guessed winner.
+
+### Runtime, cache, and schema gates
+
+`ALLOW_ESPN_PROVIDER` defaults to `false`, applies only to the exact
+`lukes-picks` production runtime, and is insufficient by itself. Trusted code
+also requires `systemConfig/espnCatalog.enabled == true`. The document is
+Admin-only, requires bounded `authorizationReference` and ISO
+`authorizationReviewedAt` metadata identifying the retained approval record,
+and owns fail-closed presentation/logo policy. No secret or legal-document body
+belongs in Firestore. A missing or malformed document keeps the adapter
+unavailable. Both activation gates remain closed until the written-authorization
+gate above passes.
+
+Schedule reads are cache-first and protected by the shared lease, throttling,
+timeout, retry, and circuit-breaker boundary. Valid empty ESPN responses cache
+for 30 minutes. ESPN live games cache for 10 minutes; games within two hours of
+start for 15 minutes; games two to 24 hours out for 30 minutes; farther games
+for one hour; and unresolved anomaly states for one hour. Terminal catalog data is
+retained long-term, while selected terminal games reconcile after 12 hours. A
+bounded refresh failure may return an existing stale cache with an explicit
+stale/delayed indicator.
+The scheduled result sync runs every 30 minutes and refreshes only active
+selected games; a distributed lock prevents overlapping provider work.
+Selected ESPN events are looked up over an inclusive seven-day window from one
+arena-local day before through five days after their stored date. Later moves
+outside that deliberately bounded discovery window require an audited
+commissioner start-time correction or void.
+Adjacent selected-date groups may produce overlapping bounded windows. This is
+a documented request-efficiency limitation, not an authorization bypass: every
+window stays within the reviewed seven-day maximum, shared leases/cache reduce
+duplicates, and the soft request budget still applies.
+
+The adapter allows at most three accounted attempts per scoreboard load, uses
+an eight-second default timeout capped at 15 seconds, rejects redirects and
+responses above 10 MB, and reserves retry budget before retrying. The internal
+`ESPN_SOFT_DAILY_LIMIT` defaults to 500 attempts and is configuration-capped at
+20,000. That is a Luke's Picks safety budget, not a claim about an ESPN limit;
+the external documentation publishes no official rate limit.
+
+Every ESPN event is parsed independently. Missing or malformed nested data must
+not fail the whole schedule: invalid events are skipped with a structured safe
+reason, unknown statuses normalize conservatively, and full payloads are not
+logged or copied to clients. Canonical IDs are
+`espn:{sportCode}:{eventId}`. The event ID distinguishes doubleheaders and
+reschedules. Week games snapshot the normalized fields so provider downtime or
+later schema changes cannot erase a submitted slate.
+
+### Manual activation gate
+
+Before changing either technical gate:
+
+1. retain written authorization and complete legal/product and separate
+   team-mark rights review;
+2. validate all eight live contracts without storing unrestricted payloads;
+3. capture sanitized fixtures for missing fields, status variants, ties,
+   doubleheaders, delays, postponements, cancellations, and finals;
+4. run the full Flutter, Functions, rules, emulator, browser, and source/build
+   scan matrix on the reviewed tree;
+5. inspect and guard the exact `lukes-picks` project immediately before each
+   separately authorized configuration or deployment write; and
+6. deploy to a preview first, verify cache/sync/manual-fallback behavior, and
+   obtain separate authorization for any live promotion.
+
+Rollback begins by setting `ALLOW_ESPN_PROVIDER=false` and returning affected
+arenas to `manual`; disabling the server document is defense in depth. Preserve
+week snapshots and historical scores. Never delete provider cache, slate, pick,
+or standings data as a rollback shortcut.
+
 API-Sports research dates: 2026-07-27 and 2026-07-31.
 
 TheSportsDB internal-path validation date: 2026-07-30.
@@ -184,7 +306,8 @@ authorized fallback without making a production-provider claim.
   in emulators/tests.
 - Serve cached data through quota/provider failures.
 - Permit commissioner manual games and results with audit reasons.
-- Never fall back to undocumented ESPN endpoints or scraping.
+- Use only the reviewed default-off Site API scoreboard adapter after written
+  authorization; never add an undocumented fallback endpoint or scrape HTML.
 - Never expose provider credentials to Flutter clients.
 
 The optional CollegeFootballData research in this document is not a current
@@ -206,6 +329,9 @@ manual-production or TheSportsDB-internal gates above.
 - [x] Verify test badge hosts, fallbacks, and attribution
 
 ## Official sources
+
+- [Unofficial Public ESPN API reference](https://github.com/pseudo-r/Public-ESPN-API)
+- [Disney Terms of Use](https://disneytermsofuse.com/english/)
 
 - [TheSportsDB API guide](https://www.thesportsdb.com/docs_api_guide)
 - [TheSportsDB terms of use](https://www.thesportsdb.com/docs_terms_of_use.php)

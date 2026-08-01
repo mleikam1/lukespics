@@ -157,6 +157,7 @@ void main() {
         required String resultVersion,
         required String sourcePayloadHash,
         required String observedAt,
+        bool includeMetadata = false,
       }) => {
         'id': 'apiSports:baseball:42',
         'provider': 'apiSports',
@@ -166,6 +167,7 @@ void main() {
         'leagueCode': 'mlb',
         'leagueName': 'MLB',
         'season': '2030',
+        if (includeMetadata) 'seasonType': 'Regular Season',
         'scheduledAtUtc': '2030-07-01T18:00:00.000Z',
         'publishedScheduledAtUtc': '2030-07-01T18:00:00.000Z',
         'effectiveLockAtUtc': '2030-07-01T18:00:00.000Z',
@@ -177,6 +179,7 @@ void main() {
           'shortName': 'Home',
           'abbreviation': 'HOM',
           'logoUrl': null,
+          if (includeMetadata) 'color': '#112233',
         },
         'awayTeam': {
           'id': 'away',
@@ -184,14 +187,19 @@ void main() {
           'shortName': 'Away',
           'abbreviation': 'AWY',
           'logoUrl': null,
+          if (includeMetadata) 'color': '#aabbcc',
         },
         'status': 'scheduled',
+        if (includeMetadata) 'statusDetail': 'First pitch delayed',
         'homeScore': null,
         'awayScore': null,
         'winnerTeamId': null,
+        if (includeMetadata) 'broadcast': 'ESPN+',
+        if (includeMetadata) 'eventDetail': 'Doubleheader · Game 2',
         'providerLastUpdatedAt': observedAt,
         'lastSyncedAt': observedAt,
         'resultVersion': resultVersion,
+        if (includeMetadata) 'rawResponseVersion': 2,
         'sourcePayloadHash': sourcePayloadHash,
       };
 
@@ -223,6 +231,7 @@ void main() {
             resultVersion: newerVersion,
             sourcePayloadHash: newerHash,
             observedAt: '2030-06-01T00:02:00.000Z',
+            includeMetadata: true,
           ),
         ),
       );
@@ -257,7 +266,7 @@ void main() {
         leagueId: 'league-1',
         weekId: 'week-0001',
       );
-      await repository.listSportsCatalog(
+      final older = await repository.listSportsCatalog(
         leagueId: 'league-1',
         weekId: 'week-0001',
       );
@@ -274,9 +283,36 @@ void main() {
       );
       expect(newer.games.single.resultVersionToken, newerVersion);
       expect(newer.games.single.providerLeagueId, '4424');
+      expect(newer.games.single.seasonType, 'Regular Season');
+      expect(newer.games.single.statusDetail, 'First pitch delayed');
+      expect(newer.games.single.broadcast, 'ESPN+');
+      expect(newer.games.single.eventDetail, 'Doubleheader · Game 2');
+      expect(newer.games.single.rawResponseVersion, 2);
+      expect(newer.games.single.homeTeam.color, '#112233');
+      expect(newer.games.single.awayTeam.color, '#aabbcc');
+      expect(older.games.single.seasonType, isNull);
+      expect(older.games.single.statusDetail, isNull);
+      expect(older.games.single.broadcast, isNull);
+      expect(older.games.single.eventDetail, isNull);
+      expect(older.games.single.rawResponseVersion, 1);
+      expect(older.games.single.homeTeam.color, isNull);
+      expect(older.games.single.awayTeam.color, isNull);
       expect(serialized['providerLeagueId'], '4424');
       expect(serialized['resultVersion'], newerVersion);
       expect(serialized['sourcePayloadHash'], newerHash);
+      expect(serialized['seasonType'], 'Regular Season');
+      expect(serialized['statusDetail'], 'First pitch delayed');
+      expect(serialized['broadcast'], 'ESPN+');
+      expect(serialized['eventDetail'], 'Doubleheader · Game 2');
+      expect(serialized['rawResponseVersion'], 2);
+      expect(
+        Map<String, Object?>.from(serialized['homeTeam'] as Map)['color'],
+        '#112233',
+      );
+      expect(
+        Map<String, Object?>.from(serialized['awayTeam'] as Map)['color'],
+        '#aabbcc',
+      );
     },
   );
 }

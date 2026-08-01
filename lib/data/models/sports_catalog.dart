@@ -68,7 +68,7 @@ final class CatalogPresentation {
   ///
   /// Presentation metadata is usable only for games from the exact provider
   /// reviewed by the server. The UI's fail-closed URL policy still validates
-  /// HTTPS, the exact host, query parameters, and the permanent ESPN denylist.
+  /// HTTPS, the exact host, and query parameters.
   bool permitsRemoteLogosForProvider(String gameProvider) =>
       allowRemoteLogos &&
       logoRightsReviewDate != null &&

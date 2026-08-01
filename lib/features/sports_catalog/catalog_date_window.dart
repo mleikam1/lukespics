@@ -65,5 +65,21 @@ CatalogDateWindow? catalogDateWindow({
 DateTime catalogCalendarDate(DateTime instant, String timezone) =>
     _calendarDate(inLeagueTimezone(instant.toUtc(), timezone));
 
+DateTime? catalogSteppedDate({
+  required DateTime currentDate,
+  required int dayDelta,
+  required String timezone,
+  required DateTime weekStartAt,
+  required DateTime weekEndAt,
+}) {
+  final first = catalogCalendarDate(weekStartAt, timezone);
+  final last = catalogCalendarDate(weekEndAt, timezone);
+  if (last.isBefore(first)) return null;
+
+  final stepped = _calendarDate(currentDate).add(Duration(days: dayDelta));
+  if (stepped.isBefore(first) || stepped.isAfter(last)) return null;
+  return stepped;
+}
+
 DateTime _calendarDate(DateTime value) =>
     DateTime.utc(value.year, value.month, value.day);

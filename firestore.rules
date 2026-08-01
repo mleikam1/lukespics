@@ -33,6 +33,16 @@ service cloud.firestore {
       return /databases/$(database)/documents/leagues/$(leagueId)/weeks/$(weekId)/games/$(gameId);
     }
 
+    function canReadWeekGames(leagueId, weekId) {
+      return isActiveMember(leagueId)
+        && exists(weekPath(leagueId, weekId))
+        && (
+          get(weekPath(leagueId, weekId)).data.status != "draft"
+          || get(weekPath(leagueId, weekId)).data.pickerUid == request.auth.uid
+          || isLeagueAdmin(leagueId)
+        );
+    }
+
     function entryPath(leagueId, weekId, uid) {
       return /databases/$(database)/documents/leagues/$(leagueId)/weeks/$(weekId)/entries/$(uid);
     }
@@ -106,7 +116,10 @@ service cloud.firestore {
         allow write: if false;
 
         match /games/{gameId} {
-          allow read: if isActiveMember(leagueId);
+          // Draft contents belong only to the assigned picker and arena admins.
+          // Ordinary members gain access when the trusted backend publishes the
+          // week by moving it out of draft status.
+          allow read: if canReadWeekGames(leagueId, weekId);
           allow write: if false;
         }
 

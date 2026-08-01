@@ -19,6 +19,7 @@ final class Team {
     required this.shortName,
     required this.abbreviation,
     this.logoUrl,
+    this.color,
   });
 
   final String id;
@@ -26,6 +27,7 @@ final class Team {
   final String shortName;
   final String abbreviation;
   final Uri? logoUrl;
+  final String? color;
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -33,6 +35,7 @@ final class Team {
     'shortName': shortName,
     'abbreviation': abbreviation,
     'logoUrl': logoUrl?.toString(),
+    'color': color,
   };
 }
 
@@ -46,23 +49,28 @@ final class Game {
     String? providerLeagueId,
     required this.leagueName,
     required this.season,
+    this.seasonType,
     required this.scheduledAtUtc,
     required this.publishedScheduledAtUtc,
     required this.effectiveLockAtUtc,
     required this.homeTeam,
     required this.awayTeam,
     required this.status,
+    this.statusDetail,
     required this.providerLastUpdatedAt,
     required this.lastSyncedAt,
     required this.resultVersion,
     required this.sourcePayloadHash,
     this.resultVersionToken = '',
+    this.rawResponseVersion = 1,
     this.weekOrRound,
     this.venueName,
     this.neutralSite = false,
     this.homeScore,
     this.awayScore,
     this.winnerTeamId,
+    this.broadcast,
+    this.eventDetail,
     this.manualOverride = false,
     this.manualOverrideReason,
     this.manualOverrideBy,
@@ -77,6 +85,7 @@ final class Game {
   final String providerLeagueId;
   final String leagueName;
   final String season;
+  final String? seasonType;
   final String? weekOrRound;
   final DateTime scheduledAtUtc;
   final DateTime publishedScheduledAtUtc;
@@ -86,9 +95,12 @@ final class Game {
   final Team homeTeam;
   final Team awayTeam;
   final GameStatus status;
+  final String? statusDetail;
   final int? homeScore;
   final int? awayScore;
   final String? winnerTeamId;
+  final String? broadcast;
+  final String? eventDetail;
   final DateTime providerLastUpdatedAt;
   final DateTime lastSyncedAt;
   final bool manualOverride;
@@ -102,6 +114,7 @@ final class Game {
   /// comparisons; this token must travel with its own immutable game snapshot
   /// so concurrent repository streams cannot pair versions from two snapshots.
   final String resultVersionToken;
+  final int rawResponseVersion;
   final String sourcePayloadHash;
   final DateTime? pickRevealCompletedAt;
 
@@ -140,12 +153,16 @@ final class Game {
 
   Game copyWith({
     String? providerLeagueId,
+    String? seasonType,
     DateTime? scheduledAtUtc,
     DateTime? effectiveLockAtUtc,
     GameStatus? status,
+    String? statusDetail,
     int? homeScore,
     int? awayScore,
     String? winnerTeamId,
+    String? broadcast,
+    String? eventDetail,
     DateTime? providerLastUpdatedAt,
     DateTime? lastSyncedAt,
     bool? manualOverride,
@@ -153,6 +170,7 @@ final class Game {
     String? manualOverrideBy,
     int? resultVersion,
     String? resultVersionToken,
+    int? rawResponseVersion,
     String? sourcePayloadHash,
     DateTime? pickRevealCompletedAt,
   }) => Game(
@@ -164,6 +182,7 @@ final class Game {
     providerLeagueId: providerLeagueId ?? this.providerLeagueId,
     leagueName: leagueName,
     season: season,
+    seasonType: seasonType ?? this.seasonType,
     weekOrRound: weekOrRound,
     scheduledAtUtc: scheduledAtUtc ?? this.scheduledAtUtc,
     publishedScheduledAtUtc: publishedScheduledAtUtc,
@@ -173,9 +192,12 @@ final class Game {
     homeTeam: homeTeam,
     awayTeam: awayTeam,
     status: status ?? this.status,
+    statusDetail: statusDetail ?? this.statusDetail,
     homeScore: homeScore ?? this.homeScore,
     awayScore: awayScore ?? this.awayScore,
     winnerTeamId: winnerTeamId ?? this.winnerTeamId,
+    broadcast: broadcast ?? this.broadcast,
+    eventDetail: eventDetail ?? this.eventDetail,
     providerLastUpdatedAt: providerLastUpdatedAt ?? this.providerLastUpdatedAt,
     lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
     manualOverride: manualOverride ?? this.manualOverride,
@@ -183,6 +205,7 @@ final class Game {
     manualOverrideBy: manualOverrideBy ?? this.manualOverrideBy,
     resultVersion: resultVersion ?? this.resultVersion,
     resultVersionToken: resultVersionToken ?? this.resultVersionToken,
+    rawResponseVersion: rawResponseVersion ?? this.rawResponseVersion,
     sourcePayloadHash: sourcePayloadHash ?? this.sourcePayloadHash,
     pickRevealCompletedAt: pickRevealCompletedAt ?? this.pickRevealCompletedAt,
   );

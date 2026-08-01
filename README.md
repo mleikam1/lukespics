@@ -5,43 +5,24 @@ designated picker chooses the slate, eligible arena members choose straight-up
 winners, picks stay private until lock, and final results update weekly and
 overall standings.
 
-> Status as of 2026-07-31: the guarded backend release and
-> `connected-picker-flow` Hosting preview were deployed only to the authorized
-> `lukes-picks` project (`271408880910`), and that exact preview channel was
-> cloned to `lukes-picks:live` at Firebase CLI time `18:10:14`. Both permanent
-> URLs, <https://lukes-picks.web.app> and
-> <https://lukes-picks.firebaseapp.com>, returned HTTP 200. The live
-> `main.dart.js` SHA-256 is
-> `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`,
-> identical to the browser-tested preview, from source commit
-> `c38136070082a0895c6cca0f118841bb0972520e`.
+> Status as of 2026-08-01: the reviewed schedule/slate/picks/results release is
+> deployed only to `lukes-picks` (`271408880910`). All 29 Node 22 Functions are
+> active, Firestore uses ruleset
+> `projects/lukes-picks/rulesets/aa52ec56-c549-4e8e-880a-372474e4feeb`, and all
+> five composite indexes are `READY`. The exact
+> `connected-picker-flow` preview was cloned to live as Hosting version
+> `b58df6678863654a`; both permanent URLs return HTTP 200 and serve
+> `main.dart.js` SHA-256
+> `411062a988bf5b8d798b317f118b505966c0d80f9fd07a4f4f4e4762842a1ed6`.
 >
-> Authenticated Google sign-in, reload/session/membership restoration, the
-> arena dashboard, and the manual-catalog empty state passed on the identical
-> preview artifact. Live unauthenticated browser smoke passed on desktop and a
-> `390x844` phone-size viewport, including Privacy, Terms, and Data sources,
-> with zero warning/error console logs. Google Auth is independently verified
-> as enabled/configured, both permanent domains are authorized, and the auth
-> handlers return HTTP 200. The automated in-app browser could not complete the
-> live Google popup, so manual Google sign-in on a permanent live URL remains a
-> user handoff check; live authenticated smoke is not claimed. The implementation
-> was merged in [PR #1](https://github.com/mleikam1/lukespics/pull/1) as commit
-> `c38136070082a0895c6cca0f118841bb0972520e`.
-> This web release is not an app-store or full production-readiness claim.
-
-> Current source candidate: `codex/live-sports-catalog-and-slate` implements a
-> server-discovered, typed sports-catalog contract and a hardened API-Sports
-> path, but it has not been deployed. There is currently no approved
-> `API_SPORTS_KEY` Secret Manager value for `lukes-picks`, so the new Functions
-> manifest, a provider-backed preview, and live promotion are blocked. The
-> deployed site remains the previously recorded manual-provider release.
-> `ALLOW_API_SPORTS_PROVIDER` defaults to `false`, and remote team marks remain
-> disabled unless a separate rights review supplies the required server policy.
-> The settled local candidate passed 91/91 Flutter tests, 54/54 Functions
-> unit/contract tests, 10/10 rules tests, 8/8 emulator integration tests, all 13
-> connected browser checkpoints, and web/Android/iOS builds. The production npm
-> dependency audit is clean; three moderate Firebase CLI dependency-chain
-> findings remain in the full development audit.
+> The ESPN and API-Sports code is deliberately dormant. Both deploy flags are
+> `false`, both production arenas remain `manual`, neither provider activation
+> document exists, and remote provider marks remain off. No live ESPN request
+> was made or claimed. Written ESPN/Disney authorization, live contract
+> validation, legal/product approval, and separate logo rights remain required
+> before activation. The endpoints are unofficial and unsupported, have no SLA
+> or published rate limit, and may change without notice. This web deployment is
+> not an app-store or full provider-readiness claim.
 
 ## Product contract
 
@@ -75,9 +56,9 @@ member-readable only after lock.
 
 The backend includes the weekly lifecycle, scoring, correction, standings,
 rotation, manual-game fallback, provider cache, quota controls, and scheduled
-result/reveal processing. The previously deployed manual-provider release has
-dated browser-to-emulator evidence for the connected Flutter client and backend
-together with three isolated users.
+result/reveal processing. The deployed dormant-provider release passed the
+connected Flutter/backend browser-to-emulator lifecycle with three isolated
+users and sanitized data; that evidence is not a live-provider test.
 
 The catalog callable now discovers its supported sports and leagues from the
 configured server provider. Its typed response includes sports, leagues,
@@ -122,31 +103,33 @@ Aliases are intentionally fail-closed:
 deployment. `wingman-interactive-live` belongs to another product and must
 never be targeted, read, or modified.
 
-Every rules/indexes, Functions, or Hosting-preview deployment must go through
-[release_firebase.sh](scripts/release_firebase.sh). The wrapper accepts only the
-authorized project and confirms both CLI accounts and project ownership
-immediately before the write. Prerequisite mutations that the wrapper does not
-perform—such as enabling a reviewed API or setting `INVITE_CODE_PEPPER`—must run
+Every rules/indexes, Functions, Hosting-preview, or fixed preview-to-live write
+must go through [release_firebase.sh](scripts/release_firebase.sh). The wrapper
+accepts only the authorized project and confirms both CLI accounts and project
+ownership immediately before the write. Prerequisite mutations that the wrapper
+does not perform—such as enabling a reviewed API or setting
+`INVITE_CODE_PEPPER`—must run
 `./scripts/assert_firebase_project.sh lukes-picks` immediately before their own
 explicitly targeted write. Never record a secret value.
 
-Current source declares `API_SPORTS_KEY`, selectively bound only to
-`listSportsCatalog`, `refreshSelectedGames`, `syncSelectedGameResults`, and
-`scheduledResultSync`. Binding the secret does not enable API-Sports:
-`ALLOW_API_SPORTS_PROVIDER` is a separate deploy-time boolean that defaults to
-`false`, the runtime must be the authorized production project, and the
-server-owned `systemConfig/apiSportsCatalog` document must contain validated
-league/season configuration. The secret does not currently exist, so do not
-attempt the candidate Functions release.
+The ESPN adapter does not require a client or Firebase secret, but that is not
+permission to activate it. It has three independent server-side gates: the
+runtime must be the exact authorized project, `ALLOW_ESPN_PROVIDER` must be
+explicitly true, and the Admin-only `systemConfig/espnCatalog` document must
+have `enabled: true` plus a bounded authorization reference and review date.
+Those fields identify an approval record; no secret or legal-document contents
+belong in Firestore. The eight league identities and query parameters live in
+one reviewed server configuration, never in Flutter. Keep both activation gates
+off until written authorization and a legal/product review are recorded.
 
 ## Toolchain
 
 The established versions are:
 
 - Flutter 3.44.4 / Dart 3.12.2
-- Node.js 22.23.1 for Functions
-- npm 11.9.0
-- Java 21.0.9 for Firebase emulators
+- Node.js 22.23.2 for Functions
+- npm 10.9.8
+- Java 21.0.12 for Firebase emulators
 - Firebase CLI 15.24.0 from the Functions development dependencies
 - Chrome 151 for the connected browser lifecycle
 - Xcode 26.3 / CocoaPods 1.16.2
@@ -223,11 +206,30 @@ Firebase JavaScript initialization.
 | `mock` | Emulator and automated tests only |
 | `manual` | Valid production fallback and required production mode today |
 | `theSportsDbTest` | Internal/emulator only; requires an explicit flag and hard production rejection |
-| `apiSports` | Adapter and sanitized contract tests exist; production remains disabled until an approved secret, server catalog, authenticated validation, deploy parameter, and rights gates all pass |
+| `espn` | Server-only Site API adapter; default-off pending written authorization, contract validation, and logo-rights review |
+| `apiSports` | Dormant alternative adapter retained for replaceability; not the active production provider |
+
+The ESPN catalog centralizes NFL (`football/nfl`), MLB (`baseball/mlb`), NBA
+(`basketball/nba`), NHL (`hockey/nhl`), WNBA (`basketball/wnba`), NCAA football
+(`football/college-football`), NCAA men's basketball
+(`basketball/mens-college-basketball`), and NCAA women's basketball
+(`basketball/womens-college-basketball`). The server alone calls the Site API v2
+scoreboard with a `YYYYMMDD` date and each entry's allowlisted `groups`/`limit`
+parameters. ESPN cache TTLs are 10 minutes for live games, 15 minutes within two
+hours of start, 30 minutes from two to 24 hours, one hour farther out, and 30
+minutes for a valid empty schedule. Selected results reconcile on the existing
+30-minute scheduled job. ESPN result discovery searches from one arena-local
+day before through five days after the stored date so ordinary reschedules stay
+discoverable; a move outside that bounded window requires an audited
+commissioner correction or void. Stale cached normalized data can remain usable
+without exposing the provider schema to Flutter.
 
 No provider credential is exposed to Flutter or Hosting. Do not create,
-purchase, or register a provider account from this workflow. Do not scrape or
-hotlink ESPN pages, APIs, JSON, or images.
+purchase, or register a provider account from this workflow. Do not scrape ESPN
+HTML, call ESPN from Flutter, use an arbitrary ESPN URL, or download, proxy,
+cache, embed, or hotlink ESPN artwork. The only reviewed runtime host exception
+is the exact HTTPS scoreboard host inside the server adapter, and it remains
+inactive until the written-authorization gate passes.
 
 Remote team marks are shown only when their host and use rights are permitted.
 Provider access alone is not a logo license. Production uses neutral initials
@@ -279,47 +281,48 @@ bash -n scripts/*.sh
 
 The public-build scan requires a fresh connected release. It rejects stale
 artifacts, a missing production or present non-public attestation, active
-emulator/test flags, the forbidden project, ESPN hosts, source maps, symbolic
-links, control-character paths, or likely secrets. It scans every deployed
-regular file rather than trusting its extension.
+emulator/test flags, the forbidden project, every ESPN host, source maps,
+symbolic links, control-character paths, or likely secrets. The source scan
+likewise rejects ESPN hosts everywhere except the literal reviewed HTTPS
+scoreboard origin and rights-gated logo hostname in
+`functions/src/providers/espn.ts`; Flutter and web source remain host-free.
+Both scans inspect regular files rather than trusting names.
 
 CI runs the static suites and these scans without deployment credentials. It
 does not deploy.
 
 ## Deployment
 
-The live-catalog source candidate is not deployable in the current no-key
-state. Before any Functions, preview, or live release of that candidate, the
-authorized user must complete this handoff without exposing the value:
+The dormant ESPN adapter is not authorized for production activation. Before
+any provider-backed preview or live release, retain dated written permission
+covering the intended automated schedule/result access, caching, storage, and
+commercial distribution; record legal/product approval separately. Keep
+`ALLOW_ESPN_PROVIDER=false` and do not create an enabled production
+`systemConfig/espnCatalog` document before that handoff. Logo rights are a
+separate gate: absent an approved review date and exact host/query policy, the
+server and Flutter both use neutral initials.
 
-`MATT_ACTION_REQUIRED: Add an approved API-Sports key to the API_SPORTS_KEY Firebase secret for project lukes-picks.`
-
-After that separate action, keep `ALLOW_API_SPORTS_PROVIDER=false` until the
-credential, current MLB league/season contract, quota behavior, server-owned
-catalog document, and production terms have been validated. Logo rights are an
-independent gate: absent an approved review date and exact host/query policy,
-the server and Flutter both fall back to neutral initials.
-
-The previously deployed manual-provider implementation passed its three-user
-browser-to-emulator release gate, guarded Firebase preview release, and the
-authorized clone of that exact preview artifact to live. Its preview record is:
+The dormant implementation was deployed without activating or calling ESPN.
+Before activation, validate all eight league contracts with bounded,
+cache-first requests; rerun the complete matrix; inspect the exact
+`lukes-picks` project; and separately authorize each configuration and release
+write. The current preview record is:
 
 - URL:
   <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app>
-- Firebase-displayed expiry: `2026-08-07 07:50:46`
+- Firebase-displayed expiry: `2026-08-08 13:52:18 UTC`
 - deployed `main.dart.js` SHA-256:
-  `e8e786d69bb5aee5587ad7038e4b0ccddc340b0ce0ae354d5ec5c7be3c1416da`
+  `411062a988bf5b8d798b317f118b505966c0d80f9fd07a4f4f4e4762842a1ed6`
 
 The active Firestore ruleset is
-`projects/lukes-picks/rulesets/93614c6a-add3-47ad-88df-b9d9e18a00fb`, all five
+`projects/lukes-picks/rulesets/aa52ec56-c549-4e8e-880a-372474e4feeb`, all five
 composite indexes are `READY`, `INVITE_CODE_PEPPER` version 1 exists without
 its value being recorded, and all 29 Functions are active/Cloud Run ready.
-`scheduledResultSync` runs every 30 minutes on UTC time. At Firebase CLI time
-`18:10:14` on 2026-07-31, the exact `connected-picker-flow` preview channel was
-cloned to `lukes-picks:live`. Both <https://lukes-picks.web.app> and
+`scheduledResultSync` runs every 30 minutes on UTC time. At
+`2026-08-01T13:52:56.156Z`, the exact `connected-picker-flow` preview channel
+was cloned to `lukes-picks:live`. Both <https://lukes-picks.web.app> and
 <https://lukes-picks.firebaseapp.com> returned HTTP 200, and the live bundle
-digest matches the preview digest above. The live artifact records source
-commit `c38136070082a0895c6cca0f118841bb0972520e`. See
+digest matches the preview digest above. See
 [release-checklist.md](docs/release-checklist.md) and
 [deployment.md](docs/deployment.md) for evidence and rollback identifiers.
 
@@ -329,23 +332,25 @@ For any future guarded update, use only:
 ./scripts/release_firebase.sh rules-indexes
 ./scripts/release_firebase.sh functions
 ./scripts/release_firebase.sh preview
+./scripts/release_firebase.sh hosting-live
 ```
 
 The preview action deploys only the `connected-picker-flow` channel after source
-and fresh-build scans. The wrapper has no general live Hosting action. The
-recorded live clone was a separately authorized one-time promotion; future live
-writes still require explicit authorization and the project guard.
+and fresh-build scans. `hosting-live` can only clone that fixed preview to the
+fixed `lukes-picks:live` channel; it cannot upload independent bytes or accept a
+project override. Future live writes still require explicit authorization and
+the project guard.
 
 ## Known limitations
 
-- The live-catalog source candidate declares and selectively binds
-  `API_SPORTS_KEY`, but no approved secret currently exists; authenticated
-  coverage/quota validation and candidate deployment are blocked.
-- `systemConfig/apiSportsCatalog` is a server-only contract for validated
-  leagues and presentation policy; no production entry should be inferred from
-  source code or sanitized fixtures.
-- `ALLOW_API_SPORTS_PROVIDER` defaults to `false` and must not be enabled until
-  every credential, contract, quota, configuration, and terms gate passes.
+- ESPN's scoreboard endpoints are unofficial and unsupported, with no SLA or
+  published rate limit. Schema, availability, and blocking behavior can change
+  without notice.
+- Written ESPN/Disney authorization for the intended automated/commercial use
+  is not recorded. `ALLOW_ESPN_PROVIDER` must stay false and
+  `systemConfig/espnCatalog.enabled` must not be true in production.
+- The eight ESPN league/query definitions are centralized server-side; source
+  and sanitized fixtures do not prove live coverage or permission.
 - Production must remain manual-provider mode with neutral team badges.
 - TheSportsDB is proven only for the explicitly gated emulator/internal test
   path and must remain disabled in `lukes-picks`.

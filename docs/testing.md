@@ -2,15 +2,91 @@
 
 Test evidence must identify the exact reviewed tree or commit and record the
 command, runtime version, exit code, test count, warnings, and whether each
-warning blocks release. The live web artifact records source commit
-`c38136070082a0895c6cca0f118841bb0972520e`.
+warning blocks release.
 
-The dated evidence below belongs to the previously deployed manual-provider
-release. The current `codex/live-sports-catalog-and-slate` source is a new,
-undeployed candidate; existing green counts and browser evidence must not be
-used to claim that its API-Sports path is released or production-connected.
+## Dormant-provider release validation — 2026-08-01
 
-## Live-catalog candidate validation
+The final 2026-08-01 release deploys the reviewed provider-capable code while
+keeping both production provider gates false. It does not activate ESPN or
+API-Sports, permit remote ESPN logos, or establish a live ESPN contract.
+
+### Final local and emulator matrix
+
+- `dart format --output=none --set-exit-if-changed .` checked 62 files
+  with 0 changes; `flutter analyze` was clean; `flutter test` passed 105/105.
+- Functions lint, typecheck, build, and the sanitized unit/contract suite
+  passed under Node 22; the suite passed 84/84.
+- Firestore rules passed 11/11 under Java 21, and the Auth/Firestore/Functions
+  emulator integration suite passed 8/8.
+- The connected browser-to-emulator lifecycle passed 13 checkpoints with three
+  isolated users. This is emulator evidence, not an authenticated live
+  lifecycle claim.
+- Android debug and iOS simulator builds passed. No store build was published.
+- The fresh public source/build scans passed. The released `main.dart.js`
+  SHA-256 is
+  `411062a988bf5b8d798b317f118b505966c0d80f9fd07a4f4f4e4762842a1ed6`.
+- `npm audit --omit=dev` reported 0 production vulnerabilities. The full audit
+  reported three moderate development-only findings; no forced dependency
+  change was applied.
+
+### Guarded cloud release evidence
+
+- All 29 Functions deployed with `ALLOW_API_SPORTS_PROVIDER=false` and
+  `ALLOW_ESPN_PROVIDER=false`. The deploy command exited 1 only after every
+  Function succeeded because the CLI could not configure the optional Artifact
+  Registry cleanup policy.
+- Firestore ruleset
+  `projects/lukes-picks/rulesets/aa52ec56-c549-4e8e-880a-372474e4feeb` is
+  active; prior ruleset
+  `projects/lukes-picks/rulesets/93614c6a-add3-47ad-88df-b9d9e18a00fb` is the
+  recorded rollback input. Five composite indexes are `READY`.
+- `scheduledResultSync` is enabled every 30 minutes UTC.
+- Preview and live serve the same Hosting version `b58df6678863654a`.
+  The preview is
+  <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app>; its release
+  time was `2026-08-01T13:52:25.814Z`, with expiry
+  `2026-08-08T13:52:18Z`; live release time was
+  `2026-08-01T13:52:56.156Z`. Both permanent live URLs,
+  <https://lukes-picks.web.app> and <https://lukes-picks.firebaseapp.com>,
+  returned HTTP 200 and served the exact recorded bundle hash.
+- The two retained production arenas remain configured for `manual`. Both
+  `systemConfig/espnCatalog` and `systemConfig/apiSportsCatalog` are absent.
+  `API_SPORTS_KEY` is not declared or bound in the deployed Functions manifest;
+  that absence does not block this dormant-provider deployment.
+
+### Provider validation boundary
+
+Fixture/emulator coverage includes:
+
+- all eight centralized sport/league slugs and college `groups`/`limit`
+  parameters, date formatting, and rejection of arbitrary URL/query input;
+- nullable nested response parsing, missing competitors/logos/venues, event-ID
+  canonicalization, duplicate IDs/doubleheaders, malformed event skipping, and
+  unknown status handling;
+- scheduled, live, delayed, postponed, suspended, canceled, final, overtime,
+  tied, and contradictory non-tie-league final results;
+- cache freshness, stale fallback, bounded retry/timeout, request throttling,
+  overlap locks, content hashing, and 30-minute scheduled reconciliation;
+- default-false `ALLOW_ESPN_PROVIDER`, exact-project enforcement, missing or
+  disabled `systemConfig/espnCatalog`, and fail-closed presentation policy;
+- ordinary-member denial for draft week-game get/list, picker and
+  owner/commissioner success, post-publication member access, and client denial
+  for ESPN catalog/cache/config/lock/throttle collections;
+- schedule loading and date changes, selection persistence/add/remove/review,
+  missing-logo fallback, per-game picks and lock state, final result display,
+  and weekly/overall standings; and
+- source policy allowing only the literal reviewed scoreboard origin and exact
+  rights-gated logo hostname in `functions/src/providers/espn.ts`, plus the
+  unchanged public-build ban on every ESPN host.
+
+Sanitized fixtures establish parser and application behavior only. The release
+made no live ESPN call and did not validate live league coverage, a published
+rate limit, an SLA, response contracts, data/logo rights, or permission for
+automated/commercial use. ESPN activation, remote logos, and legal
+authorization remain blocked. The two technical activation gates must remain
+off until the external checklist is complete.
+
+## Historical API-Sports candidate validation — 2026-07-31
 
 The candidate adds testable coverage for:
 
@@ -44,9 +120,9 @@ The candidate adds testable coverage for:
   presentation;
 - server-side week/range validation, canonical catalog resolution, forged
   metadata rejection, and timezone/provider metadata cache separation;
-- `API_SPORTS_KEY` declaration and binding only to
-  `listSportsCatalog`, `refreshSelectedGames`,
-  `syncSelectedGameResults`, and `scheduledResultSync`; and
+- an earlier proposal for selective `API_SPORTS_KEY` binding; the final
+  2026-08-01 dormant-provider release declares and binds no API provider key;
+  and
 - default-false `ALLOW_API_SPORTS_PROVIDER` runtime policy plus emulator and
   production provider rejection paths.
 
@@ -58,13 +134,13 @@ Relevant focused files are
 `functions/test/provider-hardening.test.ts`, and
 `functions/test/emulator.integration.test.ts`.
 
-There is currently no approved `API_SPORTS_KEY`, so authenticated provider
-status/quota, current MLB discovery, and live response-contract checks cannot
-run. Sanitized fixtures are permitted for parser coverage but cannot satisfy
-that production gate. The missing secret also blocks deployment of the
-candidate Functions manifest.
+There is no approved API-Sports key, so authenticated provider status/quota,
+current MLB discovery, and live response-contract checks did not run. Sanitized
+fixtures cannot satisfy that activation gate. The absent key does not block the
+deployed dormant-provider manifest because no API provider secret is currently
+declared or bound.
 
-## Live-catalog candidate local matrix — 2026-07-31
+## Historical live-catalog candidate local matrix — 2026-07-31
 
 The settled candidate passed locally under Flutter 3.44.4 / Dart 3.12.2,
 Node 22.23.2, Java 21.0.12, Firebase CLI 15.24.0, and Chrome 151.0.7922.71:
@@ -102,7 +178,7 @@ This matrix validates the local candidate and sanitized/emulated provider
 contracts only. It is not authenticated API-Sports, preview, or production
 evidence.
 
-## Connected release evidence — 2026-07-30/31
+## Historical connected release evidence — 2026-07-30/31
 
 `./scripts/test_browser_e2e.sh` passed under Flutter 3.44.4 / Dart 3.12.2,
 Node 22.23.1, Java 21.0.9, Firebase CLI 15.24.0, and installed system Chrome.
@@ -136,7 +212,7 @@ web release passed the source/secret/public-artifact scans. Exact layers and
 historical audit evidence are recorded in
 [validation-report.md](validation-report.md).
 
-## Authenticated production preview smoke — 2026-07-31
+## Historical authenticated production preview smoke — 2026-07-31
 
 The guarded preview-only deployment targets only `lukes-picks`
 (`271408880910`) and is available at
@@ -159,7 +235,7 @@ neutral team badges remain required. This exact artifact was later cloned to
 live, so its authenticated preview evidence remains relevant because the bundle
 digest is identical. No mobile store build was published.
 
-## Live Hosting smoke — 2026-07-31
+## Historical live Hosting smoke — 2026-07-31
 
 At Firebase CLI time `18:10:14`, the exact `connected-picker-flow` preview
 channel was cloned to `lukes-picks:live`. Both permanent URLs,
@@ -281,6 +357,8 @@ that exercises the documented initials fallback.
 Sanitized fixtures—not live calls—must cover:
 
 - the server-discovered catalog response and malformed optional metadata;
+- ESPN scoreboard normalization for all eight centralized configurations,
+  nullable/malformed events, status variants, ties, and doubleheaders;
 - API-Sports baseball root response shape, canonical provider league/season,
   final winner derivation, response drift, and incomplete pagination;
 - TheSportsDB event/team normalization and malformed responses;
@@ -288,8 +366,9 @@ Sanitized fixtures—not live calls—must cover:
 - schedule/team cache freshness and duplicate suppression;
 - timeout, bounded retry, rate limit, and raw-response hash;
 - production rejection of `mock` and `theSportsDbTest`;
-- API-Sports default-false deploy flag, exact project restriction, selective
-  secret bindings, absent-secret behavior, and server-catalog rejection;
+- API-Sports default-false deploy flag, exact project restriction, absence of
+  an `API_SPORTS_KEY` declaration/binding in the dormant manifest, and
+  server-catalog rejection;
 - arena-timezone queries inside the active week with an inclusive seven-day
   maximum and canonical provider metadata in the cache key;
 - missing, broken, and disallowed logos falling back to neutral initials;
@@ -338,7 +417,9 @@ Do not use `npm audit fix --force`.
 - the authorized Flutter project/app number;
 - production and emulator bootstrap project checks;
 - no duplicate web Firebase initialization;
-- no Wingman or ESPN runtime host;
+- no Wingman runtime reference and no ESPN runtime host except the exact HTTPS
+  scoreboard origin and rights-gated logo hostname in
+  `functions/src/providers/espn.ts`;
 - no likely tracked secret.
 
 `check_public_build.sh` requires a nonempty fresh web release, rejects source

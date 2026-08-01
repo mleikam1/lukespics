@@ -67,7 +67,11 @@ This document is authoritative for the MVP.
 - Production uses manual schedules/results until a production provider passes
   coverage, quota, terms, and publication-rights review.
 - Mock and TheSportsDB test schedules are emulator/internal-test-only.
-- No ESPN scraping, internal endpoints, or image hotlinking.
+- The ESPN scoreboard adapter is server-only, unofficial, unsupported, and
+  default-off. It may not be production-enabled until written ESPN/Disney
+  authorization and legal/product approval are recorded.
+- No ESPN HTML scraping, direct Flutter access, arbitrary endpoint fallback,
+  branding claim, or image downloading/proxying/caching/hotlinking.
 - Team marks require permitted rights and an allowlisted HTTPS host; otherwise
   the UI uses a neutral initials badge.
 

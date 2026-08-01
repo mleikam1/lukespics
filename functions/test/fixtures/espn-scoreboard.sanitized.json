@@ -1,0 +1,96 @@
+{
+  "leagues": [{"slug": "mlb"}],
+  "events": [
+    {
+      "id": "1001",
+      "date": "2031-06-10T18:00:00Z",
+      "shortName": "AWY @ HOM",
+      "season": {"year": 2031, "type": 2, "slug": "regular-season"},
+      "status": {"type": {"name": "STATUS_SCHEDULED", "state": "pre", "completed": false, "detail": "Jun 10"}},
+      "competitions": [{
+        "id": "c1001",
+        "date": "2031-06-10T18:00:00Z",
+        "neutralSite": false,
+        "competitors": [
+          {"id": "h1", "homeAway": "home", "team": {"id": "h1", "displayName": "Home Owls", "shortDisplayName": "Owls", "abbreviation": "HOM"}},
+          {"id": "a1", "homeAway": "away", "team": {"id": "a1", "displayName": "Away Foxes", "shortDisplayName": "Foxes", "abbreviation": "AWY"}}
+        ]
+      }]
+    },
+    {
+      "id": "1002",
+      "date": "2031-06-10T20:30:00Z",
+      "season": {"year": 2031, "type": 2},
+      "status": {"type": {"name": "STATUS_FINAL", "completed": true, "detail": "Final"}},
+      "competitions": [{
+        "id": "c1002",
+        "date": "2031-06-10T20:30:00Z",
+        "venue": {"fullName": "Sanitized Park"},
+        "broadcasts": [{"names": ["TESTNET"]}],
+        "competitors": [
+          {"id": "h2", "homeAway": "home", "score": "7", "team": {"id": "h2", "displayName": "Home Bears", "shortDisplayName": "Bears", "abbreviation": "HBR", "color": "123abc", "logos": [{"href": "https://a.espncdn.com/i/teamlogos/sanitized/home.png"}]}},
+          {"id": "a2", "homeAway": "away", "score": "3", "team": {"id": "a2", "displayName": "Away Lynx", "shortDisplayName": "Lynx", "abbreviation": "ALX", "logo": "https://a.espncdn.com/i/teamlogos/sanitized/away.png?token=removed"}}
+        ]
+      }]
+    },
+    {
+      "id": "1003",
+      "date": "2031-06-10T22:00:00Z",
+      "season": {"year": 2031, "type": 2},
+      "status": {"type": {"name": "STATUS_FINAL", "state": "post", "completed": true, "detail": "Final"}},
+      "competitions": [{
+        "id": "c1003",
+        "competitors": [
+          {"id": "h3", "homeAway": "home", "score": "4", "team": {"id": "h3", "displayName": "Home Jets", "abbreviation": "HJT"}},
+          {"id": "a3", "homeAway": "away", "score": "4", "team": {"id": "a3", "displayName": "Away Stars", "abbreviation": "AST"}}
+        ]
+      }]
+    },
+    {
+      "id": "1004",
+      "date": "2031-06-11T17:00:00Z",
+      "season": {"year": 2031, "type": 2},
+      "status": {"type": {"name": "STATUS_SCHEDULED", "state": "pre", "completed": false}},
+      "competitions": [{
+        "id": "c1004",
+        "notes": [{"headline": "Doubleheader - Game 1"}],
+        "competitors": [
+          {"id": "h4", "homeAway": "home", "team": {"id": "h4", "displayName": "Home Waves", "abbreviation": "HWV"}},
+          {"id": "a4", "homeAway": "away", "team": {"id": "a4", "displayName": "Away Pines", "abbreviation": "APN"}}
+        ]
+      }]
+    },
+    {
+      "id": "1005",
+      "date": "2031-06-11T22:00:00Z",
+      "season": {"year": 2031, "type": 2},
+      "status": {"type": {"name": "STATUS_SCHEDULED", "state": "pre", "completed": false}},
+      "competitions": [{
+        "id": "c1005",
+        "notes": [{"headline": "Doubleheader - Game 2"}],
+        "competitors": [
+          {"id": "h4", "homeAway": "home", "team": {"id": "h4", "displayName": "Home Waves", "abbreviation": "HWV"}},
+          {"id": "a4", "homeAway": "away", "team": {"id": "a4", "displayName": "Away Pines", "abbreviation": "APN"}}
+        ]
+      }]
+    },
+    {
+      "date": "2031-06-12T18:00:00Z",
+      "season": {"year": 2031},
+      "status": {"type": {"name": "STATUS_SCHEDULED", "state": "pre"}},
+      "competitions": []
+    },
+    {
+      "id": "1007",
+      "date": "2031-06-12T20:00:00Z",
+      "season": {"year": 2031},
+      "status": {"type": {"name": "STATUS_SCHEDULED", "state": "pre"}},
+      "competitions": [{
+        "id": "c1007",
+        "competitors": [
+          {"id": "h7", "homeAway": "home", "team": {"id": "h7", "displayName": "Only Home", "abbreviation": "HOM"}}
+        ]
+      }]
+    }
+  ]
+}

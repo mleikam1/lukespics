@@ -14,7 +14,13 @@ db.settings({ignoreUndefinedProperties: true});
 export const auth = getAuth();
 
 export const INVITE_CODE_PEPPER = defineSecret("INVITE_CODE_PEPPER");
-export const API_SPORTS_KEY = defineSecret("API_SPORTS_KEY");
+// API-Sports is dormant in the reviewed production manifest, so no Function
+// binds or requests its optional secret. A separately authorized activation
+// must add a defineSecret binding to the provider-bearing Functions; Secret
+// Manager injection will then expose the value through process.env.
+export function apiSportsKey(): string {
+  return (process.env.API_SPORTS_KEY ?? "").trim();
+}
 
 // This deploy-time parameter is deliberately false unless the production
 // provider validation and configuration gates have all been completed.
@@ -22,6 +28,13 @@ export const ALLOW_API_SPORTS_PROVIDER = defineBoolean(
   "ALLOW_API_SPORTS_PROVIDER",
   {default: false},
 );
+
+// ESPN's Site API is unofficial and has no SLA or published rate limit. Keep
+// the adapter deployable but production-inactive until a separate terms and
+// operational review explicitly enables it for the pinned project.
+export const ALLOW_ESPN_PROVIDER = defineBoolean("ALLOW_ESPN_PROVIDER", {
+  default: false,
+});
 
 export const REGION = "us-central1";
 

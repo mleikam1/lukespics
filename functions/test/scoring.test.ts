@@ -6,14 +6,21 @@ import {
 } from "../src/providers/normalization.js";
 import {MockSportsProvider} from "../src/providers/mock.js";
 import {
+  overrideGameSchema,
+  selectedGamesSchema,
+} from "../src/schemas.js";
+import {
   gameResultVersionsAreStable,
   scoreEntry,
 } from "../src/services/scoring.js";
 import {
   emptyCatalogAvailabilityState,
   isCatalogGameSelectable,
+  MAX_GAME_RESCHEDULE_OFFSET_MS,
   preserveSelectedGameParticipants,
   protectedSelectedGameLock,
+  resolveGameOverride,
+  selectedGameRefreshDateRange,
 } from "../src/services/weeks.js";
 
 describe("authoritative scoring", () => {
@@ -378,5 +385,171 @@ describe("selected-game result trust", () => {
     expect(reconciled.homeScore).toBeNull();
     expect(reconciled.awayScore).toBeNull();
     expect(reconciled.winnerTeamId).toBeNull();
+  });
+});
+
+describe("admin game refresh and override validation", () => {
+  const originalStart = new Date("2030-09-03T18:00:00.000Z");
+  const baseOverride = {
+    currentScheduledAtUtc: originalStart,
+    currentPublishedScheduledAtUtc: originalStart,
+    currentEffectiveLockAtUtc: originalStart,
+    homeTeamId: "home",
+    awayTeamId: "away",
+    status: "scheduled" as const,
+    homeScore: null,
+    awayScore: null,
+    winnerTeamId: null,
+  };
+
+  it("requires a scoped selected-game refresh to be forced", () => {
+    const base = {
+      requestId: "refresh_request_0001",
+      leagueId: "league",
+      weekId: "week",
+      gameId: "game",
+    };
+    expect(selectedGamesSchema.safeParse(base).success).toBe(false);
+    expect(
+      selectedGamesSchema.safeParse({...base, forceRefresh: true}).success,
+    ).toBe(true);
+    expect(
+      selectedGamesSchema.safeParse({
+        requestId: "refresh_request_0002",
+        leagueId: "league",
+        weekId: "week",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("uses a later-biased seven-day ESPN discovery window", () => {
+    expect(
+      selectedGameRefreshDateRange({
+        provider: "espn",
+        scheduledAtUtc: new Date("2030-03-10T05:30:00.000Z"),
+        timezone: "America/Chicago",
+      }),
+    ).toEqual({from: "2030-03-08", to: "2030-03-14"});
+    expect(
+      selectedGameRefreshDateRange({
+        provider: "espn",
+        scheduledAtUtc: new Date("2031-01-01T01:30:00.000Z"),
+        timezone: "America/Chicago",
+      }),
+    ).toEqual({from: "2030-12-30", to: "2031-01-05"});
+  });
+
+  it("keeps non-ESPN selected refreshes on the stored arena date", () => {
+    expect(
+      selectedGameRefreshDateRange({
+        provider: "apiSports",
+        scheduledAtUtc: new Date("2031-01-01T01:30:00.000Z"),
+        timezone: "America/Chicago",
+      }),
+    ).toEqual({from: "2030-12-31", to: "2030-12-31"});
+  });
+
+  it("preserves the published start and never widens the effective lock", () => {
+    const later = new Date("2030-09-03T20:00:00.000Z");
+    const delayed = resolveGameOverride({
+      ...baseOverride,
+      scheduledAtUtc: later,
+      status: "delayed",
+    });
+    expect(delayed.scheduledAtUtc).toEqual(later);
+    expect(delayed.publishedScheduledAtUtc).toEqual(originalStart);
+    expect(delayed.effectiveLockAtUtc).toEqual(originalStart);
+
+    const earlier = new Date("2030-09-03T16:00:00.000Z");
+    const tightened = resolveGameOverride({
+      ...baseOverride,
+      scheduledAtUtc: earlier,
+      status: "postponed",
+    });
+    expect(tightened.effectiveLockAtUtc).toEqual(earlier);
+  });
+
+  it("allows cross-week moves but rejects implausible reschedule dates", () => {
+    const outsideWeek = new Date("2030-09-09T18:00:00.000Z");
+    expect(
+      resolveGameOverride({
+        ...baseOverride,
+        scheduledAtUtc: outsideWeek,
+        status: "postponed",
+      }).scheduledAtUtc,
+    ).toEqual(outsideWeek);
+    expect(() =>
+      resolveGameOverride({
+        ...baseOverride,
+        scheduledAtUtc: new Date(
+          originalStart.valueOf() + MAX_GAME_RESCHEDULE_OFFSET_MS + 1,
+        ),
+      }),
+    ).toThrow();
+  });
+
+  it("rejects outcomes on nonterminal statuses", () => {
+    expect(() =>
+      resolveGameOverride({
+        ...baseOverride,
+        status: "suspended",
+        homeScore: 2,
+      }),
+    ).toThrow();
+    expect(
+      overrideGameSchema.safeParse({
+        requestId: "override_request_0001",
+        leagueId: "league",
+        weekId: "week",
+        gameId: "game",
+        status: "void",
+        homeScore: 1,
+        awayScore: null,
+        winnerTeamId: null,
+        reason: "A sufficiently detailed audit reason.",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates finals and produces a stable manual result version", () => {
+    const finalInput = {
+      ...baseOverride,
+      status: "final" as const,
+      homeScore: 7,
+      awayScore: 3,
+      winnerTeamId: "home",
+    };
+    const first = resolveGameOverride(finalInput);
+    const second = resolveGameOverride(finalInput);
+    expect(first.resultVersion).toBe(second.resultVersion);
+    expect(() =>
+      resolveGameOverride({...finalInput, winnerTeamId: "away"}),
+    ).toThrow();
+  });
+
+  it("keeps void picks outside the graded denominator", () => {
+    expect(
+      scoreEntry(
+        "member",
+        true,
+        [
+          {
+            id: "void-only",
+            status: "void",
+            winnerTeamId: null,
+            resultVersion: "void-version",
+            revealed: true,
+          },
+        ],
+        [{gameId: "void-only", selectedTeamId: "home"}],
+      ),
+    ).toMatchObject({
+      gradedCount: 0,
+      correctCount: 0,
+      incorrectCount: 0,
+      voidCount: 1,
+      points: 0,
+      accuracy: null,
+    });
   });
 });

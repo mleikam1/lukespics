@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/domain/game_presentation.dart';
 import '../../core/domain/league_time.dart';
 import '../../core/responsive/breakpoints.dart';
 import '../../core/widgets/catalog_logo_policy.dart';
 import '../../core/widgets/ui.dart';
 import '../../data/demo/demo_repository.dart';
 import '../../data/models/game.dart';
+import '../../data/models/pick.dart';
 
 class PicksScreen extends ConsumerWidget {
   const PicksScreen({super.key});
@@ -76,6 +78,7 @@ class PicksScreen extends ConsumerWidget {
                       return _PickGameCard(
                         game: game,
                         selection: controller.picks[game.id],
+                        authoritativePick: controller.pickFor(game.id),
                         syncState: controller.syncStateFor(game.id),
                         locked: controller.isGameLocked(game),
                         saving: controller.pickRequestInFlight(game.id),
@@ -160,6 +163,7 @@ class _PickGameCard extends StatelessWidget {
   const _PickGameCard({
     required this.game,
     required this.selection,
+    required this.authoritativePick,
     required this.syncState,
     required this.locked,
     required this.saving,
@@ -172,6 +176,7 @@ class _PickGameCard extends StatelessWidget {
 
   final Game game;
   final String? selection;
+  final Pick? authoritativePick;
   final PickSyncState syncState;
   final bool locked;
   final bool saving;
@@ -184,6 +189,7 @@ class _PickGameCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final missing = locked && selection == null;
+    final detail = gameDetailSummary(game);
     return SectionCard(
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -222,6 +228,47 @@ class _PickGameCard extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              StatusPill(
+                key: Key('pick-game-status-${game.id}'),
+                label: gameStatusLabel(game.status),
+                tone: gameStatusTone(game.status),
+              ),
+              if (game.awayScore != null || game.homeScore != null)
+                Text(
+                  '${game.awayTeam.abbreviation} ${game.awayScore ?? '—'} – '
+                  '${game.homeScore ?? '—'} ${game.homeTeam.abbreviation}',
+                  key: Key('pick-game-score-${game.id}'),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w900),
+                ),
+              if (authoritativePick != null &&
+                  authoritativePick!.outcome != PickOutcome.pending)
+                _AuthoritativeOutcomePill(
+                  key: Key('pick-game-outcome-${game.id}'),
+                  pick: authoritativePick!,
+                ),
+            ],
+          ),
+          if (detail != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              detail,
+              key: Key('pick-game-context-${game.id}'),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -310,6 +357,39 @@ class _PickGameCard extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _AuthoritativeOutcomePill extends StatelessWidget {
+  const _AuthoritativeOutcomePill({super.key, required this.pick});
+
+  final Pick pick;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, tone, icon) = switch (pick.outcome) {
+      PickOutcome.correct => (
+        'Correct · +${pick.points}',
+        StatusTone.success,
+        Icons.check_circle_rounded,
+      ),
+      PickOutcome.incorrect => (
+        'Incorrect · ${pick.points}',
+        StatusTone.danger,
+        Icons.cancel_rounded,
+      ),
+      PickOutcome.voided => (
+        'Void · excluded',
+        StatusTone.neutral,
+        Icons.block_rounded,
+      ),
+      PickOutcome.pending => (
+        'Grading pending',
+        StatusTone.info,
+        Icons.schedule_rounded,
+      ),
+    };
+    return StatusPill(label: label, tone: tone, icon: icon);
   }
 }
 
