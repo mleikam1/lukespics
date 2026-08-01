@@ -2,6 +2,12 @@ import '../../core/domain/league_time.dart';
 import '../../data/models/sports_catalog.dart';
 
 const int maximumCatalogRangeDays = 7;
+const String sportsDataIoCatalogTimezone = 'America/New_York';
+
+String catalogQueryTimezone({
+  required String provider,
+  required String arenaTimezone,
+}) => provider == 'sportsDataIo' ? sportsDataIoCatalogTimezone : arenaTimezone;
 
 final class CatalogDateWindow {
   const CatalogDateWindow({required this.from, required this.to});

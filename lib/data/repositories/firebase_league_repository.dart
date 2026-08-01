@@ -222,7 +222,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
         ? [
             for (final value in rawGames)
               if (value is Map)
-                _gameFromJson('${value['id'] ?? ''}', _map(value)),
+                parseGameSnapshot('${value['id'] ?? ''}', _map(value)),
           ]
         : <Game>[];
     return parseSportsCatalogResult(
@@ -635,7 +635,9 @@ final class FirebaseLeagueRepository implements LeagueRepository {
         .snapshots()
         .map(
           (snapshot) => snapshot.docs
-              .map((document) => _gameFromJson(document.id, document.data()))
+              .map(
+                (document) => parseGameSnapshot(document.id, document.data()),
+              )
               .toList(growable: false),
         );
   }
@@ -756,6 +758,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
       throw RepositoryException(
         error.code,
         _safeFunctionsMessage(error.code, error.message),
+        reason: _safeFunctionsReason(error.details),
       );
     }
   }
@@ -898,6 +901,19 @@ List<CatalogLeague> _catalogLeagues(Object? value) {
   return List<CatalogLeague>.unmodifiable(byCode.values);
 }
 
+const _activePresentationProviders = <String>{
+  'manual',
+  'mock',
+  'theSportsDbTest',
+  'apiSports',
+  'sportsDataIo',
+};
+
+// SportsDataIO remains text/data-only until an explicit artwork entitlement
+// is reviewed. Only these configured providers may currently opt in to the
+// server-reviewed remote-logo policy.
+const _remoteLogoEligibleProviders = <String>{'theSportsDbTest', 'apiSports'};
+
 CatalogPresentation _catalogPresentation(
   Object? value, {
   required Object? attribution,
@@ -908,6 +924,8 @@ CatalogPresentation _catalogPresentation(
   final provider = _nonEmptyString(data['provider']);
   final providerMatchesEnvelope =
       fallbackProvider != 'unknown' && provider == fallbackProvider;
+  final activeProvider =
+      provider != null && _activePresentationProviders.contains(provider);
   final attributionText =
       _nonEmptyString(data['attributionText']) ??
       _nonEmptyString(attributionData['text']) ??
@@ -923,18 +941,24 @@ CatalogPresentation _catalogPresentation(
     data['allowedLogoQueryParameters'] ?? data['allowedQueryParameters'],
   );
   final allowRemoteLogos = data['allowRemoteLogos'] == true;
-  if (!providerMatchesEnvelope ||
+  if (!providerMatchesEnvelope || !activeProvider) {
+    // Unknown and historical providers remain readable through their game
+    // snapshots, but stale attribution and remote artwork policy must never
+    // become user-visible again.
+    return const CatalogPresentation.disabled();
+  }
+  if (!_remoteLogoEligibleProviders.contains(provider) ||
       !allowRemoteLogos ||
       reviewDate == null ||
       hosts.isEmpty) {
     return CatalogPresentation.disabled(
-      provider: provider ?? '',
+      provider: provider,
       attributionText: attributionText,
       attributionUrl: attributionUrl?.hasScheme == true ? attributionUrl : null,
     );
   }
   return CatalogPresentation(
-    provider: provider!,
+    provider: provider,
     attributionText: attributionText,
     attributionUrl: attributionUrl?.hasScheme == true ? attributionUrl : null,
     allowRemoteLogos: true,
@@ -1023,6 +1047,10 @@ CatalogAvailabilityState? _availabilityState(String? value) => switch (value) {
   'provider_not_configured' ||
   'provider-not-configured' ||
   'notConfigured' => CatalogAvailabilityState.providerNotConfigured,
+  'providerConfigurationRequired' ||
+  'provider_configuration_required' ||
+  'provider-configuration-required' =>
+    CatalogAvailabilityState.providerConfigurationRequired,
   'providerUnavailable' ||
   'provider_unavailable' ||
   'provider-unavailable' ||
@@ -1061,6 +1089,19 @@ String? _nonEmptyString(Object? value) {
   if (value is! String && value is! num) return null;
   final normalized = '$value'.trim();
   return normalized.isEmpty ? null : normalized;
+}
+
+String? _calendarDayOrNull(Object? value) {
+  final normalized = _nonEmptyString(value);
+  if (normalized == null ||
+      !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(normalized)) {
+    return null;
+  }
+  final parsed = DateTime.tryParse('${normalized}T00:00:00.000Z');
+  return parsed == null ||
+          parsed.toIso8601String().substring(0, 10) != normalized
+      ? null
+      : normalized;
 }
 
 String _displayName(String code) => code
@@ -1155,6 +1196,14 @@ String _safeFunctionsMessage(String code, String? serverMessage) {
   };
 }
 
+String? _safeFunctionsReason(Object? details) {
+  if (details is! Map) return null;
+  final reason = details['reason'];
+  return reason is String && sportsDataIoConfigurationReasons.contains(reason)
+      ? reason
+      : null;
+}
+
 Map<String, Object?> _gameToJson(
   Game game, {
   required String wireResultVersion,
@@ -1162,6 +1211,10 @@ Map<String, Object?> _gameToJson(
   'id': game.id,
   'provider': game.provider,
   'providerGameId': game.providerGameId,
+  'providerScoreId': game.providerScoreId,
+  'providerLeagueGameId': game.providerLeagueGameId,
+  'providerGlobalGameId': game.providerGlobalGameId,
+  'providerGameKey': game.providerGameKey,
   'sportCode': game.sportCode,
   'leagueCode': game.leagueCode,
   'providerLeagueId': game.providerLeagueId,
@@ -1169,15 +1222,20 @@ Map<String, Object?> _gameToJson(
   'season': game.season,
   'seasonType': game.seasonType,
   'weekOrRound': game.weekOrRound,
-  'scheduledAtUtc': game.scheduledAtUtc.toIso8601String(),
-  'publishedScheduledAtUtc': game.publishedScheduledAtUtc.toIso8601String(),
-  'effectiveLockAtUtc': game.effectiveLockAtUtc.toIso8601String(),
+  'scheduledAtUtc': game.scheduledAtUtc?.toIso8601String(),
+  'publishedScheduledAtUtc': game.publishedScheduledAtUtc?.toIso8601String(),
+  'effectiveLockAtUtc': game.effectiveLockAtUtc?.toIso8601String(),
+  'scheduledDayEastern': game.scheduledDayEastern,
+  'timeTbd': game.timeTbd,
   'venueName': game.venueName,
   'neutralSite': game.neutralSite,
   'homeTeam': game.homeTeam.toJson(),
   'awayTeam': game.awayTeam.toJson(),
   'status': _gameStatus(game.status),
   'statusDetail': game.statusDetail,
+  'isClosed': game.isClosed,
+  'rescheduledFromLeagueGameId': game.rescheduledFromLeagueGameId,
+  'rescheduledToLeagueGameId': game.rescheduledToLeagueGameId,
   'homeScore': game.homeScore,
   'awayScore': game.awayScore,
   'winnerTeamId': game.winnerTeamId,
@@ -1188,15 +1246,24 @@ Map<String, Object?> _gameToJson(
   'resultVersion': wireResultVersion,
   'rawResponseVersion': game.rawResponseVersion,
   'sourcePayloadHash': game.sourcePayloadHash,
+  'selectable': game.selectable,
+  'selectionReason': game.selectionReason,
 };
 
-Game _gameFromJson(String id, Map<String, Object?> data) {
-  final scheduled = _date(data['scheduledAtUtc']);
+Game parseGameSnapshot(String id, Map<String, Object?> data) {
+  final scheduled = _dateOrNull(data['scheduledAtUtc']);
+  final timeTbd = data['timeTbd'] == true;
+  final observedFallback =
+      scheduled ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
   final wireVersion = data['resultVersion'] as String? ?? '';
   return Game(
     id: data['id'] as String? ?? id,
     provider: data['provider'] as String? ?? 'unknown',
     providerGameId: data['providerGameId'] as String? ?? id,
+    providerScoreId: _nonEmptyString(data['providerScoreId']),
+    providerLeagueGameId: _nonEmptyString(data['providerLeagueGameId']),
+    providerGlobalGameId: _nonEmptyString(data['providerGlobalGameId']),
+    providerGameKey: _nonEmptyString(data['providerGameKey']),
     sportCode: data['sportCode'] as String? ?? 'unknown',
     leagueCode: data['leagueCode'] as String? ?? 'unknown',
     providerLeagueId: data['providerLeagueId'] as String?,
@@ -1205,15 +1272,30 @@ Game _gameFromJson(String id, Map<String, Object?> data) {
     seasonType: _nonEmptyString(data['seasonType']),
     weekOrRound: _nonEmptyString(data['weekOrRound']),
     scheduledAtUtc: scheduled,
-    publishedScheduledAtUtc:
-        _dateOrNull(data['publishedScheduledAtUtc']) ?? scheduled,
-    effectiveLockAtUtc: _dateOrNull(data['effectiveLockAtUtc']) ?? scheduled,
+    publishedScheduledAtUtc: timeTbd
+        ? _dateOrNull(data['publishedScheduledAtUtc'])
+        : _dateOrNull(data['publishedScheduledAtUtc']) ?? scheduled,
+    effectiveLockAtUtc: timeTbd
+        ? _dateOrNull(data['effectiveLockAtUtc'])
+        : _dateOrNull(data['effectiveLockAtUtc']) ?? scheduled,
+    scheduledDayEastern: _calendarDayOrNull(data['scheduledDayEastern']),
+    timeTbd: timeTbd,
     venueName: _nonEmptyString(data['venueName']),
     neutralSite: data['neutralSite'] as bool? ?? false,
     homeTeam: _team(_map(data['homeTeam'])),
     awayTeam: _team(_map(data['awayTeam'])),
     status: _parseGameStatus(data['status'] as String?),
     statusDetail: _nonEmptyString(data['statusDetail']),
+    isClosed: switch (data['isClosed']) {
+      final bool value => value,
+      _ => null,
+    },
+    rescheduledFromLeagueGameId: _nonEmptyString(
+      data['rescheduledFromLeagueGameId'],
+    ),
+    rescheduledToLeagueGameId: _nonEmptyString(
+      data['rescheduledToLeagueGameId'],
+    ),
     homeScore: data['homeScore'] is num
         ? (data['homeScore'] as num).toInt()
         : null,
@@ -1224,8 +1306,8 @@ Game _gameFromJson(String id, Map<String, Object?> data) {
     broadcast: _nonEmptyString(data['broadcast']),
     eventDetail: _nonEmptyString(data['eventDetail']),
     providerLastUpdatedAt:
-        _dateOrNull(data['providerLastUpdatedAt']) ?? scheduled,
-    lastSyncedAt: _dateOrNull(data['lastSyncedAt']) ?? scheduled,
+        _dateOrNull(data['providerLastUpdatedAt']) ?? observedFallback,
+    lastSyncedAt: _dateOrNull(data['lastSyncedAt']) ?? observedFallback,
     manualOverride: data['manualOverride'] as bool? ?? false,
     manualOverrideReason: data['manualOverrideReason'] as String?,
     manualOverrideBy: data['manualOverrideBy'] as String?,
@@ -1237,6 +1319,11 @@ Game _gameFromJson(String id, Map<String, Object?> data) {
     },
     sourcePayloadHash: data['sourcePayloadHash'] as String? ?? '',
     pickRevealCompletedAt: _dateOrNull(data['pickRevealCompletedAt']),
+    selectable: switch (data['selectable']) {
+      final bool value => value,
+      _ => null,
+    },
+    selectionReason: _nonEmptyString(data['selectionReason']),
   );
 }
 
@@ -1250,6 +1337,8 @@ Team _team(Map<String, Object?> data) => Team(
     null => null,
   },
   color: _nonEmptyString(data['color']),
+  providerTeamId: _nonEmptyString(data['providerTeamId']),
+  providerGlobalTeamId: _nonEmptyString(data['providerGlobalTeamId']),
 );
 
 LeagueMember _memberFromJson(String uid, Map<String, Object?> data) =>
@@ -1374,9 +1463,6 @@ Pick _pickFromJson(String gameId, Map<String, Object?> data) {
     outcomeVersion: _number(data['outcomeVersion']),
   );
 }
-
-DateTime _date(Object? value) =>
-    _dateOrNull(value) ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
 
 DateTime? _dateOrNull(Object? value) {
   if (value is Timestamp) return value.toDate().toUtc();

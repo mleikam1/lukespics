@@ -140,7 +140,7 @@ void main() {
       games: const [],
     );
 
-    expect(result.presentation.attributionText, 'Provider attribution');
+    expect(result.presentation.attributionText, isEmpty);
     expect(result.presentation.allowRemoteLogos, isFalse);
     expect(
       result.presentation.permitsRemoteLogosForProvider('apiSports'),
@@ -171,7 +171,7 @@ void main() {
         'cache': const <String, Object?>{},
       }, games: const []);
 
-      expect(result.presentation.attributionText, isNotEmpty);
+      expect(result.presentation.attributionText, isEmpty);
       expect(result.presentation.allowRemoteLogos, isFalse);
       expect(
         result.presentation.permitsRemoteLogosForProvider('apiSports'),
@@ -190,6 +190,111 @@ void main() {
       },
     }, games: const []);
     expect(missingEnvelopeProvider.presentation.allowRemoteLogos, isFalse);
+    expect(missingEnvelopeProvider.presentation.attributionText, isEmpty);
+  });
+
+  test('SportsDataIO remains neutral without reviewed artwork rights', () {
+    final result = parseSportsCatalogResult({
+      'provider': 'sportsDataIo',
+      'presentation': {
+        'provider': 'sportsDataIo',
+        'attributionText': 'Schedule data provider',
+        'allowRemoteLogos': true,
+        'allowedLogoHosts': ['images.example.test'],
+        'logoRightsReviewDate': '2026-07-31T00:00:00.000Z',
+      },
+      'cache': const <String, Object?>{},
+    }, games: const []);
+
+    expect(result.presentation.provider, 'sportsDataIo');
+    expect(result.presentation.attributionText, 'Schedule data provider');
+    expect(result.presentation.allowRemoteLogos, isFalse);
+    expect(result.presentation.allowedLogoHosts, isEmpty);
+    expect(
+      result.presentation.permitsRemoteLogosForProvider('sportsDataIo'),
+      isFalse,
+    );
+  });
+
+  test(
+    'time-TBD game parsing preserves provider identity and fails closed',
+    () {
+      final game = parseGameSnapshot('sportsDataIo:mlb:score-42', {
+        'provider': 'sportsDataIo',
+        'providerGameId': 'score-42',
+        'providerScoreId': 42,
+        'providerLeagueGameId': 'league-game-42',
+        'providerGlobalGameId': 'global-game-42',
+        'providerGameKey': '2026-JUL-31-AWY-HOM',
+        'sportCode': 'baseball',
+        'leagueCode': 'mlb',
+        'leagueName': 'Major League Baseball',
+        'season': 2026,
+        'scheduledAtUtc': 'not-a-date',
+        'publishedScheduledAtUtc': null,
+        'effectiveLockAtUtc': null,
+        'scheduledDayEastern': '2026-07-31',
+        'timeTbd': true,
+        'homeTeam': {
+          'id': 'home',
+          'name': 'Home Club',
+          'shortName': 'Home',
+          'abbreviation': 'HOM',
+          'providerTeamId': 10,
+          'providerGlobalTeamId': 'global-home',
+        },
+        'awayTeam': {
+          'id': 'away',
+          'name': 'Away Club',
+          'shortName': 'Away',
+          'abbreviation': 'AWY',
+          'providerTeamId': 11,
+          'providerGlobalTeamId': 'global-away',
+        },
+        'status': 'scheduled',
+        'isClosed': false,
+        'rescheduledFromLeagueGameId': 'league-game-41',
+        'rescheduledToLeagueGameId': 'league-game-43',
+        'selectable': false,
+        'selectionReason': 'A confirmed start time is required.',
+        'resultVersion': 'version-1',
+      });
+
+      expect(game.timeTbd, isTrue);
+      expect(game.scheduledDayEastern, '2026-07-31');
+      expect(game.scheduledAtUtc, isNull);
+      expect(game.publishedScheduledAtUtc, isNull);
+      expect(game.effectiveLockAtUtc, isNull);
+      expect(game.hasConfirmedSchedule, isFalse);
+      expect(game.isLockedAt(DateTime.utc(2026, 7, 1)), isTrue);
+      expect(game.providerScoreId, '42');
+      expect(game.providerLeagueGameId, 'league-game-42');
+      expect(game.providerGlobalGameId, 'global-game-42');
+      expect(game.providerGameKey, '2026-JUL-31-AWY-HOM');
+      expect(game.homeTeam.providerTeamId, '10');
+      expect(game.homeTeam.providerGlobalTeamId, 'global-home');
+      expect(game.isClosed, isFalse);
+      expect(game.rescheduledFromLeagueGameId, 'league-game-41');
+      expect(game.rescheduledToLeagueGameId, 'league-game-43');
+      expect(game.selectable, isFalse);
+      expect(game.selectionReason, 'A confirmed start time is required.');
+    },
+  );
+
+  test('historic confirmed snapshots reuse their real scheduled instant', () {
+    final game = parseGameSnapshot('historic-game', {
+      'provider': 'manual',
+      'providerGameId': 'historic-game',
+      'scheduledAtUtc': '2024-09-08T17:00:00.000Z',
+      'timeTbd': false,
+      'homeTeam': const <String, Object?>{},
+      'awayTeam': const <String, Object?>{},
+    });
+
+    expect(game.scheduledAtUtc, DateTime.utc(2024, 9, 8, 17));
+    expect(game.publishedScheduledAtUtc, game.scheduledAtUtc);
+    expect(game.effectiveLockAtUtc, game.scheduledAtUtc);
+    expect(game.hasConfirmedSchedule, isTrue);
   });
 
   test('published week parser retains a matching presentation snapshot', () {

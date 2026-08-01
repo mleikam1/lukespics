@@ -135,14 +135,29 @@ authorized key and production plan are supplied. API-Sports remains disabled
 until its full gate passes. TheSportsDB test mode does not use production
 Secret Manager and must be rejected by `lukes-picks`.
 
-The ESPN adapter uses no credential, but it remains default-off. It requires
-written authorization plus `ALLOW_ESPN_PROVIDER=true` and an Admin-only
-`systemConfig/espnCatalog` document with `enabled: true`, bounded
-`authorizationReference`, and ISO `authorizationReviewedAt`. Store only the
-approval identifier/date in Firestore, not secret or legal-document contents.
+SportsDataIO requires the `SPORTSDATAIO_API_KEY` Secret Manager secret, but this
+branch does not create or set it. Only after entitlement and an authorized
+activation, run the exact project guard immediately before the interactive
+secret command:
 
-The reviewed 29-export manifest requires only `INVITE_CODE_PEPPER` for the
-invite-code callables. No unavailable API-Sports or CFBD secret is a deployment
+```bash
+./scripts/assert_firebase_project.sh lukes-picks
+firebase functions:secrets:set SPORTSDATAIO_API_KEY --project lukes-picks
+```
+
+Do not put the value on the command line or record terminal input/output. The
+secret is bound only to the catalog, two result-refresh, and scheduled-sync
+Functions. Rotation creates a new version; retain the previous version until a
+guarded Functions deployment and smoke verification succeed.
+
+Activation separately requires `ALLOW_SPORTSDATAIO_PROVIDER=true`, both
+environment and catalog access mode `production`, both entitlement-verification
+gates true, and an enabled Admin-only `systemConfig/sportsDataIoCatalog` with
+reviewed NFL/MLB seasons and feed flags. Store only bounded entitlement review
+metadata in Firestore, not a key or contract contents.
+
+The currently deployed 29-export manifest predates and therefore does not
+include this branch's SportsDataIO binding. No unavailable API-Sports or CFBD secret is a deployment
 requirement.
 
 Enabling required Google APIs is a cloud mutation. The APIs needed by the

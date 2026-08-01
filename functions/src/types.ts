@@ -33,12 +33,18 @@ export type Team = {
   abbreviation: string;
   logoUrl: string | null;
   color?: string | null;
+  providerTeamId?: string | null;
+  providerGlobalTeamId?: string | null;
 };
 
 export type NormalizedGame = {
   id: string;
-  provider: string;
+  provider: PersistedProviderName;
   providerGameId: string;
+  providerScoreId?: string | null;
+  providerLeagueGameId?: string | null;
+  providerGlobalGameId?: string | null;
+  providerGameKey?: string | null;
   providerLeagueId: string;
   sportCode: string;
   leagueCode: string;
@@ -46,15 +52,20 @@ export type NormalizedGame = {
   season: string;
   seasonType?: string | null;
   weekOrRound: string | null;
-  scheduledAtUtc: Date;
-  publishedScheduledAtUtc: Date;
-  effectiveLockAtUtc: Date;
+  scheduledAtUtc: Date | null;
+  publishedScheduledAtUtc: Date | null;
+  effectiveLockAtUtc: Date | null;
+  scheduledDayEastern?: string | null;
+  timeTbd?: boolean;
   venueName: string | null;
   neutralSite: boolean;
   homeTeam: Team;
   awayTeam: Team;
   status: GameStatus;
   statusDetail?: string | null;
+  isClosed?: boolean | null;
+  rescheduledFromLeagueGameId?: string | null;
+  rescheduledToLeagueGameId?: string | null;
   homeScore: number | null;
   awayScore: number | null;
   winnerTeamId: string | null;
@@ -78,9 +89,9 @@ export type StoredGame = Omit<
   | "providerLastUpdatedAt"
   | "lastSyncedAt"
 > & {
-  scheduledAtUtc: Timestamp;
-  publishedScheduledAtUtc: Timestamp;
-  effectiveLockAtUtc: Timestamp;
+  scheduledAtUtc: Timestamp | null;
+  publishedScheduledAtUtc: Timestamp | null;
+  effectiveLockAtUtc: Timestamp | null;
   providerLastUpdatedAt: Timestamp;
   lastSyncedAt: Timestamp;
 };
@@ -142,7 +153,8 @@ export type ProviderHealth = {
 };
 
 export type SportsDataProvider = {
-  readonly name: string;
+  readonly name: ProviderName;
+  readonly cacheNamespace?: string;
   readonly presentation: CatalogPresentation;
   readonly usagePolicy?: ProviderUsagePolicy;
   readonly selectedGameRefreshMode?: "strict" | "partial";
@@ -184,9 +196,33 @@ export const PROVIDER_NAMES = [
   "manual",
   "theSportsDbTest",
   "apiSports",
-  "espn",
+  "sportsDataIo",
 ] as const;
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
+
+// Persisted week snapshots retain their original provenance so historic picks,
+// results, and audits remain readable. Historical values are deliberately not
+// part of ProviderName and therefore cannot be selected, configured, or used
+// to construct a network provider.
+export const HISTORICAL_PROVIDER_NAMES = ["espn"] as const;
+export const PERSISTED_PROVIDER_NAMES = [
+  ...PROVIDER_NAMES,
+  ...HISTORICAL_PROVIDER_NAMES,
+] as const;
+export type PersistedProviderName =
+  (typeof PERSISTED_PROVIDER_NAMES)[number];
+
+export function isProviderName(value: unknown): value is ProviderName {
+  return PROVIDER_NAMES.includes(value as ProviderName);
+}
+
+export function isHistoricalProviderName(
+  value: unknown,
+): value is (typeof HISTORICAL_PROVIDER_NAMES)[number] {
+  return HISTORICAL_PROVIDER_NAMES.includes(
+    value as (typeof HISTORICAL_PROVIDER_NAMES)[number],
+  );
+}
 
 export type LeagueSettings = {
   pickerParticipatesInPicks: boolean;

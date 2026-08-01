@@ -1,4 +1,5 @@
 import {describe, expect, it} from "vitest";
+import {Timestamp} from "firebase-admin/firestore";
 import {
   finalWinner,
   resultVersionFor,
@@ -6,6 +7,8 @@ import {
 } from "../src/providers/normalization.js";
 import {MockSportsProvider} from "../src/providers/mock.js";
 import {
+  leagueSettingsSchema,
+  normalizedGameSchema,
   overrideGameSchema,
   selectedGamesSchema,
 } from "../src/schemas.js";
@@ -15,13 +18,18 @@ import {
 } from "../src/services/scoring.js";
 import {
   emptyCatalogAvailabilityState,
+  effectiveStoredGameLock,
+  hasDuplicateSportsDataIoGameAliases,
   isCatalogGameSelectable,
   MAX_GAME_RESCHEDULE_OFFSET_MS,
   preserveSelectedGameParticipants,
+  preserveSelectedGameSchedule,
+  protectedFirstGameSlateLock,
   protectedSelectedGameLock,
   resolveGameOverride,
   selectedGameRefreshDateRange,
 } from "../src/services/weeks.js";
+import type {NormalizedGame} from "../src/types.js";
 
 describe("authoritative scoring", () => {
   const games = [
@@ -179,7 +187,7 @@ describe("result normalization", () => {
   it("keeps result versions stable across volatile provider timestamps", () => {
     const base = {
       id: "mock:football:1",
-      provider: "mock",
+      provider: "mock" as const,
       providerGameId: "1",
       providerLeagueId: "demo-football",
       sportCode: "football",
@@ -257,6 +265,115 @@ describe("mock provider contract", () => {
 });
 
 describe("catalog eligibility", () => {
+  const scheduledGame = normalizedGameSchema.parse({
+    id: "mock:football:scheduled",
+    provider: "mock",
+    providerGameId: "scheduled",
+    providerLeagueId: "demo-football",
+    sportCode: "football",
+    leagueCode: "demo-football",
+    leagueName: "Demo Football",
+    season: "demo",
+    weekOrRound: null,
+    scheduledAtUtc: new Date("2030-09-02T18:00:00.000Z"),
+    publishedScheduledAtUtc: new Date("2030-09-02T18:00:00.000Z"),
+    effectiveLockAtUtc: new Date("2030-09-02T18:00:00.000Z"),
+    venueName: null,
+    neutralSite: false,
+    homeTeam: {
+      id: "home",
+      name: "Home",
+      shortName: "Home",
+      abbreviation: "HOM",
+      logoUrl: null,
+    },
+    awayTeam: {
+      id: "away",
+      name: "Away",
+      shortName: "Away",
+      abbreviation: "AWY",
+      logoUrl: null,
+    },
+    status: "scheduled",
+    homeScore: null,
+    awayScore: null,
+    winnerTeamId: null,
+    providerLastUpdatedAt: new Date("2030-09-01T00:00:00.000Z"),
+    lastSyncedAt: new Date("2030-09-01T00:00:00.000Z"),
+    manualOverride: false,
+    manualOverrideReason: null,
+    manualOverrideBy: null,
+    resultVersion: "scheduled-version",
+    sourcePayloadHash: "a".repeat(64),
+  }) as NormalizedGame;
+
+  it("preserves an honest time-TBD game but never makes it selectable", () => {
+    const tbd = normalizedGameSchema.parse({
+      ...scheduledGame,
+      id: "sportsDataIo:football:tbd",
+      provider: "sportsDataIo",
+      providerGameId: "tbd",
+      scheduledAtUtc: null,
+      publishedScheduledAtUtc: null,
+      effectiveLockAtUtc: null,
+      scheduledDayEastern: "2030-09-02",
+      timeTbd: true,
+    });
+    expect(tbd.timeTbd).toBe(true);
+    expect(
+      isCatalogGameSelectable(tbd, {
+        now: new Date("2030-09-01T00:00:00.000Z"),
+      }),
+    ).toBe(false);
+    expect(() =>
+      normalizedGameSchema.parse({
+        ...tbd,
+        scheduledAtUtc: new Date("2030-09-02T16:00:00.000Z"),
+      }),
+    ).toThrow("invented lock instant");
+  });
+
+  it("uses the published schedule when a provider cancellation omits its time", () => {
+    const cancelledWithoutTime = normalizedGameSchema.parse({
+      ...scheduledGame,
+      scheduledAtUtc: null,
+      publishedScheduledAtUtc: null,
+      effectiveLockAtUtc: null,
+      scheduledDayEastern: "2030-09-02",
+      timeTbd: true,
+      status: "cancelled",
+      isClosed: false,
+      resultVersion: "cancelled-version",
+      sourcePayloadHash: "b".repeat(64),
+    }) as NormalizedGame;
+
+    const refreshed = preserveSelectedGameSchedule(
+      scheduledGame,
+      cancelledWithoutTime,
+    );
+
+    expect(refreshed).toMatchObject({
+      status: "cancelled",
+      scheduledAtUtc: scheduledGame.scheduledAtUtc,
+      effectiveLockAtUtc: scheduledGame.effectiveLockAtUtc,
+      timeTbd: false,
+    });
+  });
+
+  it("reads historical provenance without allowing it in active settings", () => {
+    expect(
+      normalizedGameSchema.parse({
+        ...scheduledGame,
+        id: "espn:football:historical",
+        provider: "espn",
+        providerGameId: "historical",
+      }).provider,
+    ).toBe("espn");
+    expect(() =>
+      leagueSettingsSchema.parse({providerName: "espn"}),
+    ).toThrow();
+  });
+
   it("distinguishes an empty exact date from an empty broader range", () => {
     expect(
       emptyCatalogAvailabilityState({
@@ -328,6 +445,52 @@ describe("catalog eligibility", () => {
         ...input,
         enabledLeagues: ["another-league"],
       }),
+    ).toBe(false);
+  });
+});
+
+describe("SportsDataIO draft identity safety", () => {
+  const scoreIdentity = {
+    id: "sportsDataIo:football:5001",
+    provider: "sportsDataIo",
+    providerLeagueId: "nfl",
+    leagueCode: "nfl",
+    providerGameId: "5001",
+    providerScoreId: "5001",
+    providerLeagueGameId: null,
+    providerGlobalGameId: null,
+    providerGameKey: null,
+  };
+
+  it("detects one NFL event submitted under ScoreID and GameID", () => {
+    expect(
+      hasDuplicateSportsDataIoGameAliases([
+        scoreIdentity,
+        {
+          ...scoreIdentity,
+          id: "sportsDataIo:football:7001",
+          providerGameId: "7001",
+          providerLeagueGameId: "7001",
+        },
+      ]),
+    ).toBe(true);
+  });
+
+  it("keeps provider ID namespaces distinct when numeric values overlap", () => {
+    expect(
+      hasDuplicateSportsDataIoGameAliases([
+        {
+          ...scoreIdentity,
+          providerLeagueGameId: "7001",
+        },
+        {
+          ...scoreIdentity,
+          id: "sportsDataIo:football:7001",
+          providerGameId: "7001",
+          providerScoreId: "7001",
+          providerLeagueGameId: "8001",
+        },
+      ]),
     ).toBe(false);
   });
 });
@@ -422,27 +585,24 @@ describe("admin game refresh and override validation", () => {
     ).toBe(true);
   });
 
-  it("uses a later-biased seven-day ESPN discovery window", () => {
+  it("builds selected SportsDataIO buckets from the US Eastern day", () => {
     expect(
       selectedGameRefreshDateRange({
-        provider: "espn",
         scheduledAtUtc: new Date("2030-03-10T05:30:00.000Z"),
-        timezone: "America/Chicago",
+        timezone: "America/New_York",
       }),
-    ).toEqual({from: "2030-03-08", to: "2030-03-14"});
+    ).toEqual({from: "2030-03-10", to: "2030-03-10"});
     expect(
       selectedGameRefreshDateRange({
-        provider: "espn",
-        scheduledAtUtc: new Date("2031-01-01T01:30:00.000Z"),
-        timezone: "America/Chicago",
+        scheduledAtUtc: new Date("2031-01-01T04:30:00.000Z"),
+        timezone: "America/New_York",
       }),
-    ).toEqual({from: "2030-12-30", to: "2031-01-05"});
+    ).toEqual({from: "2030-12-31", to: "2030-12-31"});
   });
 
-  it("keeps non-ESPN selected refreshes on the stored arena date", () => {
+  it("keeps other selected refreshes on their supplied calendar timezone", () => {
     expect(
       selectedGameRefreshDateRange({
-        provider: "apiSports",
         scheduledAtUtc: new Date("2031-01-01T01:30:00.000Z"),
         timezone: "America/Chicago",
       }),
@@ -467,6 +627,43 @@ describe("admin game refresh and override validation", () => {
       status: "postponed",
     });
     expect(tightened.effectiveLockAtUtc).toEqual(earlier);
+  });
+
+  it("keeps a first-game slate lock monotonic and authoritative", () => {
+    const original = new Date("2030-09-03T18:00:00.000Z");
+    const earlier = new Date("2030-09-03T16:00:00.000Z");
+    const later = new Date("2030-09-03T20:00:00.000Z");
+
+    expect(
+      protectedFirstGameSlateLock({
+        currentSlateLockAt: original,
+        candidateLockAt: earlier,
+      }),
+    ).toEqual(earlier);
+    expect(
+      protectedFirstGameSlateLock({
+        currentSlateLockAt: earlier,
+        candidateLockAt: later,
+      }),
+    ).toEqual(earlier);
+
+    const slateTimestamp = Timestamp.fromDate(earlier);
+    const gameTimestamp = Timestamp.fromDate(later);
+    expect(
+      effectiveStoredGameLock(
+        {
+          lockPolicySnapshot: "firstGame",
+          effectiveSlateLockAtUtc: slateTimestamp,
+        },
+        {effectiveLockAtUtc: gameTimestamp},
+      )?.toMillis(),
+    ).toBe(slateTimestamp.toMillis());
+    expect(
+      effectiveStoredGameLock(
+        {lockPolicySnapshot: "firstGame"},
+        {effectiveLockAtUtc: gameTimestamp},
+      )?.toMillis(),
+    ).toBe(gameTimestamp.toMillis());
   });
 
   it("allows cross-week moves but rejects implausible reschedule dates", () => {

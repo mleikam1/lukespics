@@ -327,43 +327,52 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
     String? winnerTeamId = overrideStatus == GameStatus.finalStatus
         ? game.winnerTeamId
         : null;
-    final leagueScheduledAt = inLeagueTimezone(
-      game.scheduledAtUtc,
-      controller.leagueTimezone,
-    );
-    var correctedDate = DateTime(
-      leagueScheduledAt.year,
-      leagueScheduledAt.month,
-      leagueScheduledAt.day,
-    );
-    var correctedTime = TimeOfDay(
-      hour: leagueScheduledAt.hour,
-      minute: leagueScheduledAt.minute,
-    );
-    final earliestCorrectionUtc = game.publishedScheduledAtUtc.toUtc().subtract(
+    final scheduledAt = game.scheduledAtUtc;
+    final publishedScheduledAt = game.publishedScheduledAtUtc;
+    final canCorrectScheduledAt =
+        !game.timeTbd && scheduledAt != null && publishedScheduledAt != null;
+    final leagueScheduledAt = scheduledAt == null
+        ? null
+        : inLeagueTimezone(scheduledAt, controller.leagueTimezone);
+    DateTime? correctedDate = leagueScheduledAt == null
+        ? null
+        : DateTime(
+            leagueScheduledAt.year,
+            leagueScheduledAt.month,
+            leagueScheduledAt.day,
+          );
+    TimeOfDay? correctedTime = leagueScheduledAt == null
+        ? null
+        : TimeOfDay(
+            hour: leagueScheduledAt.hour,
+            minute: leagueScheduledAt.minute,
+          );
+    final earliestCorrectionUtc = publishedScheduledAt?.toUtc().subtract(
       gameRescheduleSanityWindow,
     );
-    final latestCorrectionUtc = game.publishedScheduledAtUtc.toUtc().add(
+    final latestCorrectionUtc = publishedScheduledAt?.toUtc().add(
       gameRescheduleSanityWindow,
     );
-    final earliestCorrection = inLeagueTimezone(
-      earliestCorrectionUtc,
-      controller.leagueTimezone,
-    );
-    final latestCorrection = inLeagueTimezone(
-      latestCorrectionUtc,
-      controller.leagueTimezone,
-    );
-    final firstDate = DateTime(
-      earliestCorrection.year,
-      earliestCorrection.month,
-      earliestCorrection.day,
-    );
-    final lastDate = DateTime(
-      latestCorrection.year,
-      latestCorrection.month,
-      latestCorrection.day,
-    );
+    final earliestCorrection = earliestCorrectionUtc == null
+        ? null
+        : inLeagueTimezone(earliestCorrectionUtc, controller.leagueTimezone);
+    final latestCorrection = latestCorrectionUtc == null
+        ? null
+        : inLeagueTimezone(latestCorrectionUtc, controller.leagueTimezone);
+    final firstDate = earliestCorrection == null
+        ? null
+        : DateTime(
+            earliestCorrection.year,
+            earliestCorrection.month,
+            earliestCorrection.day,
+          );
+    final lastDate = latestCorrection == null
+        ? null
+        : DateTime(
+            latestCorrection.year,
+            latestCorrection.month,
+            latestCorrection.day,
+          );
     var correctScheduledAt = false;
     var confirmed = false;
     String? validation;
@@ -484,16 +493,20 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
                   value: correctScheduledAt,
                   title: const Text('Correct the scheduled start'),
                   subtitle: Text(
-                    formatLeagueTime(
-                      game.scheduledAtUtc,
-                      controller.leagueTimezone,
-                      'EEE, MMM d · h:mm a',
-                    ),
+                    canCorrectScheduledAt
+                        ? formatLeagueTime(
+                            scheduledAt,
+                            controller.leagueTimezone,
+                            'EEE, MMM d · h:mm a',
+                          )
+                        : 'No confirmed start is available to correct.',
                   ),
-                  onChanged: (value) => setDialogState(() {
-                    correctScheduledAt = value ?? false;
-                    validation = null;
-                  }),
+                  onChanged: canCorrectScheduledAt
+                      ? (value) => setDialogState(() {
+                          correctScheduledAt = value ?? false;
+                          validation = null;
+                        })
+                      : null,
                 ),
                 if (correctScheduledAt) ...[
                   Text(
@@ -513,9 +526,9 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
                         onPressed: () async {
                           final selected = await showDatePicker(
                             context: dialogContext,
-                            initialDate: correctedDate,
-                            firstDate: firstDate,
-                            lastDate: lastDate,
+                            initialDate: correctedDate!,
+                            firstDate: firstDate!,
+                            lastDate: lastDate!,
                           );
                           if (selected != null) {
                             setDialogState(() {
@@ -526,7 +539,7 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
                         },
                         icon: const Icon(Icons.calendar_today_outlined),
                         label: Text(
-                          DateFormat('MMM d, yyyy').format(correctedDate),
+                          DateFormat('MMM d, yyyy').format(correctedDate!),
                         ),
                       ),
                       OutlinedButton.icon(
@@ -534,7 +547,7 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
                         onPressed: () async {
                           final selected = await showTimePicker(
                             context: dialogContext,
-                            initialTime: correctedTime,
+                            initialTime: correctedTime!,
                           );
                           if (selected != null) {
                             setDialogState(() {
@@ -544,7 +557,7 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
                           }
                         },
                         icon: const Icon(Icons.schedule_outlined),
-                        label: Text(correctedTime.format(dialogContext)),
+                        label: Text(correctedTime!.format(dialogContext)),
                       ),
                     ],
                   ),
@@ -633,10 +646,21 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
                       }
                       DateTime? scheduledAtUtc;
                       if (correctScheduledAt) {
+                        if (correctedDate == null ||
+                            correctedTime == null ||
+                            publishedScheduledAt == null) {
+                          setDialogState(
+                            () => validation =
+                                'A confirmed published start is required before correcting the time.',
+                          );
+                          return;
+                        }
+                        final correctionDate = correctedDate!;
+                        final correctionTime = correctedTime!;
                         scheduledAtUtc = leagueWallTimeToUtc(
-                          date: correctedDate,
-                          hour: correctedTime.hour,
-                          minute: correctedTime.minute,
+                          date: correctionDate,
+                          hour: correctionTime.hour,
+                          minute: correctionTime.minute,
                           timezone: controller.leagueTimezone,
                         );
                         if (scheduledAtUtc == null) {
@@ -647,7 +671,7 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
                           return;
                         }
                         if (!isWithinGameRescheduleWindow(
-                          publishedScheduledAtUtc: game.publishedScheduledAtUtc,
+                          publishedScheduledAtUtc: publishedScheduledAt,
                           correctedScheduledAtUtc: scheduledAtUtc,
                         )) {
                           setDialogState(

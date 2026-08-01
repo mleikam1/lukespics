@@ -91,11 +91,18 @@ export function slugify(value: string): string {
 export function toStoredGame(game: NormalizedGame): StoredGame {
   return {
     ...game,
-    scheduledAtUtc: Timestamp.fromDate(game.scheduledAtUtc),
-    publishedScheduledAtUtc: Timestamp.fromDate(
-      game.publishedScheduledAtUtc,
-    ),
-    effectiveLockAtUtc: Timestamp.fromDate(game.effectiveLockAtUtc),
+    scheduledAtUtc:
+      game.scheduledAtUtc === null
+        ? null
+        : Timestamp.fromDate(game.scheduledAtUtc),
+    publishedScheduledAtUtc:
+      game.publishedScheduledAtUtc === null
+        ? null
+        : Timestamp.fromDate(game.publishedScheduledAtUtc),
+    effectiveLockAtUtc:
+      game.effectiveLockAtUtc === null
+        ? null
+        : Timestamp.fromDate(game.effectiveLockAtUtc),
     providerLastUpdatedAt: Timestamp.fromDate(game.providerLastUpdatedAt),
     lastSyncedAt: Timestamp.fromDate(game.lastSyncedAt),
   };

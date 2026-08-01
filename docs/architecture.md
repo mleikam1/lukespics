@@ -11,10 +11,11 @@ flowchart LR
   Callables --> Services["Shared backend services"]
   Scheduler["Scheduled result sync"] --> Services
   Services --> Firestore
-  Config["Server-owned activation/presentation policy<br/>systemConfig/espnCatalog"] --> Services
-  Gate["ALLOW_ESPN_PROVIDER<br/>default false"] --> Services
+  Config["Server-owned NFL/MLB catalog<br/>systemConfig/sportsDataIoCatalog"] --> Services
+  Gate["SportsDataIO project/mode/entitlement/kill-switch gates"] --> Services
+  Secret["Secret Manager key<br/>provider Functions only"] --> Services
   Services --> Cache["Provider cache / quota / locks"]
-  Cache --> Provider["ESPN Site API adapter<br/>unofficial · default-off"]
+  Cache --> Provider["SportsDataIO client<br/>separate NFL + MLB adapters"]
   Cache --> Internal["TheSportsDB test adapter<br/>emulator/internal only"]
   Cache --> Fallback["Mock test data / manual fallback"]
   Firestore --> Reveals["Server-generated pick reveals"]
@@ -71,33 +72,25 @@ Provider mode is server-authoritative. Production remains manual until a
 production provider passes its gate. Mock and TheSportsDB test modes must fail
 closed in `lukes-picks`.
 
-The ESPN path has three independent server-side gates:
+The SportsDataIO path has independent, fail-closed project, emulator, deploy
+kill-switch, environment access-mode, environment entitlement, server-catalog,
+per-league feed, and Secret Manager key gates. Only `production` mode can run
+the production adapter; fixture/trial/discovery modes remain test or delayed-
+access classifications. No secret or contract document belongs in Firestore.
 
-1. `ALLOW_ESPN_PROVIDER` is a deploy-time boolean with a fail-closed `false`
-   default and is accepted only for the non-emulator `lukes-picks` runtime.
-2. `systemConfig/espnCatalog.enabled` must be exactly `true`, with a bounded
-   `authorizationReference` and ISO `authorizationReviewedAt` date identifying
-   the retained approval record; a missing or malformed document keeps the
-   adapter unavailable. No secret or legal-document body belongs in Firestore.
-3. Written ESPN/Disney authorization and the application's legal/product
-   approval must cover the intended automated access, caching, storage, and
-   commercial distribution before either technical gate is opened.
+The provider factory reads `systemConfig/sportsDataIoCatalog` with Admin SDK
+access; rules deny every client read/write. The callable re-resolves query
+metadata against the configured NFL/MLB seasons and enforces US Eastern date
+buckets. The dedicated client constructs only five exact HTTPS League API path
+families and authenticates by header. Flutter never receives a vendor URL, key,
+or raw schema.
 
-The provider factory reads the document with Admin SDK access; Firestore rules
-deny every client read/write. One static server configuration owns all eight
-league identities and query parameters. The callable re-resolves client query
-metadata against that allowlist and substitutes the arena's stored timezone.
-The only outbound route is the HTTPS Site API v2 scoreboard adapter; Flutter
-never receives or constructs an ESPN URL and never parses the raw schema.
-Stored provider event IDs and canonical league metadata let result refresh
-reconstruct an unambiguous provider query later.
-
-The ESPN endpoints are undocumented and unsupported. They offer no SLA or
-published rate limit and can change schema or availability without notice.
-The adapter therefore validates every nested field, skips malformed events,
-uses bounded requests and structured safe errors, and remains replaceable
-behind the existing `SportsDataProvider` interface. It must not be described as
-an official integration or an ESPN affiliation.
+Separate NFL and MLB adapters map endpoint-specific DTOs into
+`NormalizedGame`. NFL joins `SchedulesBasic` identity/reschedule data with
+`ScoresByDate`; MLB uses `GamesByDate` so exception statuses remain observable.
+Stable cross-reference IDs support result reconciliation without using
+matchup/date identity. True time-TBD games remain catalog-only until a UTC start
+exists. Every closed result is checked for scores and ties before grading.
 
 Provider-facing Functions retain the existing stable application contract:
 
@@ -132,11 +125,11 @@ Server publish retries treat every recognized post-publication week status as
 the same already-published slate, including final settlement of concurrent calls
 sharing one request ID.
 
-The dormant deployed code declares these gates, but written authorization and
-an enabled production catalog are not recorded and no provider-backed release
-is claimed. Both deployed provider flags are false and the two arenas remain
-manual-provider. Sanitized fixtures prove only parser/normalization behavior;
-they are neither live contract evidence nor production authorization.
+This branch declares these gates but is not deployed. No key or enabled
+production catalog is present locally, no live smoke is claimed, and production
+arenas remain manual-provider. Sanitized fixtures prove parser, normalization,
+transport, and workflow behavior only; they do not prove live schema or feed
+entitlement.
 
 Finalization reads the entire authoritative week, recomputes entries, writes
 ranked snapshots, rebuilds aggregate standings, records an audit event, and
@@ -160,7 +153,7 @@ fields to `reveals/{gameId}/picks/{uid}`. Email remains in private
 
 ## Resilience
 
-- Manual data permits production operation while the ESPN adapter is inactive.
+- Manual data permits production operation while SportsDataIO is inactive.
   Mock data is emulator/test-only.
 - Catalog cache identities include canonical provider metadata, date bounds,
   and timezone so arena-local queries cannot collide.
@@ -174,7 +167,7 @@ fields to `reveals/{gameId}/picks/{uid}`. Email remains in private
 - Final catalog responses use a long-lived cache, while selected terminal-game
   refreshes use a finite cache so later provider corrections remain observable.
 - Empty schedule responses cache for two hours for other providers and 30
-  minutes for ESPN. ESPN live games cache for 10 minutes; games starting within two hours for 15 minutes; games two to 24 hours
+  minutes for SportsDataIO. SportsDataIO live games cache for 10 minutes; games starting within two hours for 15 minutes; games two to 24 hours
   out for 30 minutes; farther games for one hour; and unresolved anomaly states
   for one hour. Terminal catalog data is retained long-term, while selected
   terminal games reconcile after 12 hours. Stale cached data may be returned

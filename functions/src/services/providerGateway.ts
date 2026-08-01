@@ -8,6 +8,9 @@ import {
 import {HttpsError} from "firebase-functions/v2/https";
 import {db, positiveIntegerSetting} from "../config.js";
 import {ProviderRetryAuthorizationError} from "../providers/retry.js";
+import {
+  isSportsDataIoConfigurationReason,
+} from "../providers/sportsDataIoClient.js";
 import {normalizedGameSchema} from "../schemas.js";
 import type {
   NormalizedGame,
@@ -20,10 +23,10 @@ import {commitWritesInChunks, sha256} from "../utils.js";
 export const PROVIDER_CACHE_LOCK_LEASE_MS = 660_000;
 export const SELECTED_GAMES_TERMINAL_CACHE_DURATION_MS =
   12 * 60 * 60 * 1000;
-export const ESPN_FUTURE_CACHE_DURATION_MS = 60 * 60 * 1000;
-export const ESPN_UPCOMING_CACHE_DURATION_MS = 30 * 60 * 1000;
-export const ESPN_LIVE_CACHE_DURATION_MS = 10 * 60 * 1000;
-export const ESPN_EMPTY_CACHE_DURATION_MS = 30 * 60 * 1000;
+export const SPORTSDATAIO_FUTURE_CACHE_DURATION_MS = 60 * 60 * 1000;
+export const SPORTSDATAIO_UPCOMING_CACHE_DURATION_MS = 30 * 60 * 1000;
+export const SPORTSDATAIO_LIVE_CACHE_DURATION_MS = 10 * 60 * 1000;
+export const SPORTSDATAIO_EMPTY_CACHE_DURATION_MS = 30 * 60 * 1000;
 const DEFAULT_SELECTED_GAME_MAXIMUM_IDS = 20;
 const ABSOLUTE_SELECTED_GAME_MAXIMUM_IDS = 500;
 
@@ -51,14 +54,14 @@ export function providerCacheKey(
   query: ProviderQuery,
 ): string {
   return sha256({
-    provider: provider.name,
+    provider: provider.cacheNamespace ?? provider.name,
     requestType: "games",
     ...providerQueryCacheIdentity(provider.name, query),
   });
 }
 
 export function providerQueryCacheIdentity(
-  providerName: string,
+  _providerName: string,
   query: ProviderQuery,
 ): Record<string, unknown> {
   const upstreamIdentity = {
@@ -68,16 +71,11 @@ export function providerQueryCacheIdentity(
     from: query.from,
     to: query.to,
   };
-  // ESPN's allowlisted scoreboard URL is fully identified by league and date
-  // range. Season and timezone are local query context and must not fragment
-  // identical upstream scoreboard reads.
-  return providerName === "espn"
-    ? upstreamIdentity
-    : {
-        ...upstreamIdentity,
-        season: query.season,
-        timezone: query.timezone,
-      };
+  return {
+    ...upstreamIdentity,
+    season: query.season,
+    timezone: query.timezone,
+  };
 }
 
 export function selectedGamesCacheKey(
@@ -86,7 +84,7 @@ export function selectedGamesCacheKey(
   context: ProviderQuery,
 ): string {
   return sha256({
-    provider: provider.name,
+    provider: provider.cacheNamespace ?? provider.name,
     requestType: "selectedGames",
     providerGameIds: [...new Set(providerGameIds)].sort(),
     ...providerQueryCacheIdentity(provider.name, context),
@@ -96,9 +94,10 @@ export function selectedGamesCacheKey(
 function serializeGame(game: NormalizedGame): Record<string, unknown> {
   return {
     ...game,
-    scheduledAtUtc: game.scheduledAtUtc.toISOString(),
-    publishedScheduledAtUtc: game.publishedScheduledAtUtc.toISOString(),
-    effectiveLockAtUtc: game.effectiveLockAtUtc.toISOString(),
+    scheduledAtUtc: game.scheduledAtUtc?.toISOString() ?? null,
+    publishedScheduledAtUtc:
+      game.publishedScheduledAtUtc?.toISOString() ?? null,
+    effectiveLockAtUtc: game.effectiveLockAtUtc?.toISOString() ?? null,
     providerLastUpdatedAt: game.providerLastUpdatedAt.toISOString(),
     lastSyncedAt: game.lastSyncedAt.toISOString(),
   };
@@ -196,8 +195,8 @@ export function providerCacheDurationMs(
   providerName?: string,
 ): number {
   if (games.length === 0) {
-    return providerName === "espn"
-      ? ESPN_EMPTY_CACHE_DURATION_MS
+    return providerName === "sportsDataIo"
+      ? SPORTSDATAIO_EMPTY_CACHE_DURATION_MS
       : 2 * 60 * 60 * 1000;
   }
   if (games.every((game) => ["final", "void"].includes(game.status))) {
@@ -209,8 +208,8 @@ export function providerCacheDurationMs(
     return 10 * 365 * 24 * 60 * 60 * 1000;
   }
   if (games.some((game) => game.status === "live")) {
-    return providerName === "espn"
-      ? ESPN_LIVE_CACHE_DURATION_MS
+    return providerName === "sportsDataIo"
+      ? SPORTSDATAIO_LIVE_CACHE_DURATION_MS
       : 15 * 60 * 1000;
   }
   if (
@@ -221,16 +220,20 @@ export function providerCacheDurationMs(
     return 60 * 60 * 1000;
   }
   const futureTimes = games
-    .map((game) => game.scheduledAtUtc.valueOf() - now.valueOf())
+    .flatMap((game) =>
+      game.scheduledAtUtc === null
+        ? []
+        : [game.scheduledAtUtc.valueOf() - now.valueOf()],
+    )
     .filter((difference) => difference > 0);
   if (futureTimes.length === 0) return 30 * 60 * 1000;
   const nearest = Math.min(...futureTimes);
-  if (providerName === "espn") {
+  if (providerName === "sportsDataIo") {
     if (nearest > 24 * 60 * 60 * 1000) {
-      return ESPN_FUTURE_CACHE_DURATION_MS;
+      return SPORTSDATAIO_FUTURE_CACHE_DURATION_MS;
     }
     if (nearest > 2 * 60 * 60 * 1000) {
-      return ESPN_UPCOMING_CACHE_DURATION_MS;
+      return SPORTSDATAIO_UPCOMING_CACHE_DURATION_MS;
     }
     return 15 * 60 * 1000;
   }
@@ -419,19 +422,43 @@ async function releaseLock(key: string, owner: string): Promise<void> {
   });
 }
 
-function usageReference(provider: string): DocumentReference {
-  const day = new Date().toISOString().slice(0, 10);
-  return db.collection("providerUsage").doc(`${provider}_${day}`);
+export function providerUsageDocumentId(
+  provider: string,
+  now = new Date(),
+): string {
+  return `${provider}_${now.toISOString().slice(0, 10)}`;
+}
+
+export function providerCircuitDocumentId(provider: string): string {
+  return provider;
+}
+
+function usageReference(
+  provider: string,
+  now = new Date(),
+): DocumentReference {
+  return db
+    .collection("providerUsage")
+    .doc(providerUsageDocumentId(provider, now));
+}
+
+function circuitReference(provider: string): DocumentReference {
+  return db
+    .collection("providerCircuitStates")
+    .doc(providerCircuitDocumentId(provider));
 }
 
 type QuotaReservation = {
   reference: DocumentReference;
+  circuitReference: DocumentReference;
   providerName: string;
+  day: string;
   baseRequestCount: number;
   maximumRetryRequestCount: number;
   authorizedRetryRequestCount: number;
   pendingRetryAuthorizationCount: number;
   softLimit: number;
+  remainingInternalBudget: number;
 };
 
 export type QuotaReservationSettlement = {
@@ -548,15 +575,20 @@ export function providerRequestEstimate(
 
 async function reserveQuotaAmount(input: {
   reference: DocumentReference;
+  circuitReference: DocumentReference;
   providerName: string;
+  day: string;
   requestCount: number;
   kind: "base" | "retry";
   softLimit: number;
-}): Promise<void> {
-  await db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(input.reference);
+}): Promise<number> {
+  return db.runTransaction(async (transaction) => {
+    const [snapshot, circuitSnapshot] = await Promise.all([
+      transaction.get(input.reference),
+      transaction.get(input.circuitReference),
+    ]);
     const data = snapshot.data() ?? {};
-    const openUntil = data.circuitOpenUntil;
+    const openUntil = circuitSnapshot.data()?.circuitOpenUntil;
     if (
       openUntil instanceof Timestamp &&
       openUntil.toMillis() > Date.now()
@@ -598,12 +630,13 @@ async function reserveQuotaAmount(input: {
       typeof data.retryRequestCount === "number"
         ? data.retryRequestCount
         : 0;
+    const nextRequestCount = count + input.requestCount;
     transaction.set(
       input.reference,
       {
         provider: input.providerName,
-        day: new Date().toISOString().slice(0, 10),
-        requestCount: count + input.requestCount,
+        day: input.day,
+        requestCount: nextRequestCount,
         unreportedRequestCount: unreported + input.requestCount,
         outstandingBaseRequestCount:
           outstandingBase +
@@ -619,10 +652,10 @@ async function reserveQuotaAmount(input: {
         softLimit: input.softLimit,
         providerReportedRemaining: reportedRemaining,
         lastAttempt: FieldValue.serverTimestamp(),
-        circuitState: "closed",
       },
       {merge: true},
     );
+    return Math.max(0, input.softLimit - nextRequestCount);
   });
 }
 
@@ -643,22 +676,30 @@ async function reserveQuota(
     baseReservation,
     Math.floor(maximumRequestCount),
   );
-  const reference = usageReference(provider.name);
-  await reserveQuotaAmount({
+  const reservedAt = new Date();
+  const day = reservedAt.toISOString().slice(0, 10);
+  const reference = usageReference(provider.name, reservedAt);
+  const providerCircuitReference = circuitReference(provider.name);
+  const remainingInternalBudget = await reserveQuotaAmount({
     reference,
+    circuitReference: providerCircuitReference,
     providerName: provider.name,
+    day,
     requestCount: baseReservation,
     kind: "base",
     softLimit,
   });
   return {
     reference,
+    circuitReference: providerCircuitReference,
     providerName: provider.name,
+    day,
     baseRequestCount: baseReservation,
     maximumRetryRequestCount: maximumReservation - baseReservation,
     authorizedRetryRequestCount: 0,
     pendingRetryAuthorizationCount: 0,
     softLimit,
+    remainingInternalBudget,
   };
 }
 
@@ -677,9 +718,11 @@ async function authorizeRetryQuota(
   }
   reservation.pendingRetryAuthorizationCount += 1;
   try {
-    await reserveQuotaAmount({
+    reservation.remainingInternalBudget = await reserveQuotaAmount({
       reference: reservation.reference,
+      circuitReference: reservation.circuitReference,
       providerName: reservation.providerName,
+      day: reservation.day,
       requestCount: 1,
       kind: "retry",
       softLimit: reservation.softLimit,
@@ -745,7 +788,10 @@ async function recordProviderSuccess(
   if (provider.usagePolicy === undefined || reservation === null) return;
   const health = await provider.getHealth();
   await db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(reservation.reference);
+    const [snapshot] = await Promise.all([
+      transaction.get(reservation.reference),
+      transaction.get(reservation.circuitReference),
+    ]);
     const data = snapshot.data() ?? {};
     const unreported =
       typeof data.unreportedRequestCount === "number"
@@ -762,15 +808,22 @@ async function recordProviderSuccess(
     transaction.set(
       reservation.reference,
       {
-        lastSuccessfulRequest: FieldValue.serverTimestamp(),
-        consecutiveFailures: 0,
-        circuitState: "closed",
-        circuitOpenUntil: FieldValue.delete(),
         providerReportedRemaining: reportedRemaining,
         unreportedRequestCount:
           health.quotaRemaining === null
             ? unreported
             : Math.max(0, unreported - actualRequestCount),
+      },
+      {merge: true},
+    );
+    transaction.set(
+      reservation.circuitReference,
+      {
+        provider: provider.name,
+        lastSuccessfulRequest: FieldValue.serverTimestamp(),
+        consecutiveFailures: 0,
+        circuitState: "closed",
+        circuitOpenUntil: FieldValue.delete(),
       },
       {merge: true},
     );
@@ -782,7 +835,7 @@ async function recordProviderFailure(
   error: unknown,
 ): Promise<void> {
   if (provider.usagePolicy === undefined) return;
-  const reference = usageReference(provider.name);
+  const reference = circuitReference(provider.name);
   const threshold = positiveIntegerSetting(
     "PROVIDER_CIRCUIT_FAILURE_THRESHOLD",
     3,
@@ -803,6 +856,7 @@ async function recordProviderFailure(
     transaction.set(
       reference,
       {
+        provider: provider.name,
         consecutiveFailures: failures,
         lastFailure: FieldValue.serverTimestamp(),
         lastFailureCode:
@@ -998,23 +1052,80 @@ function publicProviderError(error: unknown): unknown {
     : error;
 }
 
+export function shouldServeCachedProviderDataAfterError(
+  error: unknown,
+): boolean {
+  const publicError = publicProviderError(error);
+  if (
+    !(publicError instanceof HttpsError) ||
+    publicError.code !== "failed-precondition"
+  ) {
+    return true;
+  }
+  const details = publicError.details;
+  const reason =
+    details !== null && typeof details === "object" && "reason" in details
+      ? details.reason
+      : null;
+  return !isSportsDataIoConfigurationReason(reason);
+}
+
+export function providerCacheFallbackAfterLoadError(
+  cached: CachedGamesResult | null,
+  error: unknown,
+): CachedGamesResult | null {
+  const publicError = publicProviderError(error);
+  if (!shouldServeCachedProviderDataAfterError(error)) {
+    if (publicError instanceof HttpsError) throw publicError;
+    throw new HttpsError(
+      "failed-precondition",
+      "Sports provider configuration needs administrator attention.",
+    );
+  }
+  return cached === null ? null : {...cached, delayed: true};
+}
+
+function safeProviderQueryTelemetry(
+  query: Record<string, unknown>,
+): {sportCode: string | null; leagueCode: string | null} {
+  return {
+    sportCode:
+      typeof query.sportCode === "string"
+        ? query.sportCode.slice(0, 80)
+        : null,
+    leagueCode:
+      typeof query.leagueCode === "string"
+        ? query.leagueCode.slice(0, 80)
+        : null,
+  };
+}
+
 function delayedCacheOrThrow(input: {
   cached: CachedGamesResult | null;
   error: unknown;
   provider: SportsDataProvider;
   requestType: "games" | "selectedGames";
   cacheKey: string;
+  query: Record<string, unknown>;
 }): CachedGamesResult {
   const publicError = publicProviderError(input.error);
-  if (input.cached !== null) {
+  const cachedFallback = providerCacheFallbackAfterLoadError(
+    input.cached,
+    input.error,
+  );
+  if (cachedFallback !== null) {
     logger.warn("Serving cached provider data after a refresh delay", {
       provider: input.provider.name,
       requestType: input.requestType,
+      endpointCategory: input.requestType,
+      ...safeProviderQueryTelemetry(input.query),
       cacheKey: input.cacheKey,
+      cacheHit: true,
+      stale: true,
       safeErrorCode:
         publicError instanceof Error ? publicError.name : "UnknownError",
     });
-    return {...input.cached, delayed: true};
+    return cachedFallback;
   }
   if (publicError instanceof HttpsError) throw publicError;
   throw new HttpsError(
@@ -1057,8 +1168,11 @@ async function loadProviderGamesWithCache(input: {
         logger.info("Provider cache hit", {
           provider: input.provider.name,
           requestType: input.requestType,
+          endpointCategory: input.requestType,
+          ...safeProviderQueryTelemetry(input.query),
           cacheKey: input.key,
           cacheHit: true,
+          stale: false,
           durationMs: Date.now() - startedAt,
         });
         return cached;
@@ -1103,6 +1217,7 @@ async function loadProviderGamesWithCache(input: {
         provider: input.provider,
         requestType: input.requestType,
         cacheKey: input.key,
+        query: input.query,
       });
     }
 
@@ -1156,6 +1271,7 @@ async function loadProviderGamesWithCache(input: {
         provider: input.provider,
         requestType: input.requestType,
         cacheKey: input.key,
+        query: input.query,
       });
     } finally {
       // Providers finish all launched requests before returning, so no retry
@@ -1207,10 +1323,16 @@ async function loadProviderGamesWithCache(input: {
       logger.info("Provider refresh completed", {
         provider: input.provider.name,
         requestType: input.requestType,
+        endpointCategory: input.requestType,
+        ...safeProviderQueryTelemetry(input.query),
         cacheKey: input.key,
         cacheHit: false,
+        stale: false,
         gameCount: games.length,
         actualRequestCount: settlement.actualRequestCount,
+        retryCount: settlement.authorizedRetryRequestCount,
+        remainingInternalQuotaBudget:
+          reservation?.remainingInternalBudget ?? null,
         durationMs: Date.now() - startedAt,
       });
       return input.expectedItemCount !== undefined &&
@@ -1224,6 +1346,7 @@ async function loadProviderGamesWithCache(input: {
         provider: input.provider,
         requestType: input.requestType,
         cacheKey: input.key,
+        query: input.query,
       });
     }
   } finally {
@@ -1334,8 +1457,12 @@ export async function fetchGamesByIdsWithCache(
 export async function providerUsageSummary(
   providerName: string,
 ): Promise<Record<string, unknown>> {
-  const snapshot = await usageReference(providerName).get();
-  const data = snapshot.data() ?? {};
+  const [usageSnapshot, circuitSnapshot] = await Promise.all([
+    usageReference(providerName).get(),
+    circuitReference(providerName).get(),
+  ]);
+  const data = usageSnapshot.data() ?? {};
+  const circuit = circuitSnapshot.data() ?? {};
   return {
     provider: providerName,
     day: data.day ?? new Date().toISOString().slice(0, 10),
@@ -1345,10 +1472,10 @@ export async function providerUsageSummary(
       data.outstandingBaseRequestCount ?? 0,
     softLimit: data.softLimit ?? null,
     providerReportedRemaining: data.providerReportedRemaining ?? null,
-    lastSuccessfulRequest: data.lastSuccessfulRequest ?? null,
-    lastFailure: data.lastFailure ?? null,
-    circuitState: data.circuitState ?? "closed",
-    circuitOpenUntil: data.circuitOpenUntil ?? null,
+    lastSuccessfulRequest: circuit.lastSuccessfulRequest ?? null,
+    lastFailure: circuit.lastFailure ?? null,
+    circuitState: circuit.circuitState ?? "closed",
+    circuitOpenUntil: circuit.circuitOpenUntil ?? null,
   };
 }
 

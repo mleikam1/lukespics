@@ -267,11 +267,15 @@ class _ReviewGameCard extends StatelessWidget {
                 Text(
                   [
                     game.leagueName,
-                    formatLeagueTime(
-                      game.scheduledAtUtc,
-                      timezone,
-                      'EEE, MMM d · h:mm a',
-                    ),
+                    game.timeTbd
+                        ? '${game.scheduledDayEastern ?? 'Date pending'} · Time TBD (Eastern)'
+                        : game.scheduledAtUtc == null
+                        ? 'Schedule unavailable'
+                        : formatLeagueTime(
+                            game.scheduledAtUtc!,
+                            timezone,
+                            'EEE, MMM d · h:mm a',
+                          ),
                     if (game.venueName != null) game.venueName!,
                   ].join(' · '),
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(

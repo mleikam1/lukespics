@@ -19,7 +19,7 @@ import type {
 } from "../types.js";
 import {finalWinner, normalizeTeam, withSourceHash} from "./normalization.js";
 import {neutralCatalogPresentation} from "./presentation.js";
-import {isEspnOwnedHost} from "./espn.js";
+import {isBlockedUnlicensedLogoHost} from "./licensing.js";
 import {ProviderRetryAuthorizationError} from "./retry.js";
 
 const API_SPORTS_HOST_PATTERN =
@@ -120,7 +120,7 @@ const hostSchema = z
   .toLowerCase()
   .regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/)
   .refine(
-    (host) => !isEspnOwnedHost(host),
+    (host) => !isBlockedUnlicensedLogoHost(host),
     "Broadcaster-owned image hosts are not permitted.",
   );
 
@@ -279,7 +279,7 @@ function permittedLogoUrl(
       url.username.length > 0 ||
       url.password.length > 0 ||
       !presentation.allowedLogoHosts.includes(hostname) ||
-      isEspnOwnedHost(hostname)
+      isBlockedUnlicensedLogoHost(hostname)
     ) {
       return null;
     }

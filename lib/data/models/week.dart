@@ -44,9 +44,12 @@ final class LeagueWeek {
 
   DateTime? get firstGameLockAt {
     if (games.isEmpty) return null;
-    return games
+    final locks = games
         .map((game) => game.effectiveLockAtUtc)
-        .reduce((a, b) => a.isBefore(b) ? a : b);
+        .whereType<DateTime>()
+        .toList(growable: false);
+    if (locks.length != games.length) return null;
+    return locks.reduce((a, b) => a.isBefore(b) ? a : b);
   }
 
   bool isEligible(String uid) {

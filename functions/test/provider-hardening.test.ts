@@ -1,10 +1,12 @@
 import {
+  existsSync,
   readdirSync,
   readFileSync,
   statSync,
 } from "node:fs";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
+import {HttpsError} from "firebase-functions/v2/https";
 import {afterEach, describe, expect, it, vi} from "vitest";
 import * as functionExports from "../src/index.js";
 import {
@@ -17,7 +19,22 @@ import {
   parseApiSportsConfigs,
   resolveApiSportsGamesUrl,
 } from "../src/providers/apiSports.js";
+import {isBlockedUnlicensedLogoHost} from "../src/providers/licensing.js";
 import {MockSportsProvider} from "../src/providers/mock.js";
+import {
+  parseSportsDataIoCatalog,
+  SportsDataIoProvider,
+} from "../src/providers/sportsDataIo.js";
+import {
+  resolveSportsDataIoUrl,
+  SPORTSDATAIO_KEY_CONFIGURATION_REASON,
+  SPORTSDATAIO_CREDENTIALS_CONFIGURATION_REASON,
+  SPORTSDATAIO_ENTITLEMENT_CONFIGURATION_REASON,
+  SPORTSDATAIO_ORIGIN,
+  SportsDataIoClient,
+} from "../src/providers/sportsDataIoClient.js";
+import {normalizeSportsDataIoMlbTeam} from "../src/providers/sportsDataIoMlb.js";
+import {normalizeSportsDataIoNflTeam} from "../src/providers/sportsDataIoNfl.js";
 import {
   leagueSettingsSchema,
   sportsCatalogSchema,
@@ -42,12 +59,16 @@ import {
   minimumProviderQuotaRemaining,
   providerCacheSnapshotMatchesMetadata,
   providerCacheDurationMs,
+  providerCacheFallbackAfterLoadError,
   providerCacheKey,
   providerGamesContentHash,
   PROVIDER_CACHE_LOCK_LEASE_MS,
+  providerCircuitDocumentId,
   providerQuotaReservationAllowed,
+  providerUsageDocumentId,
   quotaReservationSettlement,
   SELECTED_GAMES_TERMINAL_CACHE_DURATION_MS,
+  shouldServeCachedProviderDataAfterError,
   shouldRecordProviderFailure,
   validateAndDeduplicateProviderGames,
 } from "../src/services/providerGateway.js";
@@ -322,16 +343,22 @@ describe("API-Sports baseball sanitized contract", () => {
         config,
       ),
     ).toThrow("unexpected league");
-    expect(() =>
-      parseApiSportsCatalog({
-        leagues: [rawConfig],
-        presentation: {
-          allowRemoteLogos: true,
-          allowedLogoHosts: ["a.espncdn.com"],
-          logoRightsReviewDate: "2030-01-01",
-        },
-      }),
-    ).toThrow();
+    for (const blockedHost of [
+      "a.espncdn.com",
+      "en.wikipedia.org",
+      "upload.wikimedia.org",
+    ]) {
+      expect(() =>
+        parseApiSportsCatalog({
+          leagues: [rawConfig],
+          presentation: {
+            allowRemoteLogos: true,
+            allowedLogoHosts: [blockedHost],
+            logoRightsReviewDate: "2030-01-01",
+          },
+        }),
+      ).toThrow();
+    }
     expect(() =>
       parseApiSportsCatalog({
         leagues: [rawConfig],
@@ -577,6 +604,173 @@ describe("API-Sports baseball sanitized contract", () => {
   });
 });
 
+describe("SportsDataIO production catalog hardening", () => {
+  const productionCatalog = {
+    enabled: true,
+    accessMode: "production",
+    revision: "sanitized-contract-v1",
+    entitlementVerified: true,
+    entitlementReference: "sanitized-entitlement-record",
+    entitlementReviewedAt: "2030-01-01",
+    leagues: [
+      {
+        code: "nfl",
+        enabled: true,
+        season: "2030REG",
+        entitlements: {
+          teams: true,
+          schedules: true,
+          liveAndFinal: true,
+        },
+      },
+      {
+        code: "mlb",
+        enabled: true,
+        season: "2030",
+        entitlements: {
+          teams: true,
+          schedules: true,
+          liveAndFinal: true,
+        },
+      },
+    ],
+  };
+
+  it("defaults disabled and fails closed on incomplete production approval", () => {
+    expect(parseSportsDataIoCatalog({})).toMatchObject({
+      enabled: false,
+      accessMode: "fixture",
+      revision: "disabled",
+      entitlementVerified: false,
+      leagues: [],
+    });
+    expect(() =>
+      parseSportsDataIoCatalog({
+        ...productionCatalog,
+        entitlementReference: null,
+      }),
+    ).toThrow("reviewed entitlement metadata");
+    expect(() => new SportsDataIoProvider(parseSportsDataIoCatalog({}))).toThrow(
+      "disabled by its server-side kill switch",
+    );
+  });
+
+  it("constructs a reviewed production catalog with neutral presentation", async () => {
+    const parsed = parseSportsDataIoCatalog(productionCatalog);
+    const provider = new SportsDataIoProvider(parsed);
+    expect(provider.presentation).toMatchObject({
+      provider: "sportsDataIo",
+      allowRemoteLogos: false,
+      allowedLogoHosts: [],
+    });
+    await expect(provider.listSupportedSports()).resolves.toEqual([
+      "football",
+      "baseball",
+    ]);
+    await expect(provider.listLeagues()).resolves.toHaveLength(2);
+  });
+
+  it("ignores vendor Wikipedia logo and wordmark fields", () => {
+    const vendorArtwork = {
+      WikipediaLogoUrl: "https://en.wikipedia.org/sanitized-logo.png",
+      WikipediaWordMarkUrl:
+        "https://upload.wikimedia.org/sanitized-wordmark.svg",
+    };
+    const nflTeam = normalizeSportsDataIoNflTeam({
+      TeamID: 101,
+      GlobalTeamID: 1001,
+      Key: "HOM",
+      FullName: "Sanitized Home",
+      ...vendorArtwork,
+    });
+    const mlbTeam = normalizeSportsDataIoMlbTeam({
+      TeamID: 202,
+      GlobalTeamID: 2002,
+      Key: "AWY",
+      City: "Sanitized",
+      Name: "Away",
+      ...vendorArtwork,
+    });
+    expect(nflTeam.logoUrl).toBeNull();
+    expect(nflTeam.color).toBeNull();
+    expect(mlbTeam.logoUrl).toBeNull();
+    expect(mlbTeam.color).toBeNull();
+  });
+});
+
+describe("SportsDataIO credential transport", () => {
+  it("uses only the fixed League API origin and header authentication", async () => {
+    const fakeKey = ["not", "a", "credential"].join("-");
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response("[]", {
+          status: 200,
+          headers: {"content-type": "application/json"},
+        }),
+    );
+    const client = new SportsDataIoClient({
+      getApiKey: () => fakeKey,
+      fetchImpl: fetchMock,
+    });
+
+    await expect(
+      client.getJson({league: "mlb", resource: "teams"}),
+    ).resolves.toEqual([]);
+    const firstCall = fetchMock.mock.calls[0];
+    if (firstCall === undefined) throw new Error("Expected a provider request.");
+    const [requestUrl, requestInit] = firstCall;
+    if (!(requestUrl instanceof URL)) {
+      throw new Error("Expected the provider client to pass a URL object.");
+    }
+    const resolved = requestUrl;
+    const headers = new Headers(requestInit?.headers);
+    expect(resolved.origin).toBe(SPORTSDATAIO_ORIGIN);
+    expect(resolved.pathname).toBe("/v3/mlb/scores/json/teams");
+    expect(resolved.search).toBe("");
+    expect(resolved.href).not.toContain(fakeKey);
+    expect(headers.get("Ocp-Apim-Subscription-Key")).toBe(fakeKey);
+    expect(requestInit).toMatchObject({
+      method: "GET",
+      redirect: "error",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      cache: "no-store",
+    });
+  });
+
+  it("does not issue a request without an injected key", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response("[]", {status: 200}),
+    );
+    const client = new SportsDataIoClient({
+      getApiKey: () => "",
+      fetchImpl: fetchMock,
+    });
+    await expect(
+      client.getJson({league: "nfl", resource: "Teams"}),
+    ).rejects.toThrow("API key is not configured");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("formats dates without allowing query or path injection", () => {
+    expect(
+      resolveSportsDataIoUrl({
+        league: "mlb",
+        resource: "GamesByDate",
+        date: "2030-09-01",
+      }).href,
+    ).toBe(`${SPORTSDATAIO_ORIGIN}/v3/mlb/scores/json/GamesByDate/2030-SEP-01`);
+    expect(() =>
+      resolveSportsDataIoUrl({
+        league: "mlb",
+        resource: "GamesByDate",
+        date: "2030-09-01?key=forbidden",
+      }),
+    ).toThrow("valid YYYY-MM-DD");
+  });
+});
+
 describe("sanitized mock MLB fixtures", () => {
   it("keeps overlapping day identities stable across query windows", async () => {
     const provider = new MockSportsProvider();
@@ -597,8 +791,8 @@ describe("sanitized mock MLB fixtures", () => {
       from: "2030-09-01",
       to: "2030-09-03",
     });
-    const overlapping = range.filter(
-      (game) => game.scheduledAtUtc.toISOString().startsWith("2030-09-02"),
+    const overlapping = range.filter((game) =>
+      game.scheduledAtUtc?.toISOString().startsWith("2030-09-02") ?? false,
     );
     expect(overlapping.map((game) => game.id)).toEqual(
       day.map((game) => game.id),
@@ -615,14 +809,18 @@ describe("provider runtime policy", () => {
     emulator: false,
     allowTheSportsDbTest: false,
     allowApiSports: false,
-    allowEspn: false,
+    allowSportsDataIo: false,
+    sportsDataIoAccessMode: "fixture",
+    sportsDataIoEntitlementVerified: false,
   };
   const local: ProviderRuntime = {
     projectId: "demo-lukes-picks-local",
     emulator: true,
     allowTheSportsDbTest: false,
     allowApiSports: false,
-    allowEspn: false,
+    allowSportsDataIo: false,
+    sportsDataIoAccessMode: "fixture",
+    sportsDataIoEntitlementVerified: false,
   };
 
   it("defaults arenas to manual and rejects test modes in production", () => {
@@ -658,6 +856,61 @@ describe("provider runtime policy", () => {
     ).toBe(false);
     expect(
       providerRuntime({GCLOUD_PROJECT: "lukes-picks"}).allowApiSports,
+    ).toBe(false);
+  });
+
+  it("requires every SportsDataIO production activation gate", () => {
+    const active: ProviderRuntime = {
+      ...production,
+      allowSportsDataIo: true,
+      sportsDataIoAccessMode: "production",
+      sportsDataIoEntitlementVerified: true,
+    };
+    expect(isProviderAllowed("sportsDataIo", active)).toBe(true);
+    expect(
+      isProviderAllowed("sportsDataIo", {
+        ...active,
+        allowSportsDataIo: false,
+      }),
+    ).toBe(false);
+    for (const accessMode of ["fixture", "trial", "discovery", "PRODUCTION"]) {
+      expect(
+        isProviderAllowed("sportsDataIo", {
+          ...active,
+          sportsDataIoAccessMode: accessMode,
+        }),
+      ).toBe(false);
+    }
+    expect(
+      isProviderAllowed("sportsDataIo", {
+        ...active,
+        sportsDataIoEntitlementVerified: false,
+      }),
+    ).toBe(false);
+    expect(
+      isProviderAllowed("sportsDataIo", {...active, emulator: true}),
+    ).toBe(false);
+    expect(
+      isProviderAllowed("sportsDataIo", {
+        ...active,
+        projectId: "another-project",
+      }),
+    ).toBe(false);
+
+    const defaults = providerRuntime({GCLOUD_PROJECT: "lukes-picks"});
+    expect(defaults).toMatchObject({
+      allowSportsDataIo: false,
+      sportsDataIoAccessMode: "fixture",
+      sportsDataIoEntitlementVerified: false,
+    });
+  });
+
+  it("accepts the active provider name but not retired ESPN settings", () => {
+    expect(
+      leagueSettingsSchema.safeParse({providerName: "sportsDataIo"}).success,
+    ).toBe(true);
+    expect(
+      leagueSettingsSchema.safeParse({providerName: "espn"}).success,
     ).toBe(false);
   });
 
@@ -1147,6 +1400,44 @@ describe("catalog input and provider response hardening", () => {
     ).toMatchObject({stale: true, delayed: false});
   });
 
+  it("never masks SportsDataIO configuration errors with cached data", () => {
+    const games = normalizedFixtureGames();
+    const cached = {
+      games,
+      cacheHit: true,
+      stale: true,
+      delayed: false,
+      cachedAt: new Date("2030-09-02T02:00:00.000Z"),
+      expiresAt: new Date("2030-09-02T03:00:00.000Z"),
+      contentHash: providerGamesContentHash(games),
+    };
+    for (const reason of [
+      SPORTSDATAIO_KEY_CONFIGURATION_REASON,
+      SPORTSDATAIO_CREDENTIALS_CONFIGURATION_REASON,
+      SPORTSDATAIO_ENTITLEMENT_CONFIGURATION_REASON,
+    ]) {
+      const error = new HttpsError(
+        "failed-precondition",
+        "Safe configuration error.",
+        {reason},
+      );
+      expect(shouldServeCachedProviderDataAfterError(error)).toBe(false);
+      expect(() => providerCacheFallbackAfterLoadError(cached, error)).toThrow(
+        error,
+      );
+    }
+    for (const error of [
+      new HttpsError("unavailable", "Temporary upstream failure."),
+      new HttpsError("resource-exhausted", "Temporary quota delay."),
+    ]) {
+      expect(shouldServeCachedProviderDataAfterError(error)).toBe(true);
+      expect(providerCacheFallbackAfterLoadError(cached, error)).toMatchObject({
+        stale: true,
+        delayed: true,
+      });
+    }
+  });
+
   it("keeps the provider lock beyond the endpoint execution window", () => {
     expect(PROVIDER_CACHE_LOCK_LEASE_MS).toBe(660_000);
     const gatewayPath = fileURLToPath(
@@ -1182,6 +1473,30 @@ describe("catalog input and provider response hardening", () => {
     expect(gatewaySource).not.toContain("API_SPORTS_MAX_REQUEST_ATTEMPTS");
   });
 
+  it("keeps circuit state provider-scoped across UTC quota rollover", () => {
+    const beforeMidnight = new Date("2030-09-01T23:59:59.999Z");
+    const afterMidnight = new Date("2030-09-02T00:00:00.000Z");
+    expect(providerUsageDocumentId("sportsDataIo", beforeMidnight)).toBe(
+      "sportsDataIo_2030-09-01",
+    );
+    expect(providerUsageDocumentId("sportsDataIo", afterMidnight)).toBe(
+      "sportsDataIo_2030-09-02",
+    );
+    expect(providerCircuitDocumentId("sportsDataIo")).toBe("sportsDataIo");
+
+    const gatewayPath = fileURLToPath(
+      new URL("../src/services/providerGateway.ts", import.meta.url),
+    );
+    const gatewaySource = readFileSync(gatewayPath, "utf8");
+    expect(gatewaySource).toContain('.collection("providerCircuitStates")');
+    expect(gatewaySource).toContain(
+      "transaction.get(input.circuitReference)",
+    );
+    expect(gatewaySource).not.toMatch(
+      /const openUntil = data\.circuitOpenUntil/,
+    );
+  });
+
   it("separates cache entries by canonical provider metadata and timezone", () => {
     const provider = new TheSportsDbTestProvider([providerConfig]);
     const base = providerCacheKey(provider, query);
@@ -1215,24 +1530,59 @@ function sourceFiles(directory: string): string[] {
 }
 
 describe("provider source allowlist", () => {
-  it("contains ESPN hosts only in the literal allowlisted adapter", () => {
+  it("isolates the production API host and blocked logo roots", () => {
     const sourceRoot = fileURLToPath(new URL("../src", import.meta.url));
-    const broadcasterDomain = ["espn", "com"].join(".");
-    const forbiddenHosts = [
-      ["site", "api", broadcasterDomain].join("."),
-      ["site", "web", "api", broadcasterDomain].join("."),
-      ["a", "espncdn", "com"].join("."),
+    const clientPath = join(sourceRoot, "providers", "sportsDataIoClient.ts");
+    const licensingPath = join(sourceRoot, "providers", "licensing.ts");
+    const retiredAdapterPath = join(sourceRoot, "providers", "espn.ts");
+    const providerHost = "api.sportsdata.io";
+    const credentialHeader = "ocp-apim-subscription-key";
+    const blockedLogoRoots = [
+      "espn.com",
+      "espncdn.com",
+      "wikipedia.org",
+      "wikimedia.org",
     ];
     for (const path of sourceFiles(sourceRoot)) {
       const source = readFileSync(path, "utf8").toLowerCase();
-      if (path.endsWith(join("providers", "espn.ts"))) {
-        expect(source).toContain("https://site.api.espn.com");
-        expect(source).toContain('const espn_logo_host = "a.espncdn.com"');
-        continue;
+      if (path === clientPath) {
+        expect(source).toContain(`https://${providerHost}`);
+        expect(source).toContain(credentialHeader);
+      } else {
+        expect(source, path).not.toContain(providerHost);
+        expect(source, path).not.toContain(credentialHeader);
       }
-      for (const host of forbiddenHosts) {
-        expect(source).not.toContain(host);
+      expect(source, path).not.toMatch(/wikipedia(?:logo|wordmark)url/);
+      if (path !== licensingPath) {
+        for (const root of blockedLogoRoots) {
+          expect(source, path).not.toContain(root);
+        }
       }
+    }
+    const licensingSource = readFileSync(licensingPath, "utf8");
+    for (const root of blockedLogoRoots) {
+      expect(licensingSource).toContain(`"${root}"`);
+    }
+    expect(existsSync(retiredAdapterPath)).toBe(false);
+  });
+
+  it("blocks exact and nested unlicensed logo hosts without false positives", () => {
+    for (const host of [
+      "espn.com",
+      "a.espncdn.com",
+      "EN.WIKIPEDIA.ORG",
+      "upload.wikimedia.org.",
+    ]) {
+      expect(isBlockedUnlicensedLogoHost(host), host).toBe(true);
+    }
+    for (const host of [
+      "example.com",
+      "espn.com.example.test",
+      "notespn.com",
+      "wikipedia.org.invalid",
+      "wikimedia.org.example.test",
+    ]) {
+      expect(isBlockedUnlicensedLogoHost(host), host).toBe(false);
     }
   });
 
@@ -1248,15 +1598,66 @@ describe("provider source allowlist", () => {
       /defineSecret\(\s*["']INVITE_CODE_PEPPER["']\s*\)/,
     );
     expect(configSource).toMatch(
+      /defineSecret\(\s*["']SPORTSDATAIO_API_KEY["']\s*\)/,
+    );
+    expect(configSource).toMatch(/process\.env\.SPORTSDATAIO_API_KEY/);
+    expect(configSource).toMatch(
       /defineBoolean\(\s*["']ALLOW_API_SPORTS_PROVIDER["'][\s\S]*default:\s*false/,
     );
     expect(configSource).toMatch(
-      /defineBoolean\(\s*["']ALLOW_ESPN_PROVIDER["'][\s\S]*default:\s*false/,
+      /defineBoolean\(\s*["']ALLOW_SPORTSDATAIO_PROVIDER["'][\s\S]*default:\s*false/,
     );
+    expect(configSource).toMatch(
+      /defineString\(\s*["']SPORTSDATAIO_ACCESS_MODE["'][\s\S]*default:\s*["']fixture["']/,
+    );
+    expect(configSource).toMatch(
+      /defineBoolean\(\s*["']SPORTSDATAIO_ENTITLEMENT_VERIFIED["'][\s\S]*default:\s*false/,
+    );
+    expect(configSource).not.toContain("ALLOW_ESPN_PROVIDER");
   });
 
-  it("does not bind an optional provider secret to generic Functions", () => {
-    const genericFunctions = new Set([
+  it("constructs SportsDataIO only from the server-owned catalog", () => {
+    const factoryPath = fileURLToPath(
+      new URL("../src/providers/factory.ts", import.meta.url),
+    );
+    const factorySource = readFileSync(factoryPath, "utf8");
+    expect(factorySource).toContain('case "sportsDataIo"');
+    expect(factorySource).toContain('.doc("sportsDataIoCatalog")');
+    expect(factorySource).toContain("parseSportsDataIoCatalog(");
+    expect(factorySource).toContain("new SportsDataIoProvider(parsed)");
+    expect(factorySource).not.toContain("espnCatalog");
+    expect(factorySource).not.toContain("EspnProvider");
+  });
+
+  it("keeps provider credentials and hosts in every release scanner", () => {
+    const publicSource = readFileSync(
+      new URL("../../scripts/check_public_source.sh", import.meta.url),
+      "utf8",
+    );
+    const publicBuild = readFileSync(
+      new URL("../../scripts/check_public_build.sh", import.meta.url),
+      "utf8",
+    );
+    const secretScan = readFileSync(
+      new URL("../../scripts/check_secrets.sh", import.meta.url),
+      "utf8",
+    );
+    expect(publicSource).toContain(
+      "functions/src/providers/sportsDataIoClient.ts",
+    );
+    expect(publicSource).toContain("SPORTSDATAIO_API_KEY");
+    expect(publicSource).toContain("Ocp-Apim-Subscription-Key");
+    expect(publicSource).toContain("Wikipedia(?:Logo|WordMark)Url");
+    expect(publicBuild).toContain("SPORTSDATAIO_API_KEY");
+    expect(publicBuild).toContain("api\\.sportsdata\\.io");
+    expect(publicBuild).toContain("Ocp-Apim-Subscription-Key");
+    expect(secretScan).toContain("SPORTSDATAIO_API_KEY");
+    expect(secretScan).toContain("api\\.sportsdata\\.io");
+    expect(secretScan).toContain("Ocp-Apim-Subscription-Key");
+  });
+
+  it("binds the provider secret to exactly the four provider-bearing Functions", () => {
+    const expectedBindings = new Set([
       "listSportsCatalog",
       "refreshSelectedGames",
       "syncSelectedGameResults",
@@ -1274,11 +1675,14 @@ describe("provider source allowlist", () => {
       const secrets = new Set(
         endpoint?.secretEnvironmentVariables?.map((secret) => secret.key) ?? [],
       );
-      if (secrets.has("API_SPORTS_KEY")) observed.add(name);
-      if (genericFunctions.has(name)) {
-        expect(secrets.has("API_SPORTS_KEY"), name).toBe(false);
+      expect(secrets.has("API_SPORTS_KEY"), name).toBe(false);
+      if (secrets.has("SPORTSDATAIO_API_KEY")) observed.add(name);
+      if (expectedBindings.has(name)) {
+        expect(secrets.has("SPORTSDATAIO_API_KEY"), name).toBe(true);
+      } else {
+        expect(secrets.has("SPORTSDATAIO_API_KEY"), name).toBe(false);
       }
     }
-    expect(observed).toEqual(new Set());
+    expect(observed).toEqual(expectedBindings);
   });
 });

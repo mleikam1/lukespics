@@ -7,6 +7,7 @@ enum CatalogAvailabilityState {
   noGames,
   offSeason,
   providerNotConfigured,
+  providerConfigurationRequired,
   providerUnavailable,
   quotaDelayed,
   unauthorized,

@@ -55,14 +55,27 @@ service cloud.firestore {
       ];
     }
 
-    function pickIsOpen(leagueId, weekId, gameId, uid) {
+    function effectivePickLock(leagueId, weekId, gameId) {
       let week = get(weekPath(leagueId, weekId)).data;
       let game = get(gamePath(leagueId, weekId, gameId)).data;
+      return week.keys().hasAll([
+          "lockPolicySnapshot",
+          "effectiveSlateLockAtUtc"
+        ])
+          && week.lockPolicySnapshot == "firstGame"
+          && week.effectiveSlateLockAtUtc is timestamp
+        ? week.effectiveSlateLockAtUtc
+        : game.effectiveLockAtUtc;
+    }
+
+    function pickIsOpen(leagueId, weekId, gameId, uid) {
+      let week = get(weekPath(leagueId, weekId)).data;
       let entry = get(entryPath(leagueId, weekId, uid)).data;
+      let lockAt = effectivePickLock(leagueId, weekId, gameId);
       return week.status in ["open", "inProgress"]
         && entry.eligible == true
-        && game.effectiveLockAtUtc is timestamp
-        && request.time < game.effectiveLockAtUtc;
+        && lockAt is timestamp
+        && request.time < lockAt;
     }
 
     match /users/{uid} {
@@ -147,7 +160,7 @@ service cloud.firestore {
               && request.resource.data.selectedAt == request.time
               && request.resource.data.updatedAt == request.time
               && request.resource.data.lockAtSnapshot
-                == get(gamePath(leagueId, weekId, gameId)).data.effectiveLockAtUtc;
+                == effectivePickLock(leagueId, weekId, gameId);
             allow update: if isActiveMember(leagueId)
               && request.auth.uid == uid
               && pickIsOpen(leagueId, weekId, gameId, uid)
@@ -169,7 +182,7 @@ service cloud.firestore {
             allow read: if isActiveMember(leagueId)
               && get(gamePath(leagueId, weekId, gameId)).data.pickRevealCompletedAt is timestamp
               && request.time
-                >= get(gamePath(leagueId, weekId, gameId)).data.effectiveLockAtUtc;
+                >= effectivePickLock(leagueId, weekId, gameId);
             allow write: if false;
           }
         }
@@ -201,6 +214,9 @@ service cloud.firestore {
       allow read, write: if false;
     }
     match /providerUsage/{document=**} {
+      allow read, write: if false;
+    }
+    match /providerCircuitStates/{document=**} {
       allow read, write: if false;
     }
     match /providerLocks/{document=**} {

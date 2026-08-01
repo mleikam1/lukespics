@@ -62,9 +62,19 @@ function assertLocalTarget() {
     "The browser fixture must keep the production provider disabled.",
   );
   assert.equal(
-    process.env.ALLOW_ESPN_PROVIDER,
+    process.env.ALLOW_SPORTSDATAIO_PROVIDER,
     "false",
-    "The browser fixture must keep the ESPN provider disabled.",
+    "The browser fixture must keep SportsDataIO disabled.",
+  );
+  assert.equal(
+    process.env.SPORTSDATAIO_ACCESS_MODE,
+    "fixture",
+    "The browser fixture must not select production provider access.",
+  );
+  assert.equal(
+    process.env.SPORTSDATAIO_ENTITLEMENT_VERIFIED,
+    "false",
+    "The browser fixture must not claim a production entitlement.",
   );
   assert.equal(
     new URL(BASE_URL).hostname,
@@ -852,8 +862,12 @@ async function overrideAsVoid(owner, gameIndex, reason) {
     .or(owner.page.getByText("Scheduled", {exact: true}))
     .first();
   await gameState.click({force: true});
+  // Flutter's popup route is not exposed as stable DOM text in headless
+  // Chrome. Move from Scheduled to the fifth item, allowing each semantics
+  // rebuild to settle so rapid keys are not dropped.
   for (let option = 0; option < 4; option += 1) {
     await owner.page.keyboard.press("ArrowDown");
+    await owner.page.waitForTimeout(150);
   }
   await owner.page.keyboard.press("Enter");
   await expectText(owner.page, "Void / canceled");

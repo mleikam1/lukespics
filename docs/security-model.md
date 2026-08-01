@@ -28,17 +28,14 @@ such as enabling a reviewed API or setting `INVITE_CODE_PEPPER`, must run the
 same project guard immediately before an explicit `lukes-picks` write.
 
 The public source/build scans reject the forbidden Wingman project, emulator
-markers, internal-test-provider markers, and likely secrets from a public
-release. Runtime source permits only the exact scoreboard origin and
-rights-gated logo hostname inside `functions/src/providers/espn.ts`; every ESPN
-host remains forbidden in Flutter/web code and public artifacts.
+markers, internal-test/provider markers, blocked third-party logo hosts, and
+likely secrets. Runtime source permits the exact SportsDataIO API origin and
+credential-header name only in the dedicated backend client; Flutter/web and
+public artifacts must contain neither.
 
-The ESPN adapter is deployed but dormant. Every deployed Function has
-`ALLOW_ESPN_PROVIDER=false`, both arenas remain `manual`, and
-`systemConfig/espnCatalog` is absent. Activation additionally requires the
-Admin-only authorization record and retained written ESPN/Disney authorization;
-none of those gates substitutes for the others. No production ESPN request or
-logo publication is part of the dormant release.
+The SportsDataIO changes on this branch are not deployed or activated. Current
+production arenas remain `manual`. No authenticated SportsDataIO request or
+remote provider-mark publication is claimed.
 
 ## Firestore rules
 
@@ -101,30 +98,35 @@ emulator/internal condition. API-Sports requires all of the following:
 The boolean flag, secret binding, and catalog document are independent gates;
 one cannot substitute for another.
 
-ESPN is a separate replaceable provider and requires all of the following:
+SportsDataIO is a separate replaceable provider and requires all of the
+following:
 
 - non-emulator runtime project exactly `lukes-picks`;
-- deploy-time `ALLOW_ESPN_PROVIDER=true`, whose default is `false`;
-- `systemConfig/espnCatalog.enabled == true` with bounded
-  `authorizationReference` and ISO `authorizationReviewedAt` metadata;
-- retained written authorization covering the intended automated/commercial
-  access, caching, storage, and distribution; and
-- the existing authorization, cache, soft-budget, timeout, retry, lease, and
-  circuit-breaker controls.
+- deploy-time `ALLOW_SPORTSDATAIO_PROVIDER=true`, default `false`;
+- environment `SPORTSDATAIO_ACCESS_MODE=production`;
+- environment `SPORTSDATAIO_ENTITLEMENT_VERIFIED=true`;
+- an enabled, valid `systemConfig/sportsDataIoCatalog` with matching production
+  mode, bounded entitlement review metadata, and verified NFL/MLB feed flags;
+- a non-empty `SPORTSDATAIO_API_KEY` Secret Manager value bound only to the four
+  provider-bearing entry points; and
+- the existing authorization, cache, soft-budget, timeout, retry, lease,
+  stale-data, and circuit-breaker controls.
 
-No secret or legal-document contents belong in the Firestore authorization
-record. ESPN logo display additionally requires the separate rights-review
-date and exact static adapter policy.
+Each gate is independent. Trial/Dev data cannot drive production display or
+grading; Discovery access is delayed and cannot be represented as real-time.
+No secret or contract contents belong in Firestore.
 
 ## Secrets
 
 The deployed dormant-provider release binds `INVITE_CODE_PEPPER`, which is
 required for production invite-code hashing.
 
-The current ESPN adapter needs no credential, and provider-bearing Functions do
-not bind `API_SPORTS_KEY`. That absence is not permission to access ESPN; its
-written-authorization and technical gates remain mandatory. The dormant
-API-Sports adapter remains replaceable-provider code, but no
+The SportsDataIO key is declared with `defineSecret` and injected only into the
+catalog, two selected-game refresh, and scheduled-result-sync Functions. The
+dedicated client sends it only in the `Ocp-Apim-Subscription-Key` header. It is
+never accepted from a caller, appended to a URL, returned, or logged.
+
+The dormant API-Sports adapter remains replaceable-provider code, but no
 `API_SPORTS_KEY` declaration, binding, or approved value is present. A future
 activation must add an explicit Secret Manager binding as a separately reviewed
 change.
@@ -153,10 +155,11 @@ bypass the server-authoritative prevention.
 ## Team marks
 
 Remote marks require HTTPS, an exact reviewed host policy, and confirmed use
-rights. ESPN and API-Sports presentation both default to
-`allowRemoteLogos=false`; ESPN additionally fixes the eligible hostname in
-server code and requires a rights-review date. Provider normalization strips
-unapproved URLs, and the Flutter policy independently requires the response
+rights. SportsDataIO and API-Sports presentation default to
+`allowRemoteLogos=false`. SportsDataIO's public team schemas do not establish
+image rights for this account, so its adapter ignores logo/wordmark and color
+fields and returns neutral badges. Provider normalization strips unapproved
+URLs, and the Flutter policy independently requires the response
 provider to match the game and rechecks HTTPS/host/query restrictions. Do not
 store credential-bearing image query strings or log image URLs. Missing,
 broken, mismatched, or unapproved images fall back to a neutral initials badge.

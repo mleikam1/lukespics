@@ -299,11 +299,10 @@ final class AppController extends ChangeNotifier {
   List<Game> get selectedWeekGames => List.unmodifiable(_selectedWeekGames);
   List<Game> get selectedGames {
     if (_slatePublished) {
-      return List<Game>.of(_selectedWeekGames)
-        ..sort((a, b) => a.scheduledAtUtc.compareTo(b.scheduledAtUtc));
+      return List<Game>.of(_selectedWeekGames)..sort(_compareGamesBySchedule);
     }
     return List<Game>.of(_selectedDraftGamesById.values)
-      ..sort((a, b) => a.scheduledAtUtc.compareTo(b.scheduledAtUtc));
+      ..sort(_compareGamesBySchedule);
   }
 
   Set<String> get selectedGameIds =>
@@ -677,15 +676,21 @@ final class AppController extends ChangeNotifier {
         (_catalogExpiresAt != null && !_catalogExpiresAt!.isAfter(now))) {
       return false;
     }
-    final weekStartAt = _weekStartAt;
-    final weekEndAt = _weekEndAt;
-    if ((weekStartAt != null &&
-            game.scheduledAtUtc.isBefore(weekStartAt.toUtc())) ||
-        (weekEndAt != null && game.scheduledAtUtc.isAfter(weekEndAt.toUtc()))) {
+    if (game.selectable == false ||
+        game.timeTbd ||
+        game.scheduledAtUtc == null ||
+        game.effectiveLockAtUtc == null) {
       return false;
     }
-    if (!game.scheduledAtUtc.isAfter(now) ||
-        !game.effectiveLockAtUtc.isAfter(now)) {
+    final scheduledAt = game.scheduledAtUtc!;
+    final effectiveLockAt = game.effectiveLockAtUtc!;
+    final weekStartAt = _weekStartAt;
+    final weekEndAt = _weekEndAt;
+    if ((weekStartAt != null && scheduledAt.isBefore(weekStartAt.toUtc())) ||
+        (weekEndAt != null && scheduledAt.isAfter(weekEndAt.toUtc()))) {
+      return false;
+    }
+    if (!scheduledAt.isAfter(now) || !effectiveLockAt.isAfter(now)) {
       return false;
     }
     return game.status == GameStatus.scheduled ||
@@ -859,17 +864,26 @@ final class AppController extends ChangeNotifier {
       _applyCatalogResult(result, requestedQuery);
     } on RepositoryException catch (error) {
       if (requestGeneration != _catalogRequestGeneration) return;
-      _catalogError = error.safeMessage;
+      final providerConfigurationRequired =
+          error.code == 'failed-precondition' &&
+          sportsDataIoConfigurationReasons.contains(error.reason);
+      final visibleMessage = providerConfigurationRequired && !canAdmin
+          ? 'The live sports schedule is unavailable. Ask an arena '
+                'commissioner for help.'
+          : error.safeMessage;
+      _catalogError = visibleMessage;
       _catalogAvailability = CatalogAvailability(
-        state: switch (error.code) {
-          'unauthenticated' ||
-          'permission-denied' => CatalogAvailabilityState.unauthorized,
-          'resource-exhausted' => CatalogAvailabilityState.quotaDelayed,
-          'failed-precondition' =>
-            CatalogAvailabilityState.providerNotConfigured,
-          _ => CatalogAvailabilityState.providerUnavailable,
-        },
-        message: error.safeMessage,
+        state: providerConfigurationRequired
+            ? CatalogAvailabilityState.providerConfigurationRequired
+            : switch (error.code) {
+                'unauthenticated' ||
+                'permission-denied' => CatalogAvailabilityState.unauthorized,
+                'resource-exhausted' => CatalogAvailabilityState.quotaDelayed,
+                'failed-precondition' =>
+                  CatalogAvailabilityState.providerNotConfigured,
+                _ => CatalogAvailabilityState.providerUnavailable,
+              },
+        message: visibleMessage,
       );
     } on Object {
       if (requestGeneration != _catalogRequestGeneration) return;
@@ -943,17 +957,34 @@ final class AppController extends ChangeNotifier {
       left.id == right.id &&
       left.provider == right.provider &&
       left.providerGameId == right.providerGameId &&
+      left.providerScoreId == right.providerScoreId &&
+      left.providerLeagueGameId == right.providerLeagueGameId &&
+      left.providerGlobalGameId == right.providerGlobalGameId &&
+      left.providerGameKey == right.providerGameKey &&
       left.sportCode == right.sportCode &&
       left.leagueCode == right.leagueCode &&
       left.providerLeagueId == right.providerLeagueId &&
       left.season == right.season &&
       left.seasonType == right.seasonType &&
-      left.scheduledAtUtc.toUtc() == right.scheduledAtUtc.toUtc() &&
-      left.effectiveLockAtUtc.toUtc() == right.effectiveLockAtUtc.toUtc() &&
+      left.scheduledAtUtc?.toUtc() == right.scheduledAtUtc?.toUtc() &&
+      left.publishedScheduledAtUtc?.toUtc() ==
+          right.publishedScheduledAtUtc?.toUtc() &&
+      left.effectiveLockAtUtc?.toUtc() == right.effectiveLockAtUtc?.toUtc() &&
+      left.scheduledDayEastern == right.scheduledDayEastern &&
+      left.timeTbd == right.timeTbd &&
+      left.homeTeam.providerTeamId == right.homeTeam.providerTeamId &&
+      left.homeTeam.providerGlobalTeamId ==
+          right.homeTeam.providerGlobalTeamId &&
+      left.awayTeam.providerTeamId == right.awayTeam.providerTeamId &&
+      left.awayTeam.providerGlobalTeamId ==
+          right.awayTeam.providerGlobalTeamId &&
       left.homeTeam.color == right.homeTeam.color &&
       left.awayTeam.color == right.awayTeam.color &&
       left.status == right.status &&
       left.statusDetail == right.statusDetail &&
+      left.isClosed == right.isClosed &&
+      left.rescheduledFromLeagueGameId == right.rescheduledFromLeagueGameId &&
+      left.rescheduledToLeagueGameId == right.rescheduledToLeagueGameId &&
       left.homeScore == right.homeScore &&
       left.awayScore == right.awayScore &&
       left.winnerTeamId == right.winnerTeamId &&
@@ -2818,32 +2849,32 @@ final class AppController extends ChangeNotifier {
       ..[liveGame.id] = Pick(
         gameId: liveGame.id,
         selectedTeamId: 'forge',
-        selectedAt: liveGame.effectiveLockAtUtc.subtract(
+        selectedAt: liveGame.effectiveLockAtUtc!.subtract(
           const Duration(hours: 2),
         ),
-        updatedAt: liveGame.effectiveLockAtUtc.subtract(
+        updatedAt: liveGame.effectiveLockAtUtc!.subtract(
           const Duration(hours: 2),
         ),
-        serverConfirmedAt: liveGame.effectiveLockAtUtc.subtract(
+        serverConfirmedAt: liveGame.effectiveLockAtUtc!.subtract(
           const Duration(hours: 2),
         ),
-        lockAtSnapshot: liveGame.effectiveLockAtUtc,
-        lockedAt: liveGame.effectiveLockAtUtc,
+        lockAtSnapshot: liveGame.effectiveLockAtUtc!,
+        lockedAt: liveGame.effectiveLockAtUtc!,
       )
       ..[finalGame.id] = Pick(
         gameId: finalGame.id,
         selectedTeamId: 'bears',
-        selectedAt: finalGame.effectiveLockAtUtc.subtract(
+        selectedAt: finalGame.effectiveLockAtUtc!.subtract(
           const Duration(hours: 2),
         ),
-        updatedAt: finalGame.effectiveLockAtUtc.subtract(
+        updatedAt: finalGame.effectiveLockAtUtc!.subtract(
           const Duration(hours: 2),
         ),
-        serverConfirmedAt: finalGame.effectiveLockAtUtc.subtract(
+        serverConfirmedAt: finalGame.effectiveLockAtUtc!.subtract(
           const Duration(hours: 2),
         ),
-        lockAtSnapshot: finalGame.effectiveLockAtUtc,
-        lockedAt: finalGame.effectiveLockAtUtc,
+        lockAtSnapshot: finalGame.effectiveLockAtUtc!,
+        lockedAt: finalGame.effectiveLockAtUtc!,
         outcome: PickOutcome.correct,
         points: 1,
         outcomeVersion: finalGame.resultVersion,
@@ -2954,4 +2985,19 @@ final class AppController extends ChangeNotifier {
       ),
     ]);
   }
+}
+
+int _compareGamesBySchedule(Game left, Game right) {
+  final leftTime = left.scheduledAtUtc;
+  final rightTime = right.scheduledAtUtc;
+  if (leftTime != null && rightTime != null) {
+    final byTime = leftTime.compareTo(rightTime);
+    return byTime == 0 ? left.id.compareTo(right.id) : byTime;
+  }
+  if (leftTime != null) return -1;
+  if (rightTime != null) return 1;
+  final byDay = (left.scheduledDayEastern ?? '').compareTo(
+    right.scheduledDayEastern ?? '',
+  );
+  return byDay == 0 ? left.id.compareTo(right.id) : byDay;
 }

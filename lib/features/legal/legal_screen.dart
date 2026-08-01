@@ -115,23 +115,25 @@ const _content = <String, _LegalContent>{
     (
       'Sports data',
       'Schedules, team identifiers, scores, and final results may be supplied '
-          'by a configured authorized provider or by manual commissioner '
-          'entry. Mock fixtures and internal test providers are testing-only '
-          'and are never represented as production data. Cached authorized '
-          'data can be shown while a provider refresh is delayed.',
+          'by a configured authorized server-side provider or by manual '
+          'commissioner entry. The backend is SportsDataIO-capable for NFL '
+          'and MLB and defaults to manual data until provider access is '
+          'configured and authorized. Mock fixtures and internal test providers are '
+          'testing-only and are never represented as production data.',
     ),
     (
       'Independent product',
-      'Luke’s Picks is not affiliated with, endorsed by, or sponsored by ESPN, '
-          'API-Sports, the NFL, NCAA, NBA, WNBA, MLB, NHL, any team, or any '
-          'league. Names may be used only to identify factual sports data.',
+      'Luke’s Picks is an independent fan project and is not affiliated with, '
+          'endorsed by, or sponsored by SportsDataIO, any professional '
+          'league, conference, team, or broadcaster. Names may be used only '
+          'to identify factual sports data.',
     ),
     (
       'Artwork',
-      'The Luke’s Picks shield and checkmark are original. Team artwork is '
-          'shown only when display rights are verified and the image host is '
-          'explicitly approved. Otherwise the product uses neutral text '
-          'initials. ESPN-hosted artwork is not displayed.',
+      'The Luke’s Picks shield and checkmark are original. The product uses '
+          'neutral, accessible team initials by default. Remote artwork is '
+          'shown only when the configured server policy records a reviewed '
+          'entitlement and explicitly approved image hosts.',
     ),
   ]),
   'account-deletion': _LegalContent('Account deletion', [

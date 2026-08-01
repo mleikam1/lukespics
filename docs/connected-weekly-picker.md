@@ -113,6 +113,10 @@ published game.
 - The default policy locks each game independently.
 - A member may change an open game, including a later game after an earlier
   game has locked.
+- Under the optional `firstGame` policy, the week snapshots one slate-wide
+  deadline. If a selected game is later rescheduled earlier, that deadline may
+  tighten but never widen; the callable, reveal worker, rules, and every sibling
+  game all use the tightened value.
 - The client submits only the changed open selection, prevents duplicate taps,
   and reconciles optimistic state with the server response.
 - A disconnected choice is a clearly labeled local draft, not an accepted
@@ -199,29 +203,28 @@ finalization nor refresh may silently create duplicate weeks.
 | `manual` | Emulator and production fallback | Required production mode until a provider is approved |
 | `theSportsDbTest` | Emulator/internal test only | Requires `ALLOW_THESPORTSDB_TEST_PROVIDER=true`, documented API use, fixtures, and a hard rejection in `lukes-picks` |
 | `apiSports` | Production adapter in source | Disabled until an approved secret, validated server catalog, authenticated contract/quota checks, explicit deploy parameter, and terms gate all pass |
-| `espn` | Server-only Site API adapter in source | Default-off until written authorization, exact project/flag, enabled authorization record, live contract validation, and separate logo-rights gates pass |
+| `sportsDataIo` | Server-only NFL/MLB League API adapter on this branch | Default-off until key, exact feed/use entitlement, project/mode/kill-switch/catalog gates, smoke test, and authorized deployment pass |
 
-The deployed connected release contains mock, manual, API-Sports, TheSportsDB
-test, and dormant ESPN adapters. Its fixture, policy, and three-user browser
-evidence verifies the complete sanitized schedule-to-standings flow through the
-actual Flutter UI. Production remains `manual`; both external-provider deploy
-flags are false and neither activation document exists.
+The prior deployed connected release contains the manual and internal test
+flows. The SportsDataIO changes described here are fixture-tested branch work,
+not a deployed-provider claim. Production remains `manual`; the new activation
+gates remain closed.
 
 API-Sports remains a dormant alternative with its own default-false flag and
 server-only catalog, but the current provider-bearing Function declarations do
 not bind `API_SPORTS_KEY`. Flutter never supplies base URLs, request paths,
 league identities, result mappings, or logo policy for either adapter.
 
-The API-Sports paragraph above describes a dormant alternative path. The ESPN
-candidate binds no provider secret, but must not be enabled or described as an
-authorized production schedule until written permission, server authorization
-metadata, live contract validation, the full test matrix, guarded preview, and
-smoke test are complete.
+The API-Sports paragraph above describes a dormant alternative path.
+SportsDataIO binds its Secret Manager key only to provider-bearing Functions and
+must not be enabled or described as production-backed until feed/use entitlement,
+live contract validation, the full test matrix, guarded release, and smoke test
+are complete.
 
-No client calls a sports provider directly. Only the server adapter may call the
-exact allowlisted Site API scoreboard route after activation; no ESPN HTML,
-fantasy endpoint, arbitrary JSON endpoint, or user-supplied URL may be scraped
-or proxied. ESPN-hosted artwork remains disabled absent separate rights review.
+No client calls a sports provider directly. Only the server client may call the
+exact allowlisted SportsDataIO League API paths after activation. No arbitrary
+JSON endpoint or user-supplied URL may be proxied. Remote provider/team artwork
+remains disabled absent a separate rights review.
 
 ## Team marks
 
@@ -236,8 +239,8 @@ until rights are confirmed. API-Sports presentation defaults to
 `allowRemoteLogos=false`. Enabling remote marks requires a server-reviewed date
 and exact host/query-parameter allowlists; provider normalization strips URLs
 that do not match, and Flutter independently requires a matching provider,
-HTTPS, the exact host, and permitted query keys. ESPN marks additionally require
-the adapter's separate rights gate; public bundles contain no ESPN hostname.
+HTTPS, the exact host, and permitted query keys. SportsDataIO normalization
+ignores its logo/wordmark/color fields; public bundles contain no vendor host.
 Remote images also require fixed dimensions, preserved aspect ratio, a loading
 placeholder, an error fallback, and an accessible team-name label.
 TheSportsDB image URLs are internal-test-only and require attribution.

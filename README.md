@@ -15,14 +15,11 @@ overall standings.
 > `main.dart.js` SHA-256
 > `411062a988bf5b8d798b317f118b505966c0d80f9fd07a4f4f4e4762842a1ed6`.
 >
-> The ESPN and API-Sports code is deliberately dormant. Both deploy flags are
-> `false`, both production arenas remain `manual`, neither provider activation
-> document exists, and remote provider marks remain off. No live ESPN request
-> was made or claimed. Written ESPN/Disney authorization, live contract
-> validation, legal/product approval, and separate logo rights remain required
-> before activation. The endpoints are unofficial and unsupported, have no SLA
-> or published rate limit, and may change without notice. This web deployment is
-> not an app-store or full provider-readiness claim.
+> The live deployment predates the SportsDataIO work on this branch. Production
+> arenas remain `manual`, the SportsDataIO kill switch and entitlement gate are
+> off, no key is present in this checkout, and no authenticated SportsDataIO
+> smoke test or deployment was performed. The new integration is deterministic-
+> fixture complete, not production-activated. Remote provider marks remain off.
 
 ## Product contract
 
@@ -112,15 +109,13 @@ does not perform—such as enabling a reviewed API or setting
 `./scripts/assert_firebase_project.sh lukes-picks` immediately before their own
 explicitly targeted write. Never record a secret value.
 
-The ESPN adapter does not require a client or Firebase secret, but that is not
-permission to activate it. It has three independent server-side gates: the
-runtime must be the exact authorized project, `ALLOW_ESPN_PROVIDER` must be
-explicitly true, and the Admin-only `systemConfig/espnCatalog` document must
-have `enabled: true` plus a bounded authorization reference and review date.
-Those fields identify an approval record; no secret or legal-document contents
-belong in Firestore. The eight league identities and query parameters live in
-one reviewed server configuration, never in Flutter. Keep both activation gates
-off until written authorization and a legal/product review are recorded.
+SportsDataIO uses the server-only `SPORTSDATAIO_API_KEY` Secret Manager secret.
+The provider is fail-closed unless the runtime is the exact authorized project,
+`ALLOW_SPORTSDATAIO_PROVIDER=true`, `SPORTSDATAIO_ACCESS_MODE=production`,
+`SPORTSDATAIO_ENTITLEMENT_VERIFIED=true`, and the Admin-only
+`systemConfig/sportsDataIoCatalog` document is enabled and valid. No secret or
+contract contents belong in Firestore. Only reviewed NFL/MLB season definitions
+live there; Flutter never receives vendor configuration or credentials.
 
 ## Toolchain
 
@@ -206,30 +201,21 @@ Firebase JavaScript initialization.
 | `mock` | Emulator and automated tests only |
 | `manual` | Valid production fallback and required production mode today |
 | `theSportsDbTest` | Internal/emulator only; requires an explicit flag and hard production rejection |
-| `espn` | Server-only Site API adapter; default-off pending written authorization, contract validation, and logo-rights review |
+| `sportsDataIo` | Server-only NFL/MLB League API adapter; default-off pending key, feed/use entitlement verification, smoke test, and authorized deployment |
 | `apiSports` | Dormant alternative adapter retained for replaceability; not the active production provider |
 
-The ESPN catalog centralizes NFL (`football/nfl`), MLB (`baseball/mlb`), NBA
-(`basketball/nba`), NHL (`hockey/nhl`), WNBA (`basketball/wnba`), NCAA football
-(`football/college-football`), NCAA men's basketball
-(`basketball/mens-college-basketball`), and NCAA women's basketball
-(`basketball/womens-college-basketball`). The server alone calls the Site API v2
-scoreboard with a `YYYYMMDD` date and each entry's allowlisted `groups`/`limit`
-parameters. ESPN cache TTLs are 10 minutes for live games, 15 minutes within two
-hours of start, 30 minutes from two to 24 hours, one hour farther out, and 30
-minutes for a valid empty schedule. Selected results reconcile on the existing
-30-minute scheduled job. ESPN result discovery searches from one arena-local
-day before through five days after the stored date so ordinary reschedules stay
-discoverable; a move outside that bounded window requires an audited
-commissioner correction or void. Stale cached normalized data can remain usable
-without exposing the provider schema to Flutter.
+The SportsDataIO catalog supports NFL and MLB only. NFL uses server-side Teams,
+SchedulesBasic, and ScoresByDate feeds; MLB uses teams and GamesByDate. Dates
+are queried as US Eastern calendar days and canonical schedule/lock instants are
+stored in UTC. A true time-TBD game can appear in the commissioner catalog but
+cannot be selected or published until it has a real UTC instant. Selected
+results reconcile through the existing centralized 30-minute job. Stale or
+partial refreshes never create a graded final.
 
-No provider credential is exposed to Flutter or Hosting. Do not create,
-purchase, or register a provider account from this workflow. Do not scrape ESPN
-HTML, call ESPN from Flutter, use an arbitrary ESPN URL, or download, proxy,
-cache, embed, or hotlink ESPN artwork. The only reviewed runtime host exception
-is the exact HTTPS scoreboard host inside the server adapter, and it remains
-inactive until the written-authorization gate passes.
+No provider credential or URL is exposed to Flutter or Hosting. The server
+constructs only exact allowlisted League API paths and sends the key in the
+`Ocp-Apim-Subscription-Key` header. Tests use sanitized fixtures and never call
+the live service.
 
 Remote team marks are shown only when their host and use rights are permitted.
 Provider access alone is not a logo license. Production uses neutral initials
@@ -281,32 +267,27 @@ bash -n scripts/*.sh
 
 The public-build scan requires a fresh connected release. It rejects stale
 artifacts, a missing production or present non-public attestation, active
-emulator/test flags, the forbidden project, every ESPN host, source maps,
+emulator/test/provider flags, the forbidden project, server-only SportsDataIO
+host/header/secret material, blocked third-party logo hosts, source maps,
 symbolic links, control-character paths, or likely secrets. The source scan
-likewise rejects ESPN hosts everywhere except the literal reviewed HTTPS
-scoreboard origin and rights-gated logo hostname in
-`functions/src/providers/espn.ts`; Flutter and web source remain host-free.
-Both scans inspect regular files rather than trusting names.
+allows the SportsDataIO API host and authentication-header name only inside the
+dedicated server client. Flutter and web source remain provider-host-free. Both
+scans inspect regular files rather than trusting names.
 
 CI runs the static suites and these scans without deployment credentials. It
 does not deploy.
 
 ## Deployment
 
-The dormant ESPN adapter is not authorized for production activation. Before
-any provider-backed preview or live release, retain dated written permission
-covering the intended automated schedule/result access, caching, storage, and
-commercial distribution; record legal/product approval separately. Keep
-`ALLOW_ESPN_PROVIDER=false` and do not create an enabled production
-`systemConfig/espnCatalog` document before that handoff. Logo rights are a
-separate gate: absent an approved review date and exact host/query policy, the
-server and Flutter both use neutral initials.
+The SportsDataIO branch has not been deployed. Before any provider-backed
+preview or live release, confirm the key/contract covers the exact NFL and MLB
+schedule, team, and score feeds plus the intended display and result-grading
+use. Keep `ALLOW_SPORTSDATAIO_PROVIDER=false`, access mode `fixture`, entitlement
+verification false, and the provider catalog absent/disabled until then. Logo
+rights are a separate gate; neutral initials remain production-safe.
 
-The dormant implementation was deployed without activating or calling ESPN.
-Before activation, validate all eight league contracts with bounded,
-cache-first requests; rerun the complete matrix; inspect the exact
-`lukes-picks` project; and separately authorize each configuration and release
-write. The current preview record is:
+The current deployed release record below is historical evidence for the prior
+manual-provider build, not evidence for this SportsDataIO branch:
 
 - URL:
   <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app>
@@ -343,15 +324,15 @@ the project guard.
 
 ## Known limitations
 
-- ESPN's scoreboard endpoints are unofficial and unsupported, with no SLA or
-  published rate limit. Schema, availability, and blocking behavior can change
-  without notice.
-- Written ESPN/Disney authorization for the intended automated/commercial use
-  is not recorded. `ALLOW_ESPN_PROVIDER` must stay false and
-  `systemConfig/espnCatalog.enabled` must not be true in production.
-- The eight ESPN league/query definitions are centralized server-side; source
-  and sanitized fixtures do not prove live coverage or permission.
-- Production must remain manual-provider mode with neutral team badges.
+- No SportsDataIO key is available in this checkout, so no authenticated smoke
+  test established live schema compatibility or feed access.
+- The key's NFL/MLB feed entitlement and intended display/grading rights have
+  not been verified. Production must remain manual-provider mode.
+- The official OpenAPI date examples and other official input hints use two
+  date spellings. The implementation isolates `YYYY-MMM-DD`; confirm it once
+  with the entitled non-production key before activation.
+- Remote team-image rights are unconfirmed, so neutral accessible badges remain
+  enabled and no provider/Wikipedia/third-party marks are loaded.
 - TheSportsDB is proven only for the explicitly gated emulator/internal test
   path and must remain disabled in `lukes-picks`.
 - Manual result handling is browser-proven. The connected emulator integration

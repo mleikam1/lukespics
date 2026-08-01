@@ -6,6 +6,18 @@ import '../models/standing.dart';
 
 export '../models/sports_catalog.dart';
 
+const sportsDataIoApiKeyConfigurationReason =
+    'sportsdataio-api-key-not-configured';
+const sportsDataIoCredentialsConfigurationReason =
+    'sportsdataio-credentials-rejected';
+const sportsDataIoEntitlementConfigurationReason =
+    'sportsdataio-feed-not-entitled';
+const sportsDataIoConfigurationReasons = <String>{
+  sportsDataIoApiKeyConfigurationReason,
+  sportsDataIoCredentialsConfigurationReason,
+  sportsDataIoEntitlementConfigurationReason,
+};
+
 abstract interface class LeagueRepository {
   Future<String> ensureUserProfile({String? displayName, Uri? photoUrl});
 
@@ -366,10 +378,11 @@ final class RevealResult {
 }
 
 final class RepositoryException implements Exception {
-  const RepositoryException(this.code, this.safeMessage);
+  const RepositoryException(this.code, this.safeMessage, {this.reason});
 
   final String code;
   final String safeMessage;
+  final String? reason;
 
   @override
   String toString() => 'RepositoryException($code): $safeMessage';

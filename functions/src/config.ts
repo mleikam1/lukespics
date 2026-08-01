@@ -2,7 +2,11 @@ import {getApps, initializeApp} from "firebase-admin/app";
 import {getAuth} from "firebase-admin/auth";
 import {getFirestore} from "firebase-admin/firestore";
 import {setGlobalOptions} from "firebase-functions/v2";
-import {defineBoolean, defineSecret} from "firebase-functions/params";
+import {
+  defineBoolean,
+  defineSecret,
+  defineString,
+} from "firebase-functions/params";
 
 if (getApps().length === 0) {
   initializeApp();
@@ -14,6 +18,15 @@ db.settings({ignoreUndefinedProperties: true});
 export const auth = getAuth();
 
 export const INVITE_CODE_PEPPER = defineSecret("INVITE_CODE_PEPPER");
+export const SPORTSDATAIO_API_KEY = defineSecret("SPORTSDATAIO_API_KEY");
+
+// Secret Manager injects this value only into the four provider-bearing
+// Functions that declare SPORTSDATAIO_API_KEY. Provider construction and
+// catalog validation remain secret-free.
+export function sportsDataIoKey(): string {
+  return (process.env.SPORTSDATAIO_API_KEY ?? "").trim();
+}
+
 // API-Sports is dormant in the reviewed production manifest, so no Function
 // binds or requests its optional secret. A separately authorized activation
 // must add a defineSecret binding to the provider-bearing Functions; Secret
@@ -29,12 +42,20 @@ export const ALLOW_API_SPORTS_PROVIDER = defineBoolean(
   {default: false},
 );
 
-// ESPN's Site API is unofficial and has no SLA or published rate limit. Keep
-// the adapter deployable but production-inactive until a separate terms and
-// operational review explicitly enables it for the pinned project.
-export const ALLOW_ESPN_PROVIDER = defineBoolean("ALLOW_ESPN_PROVIDER", {
-  default: false,
-});
+// All three gates are fail-closed. Fixture, trial, and discovery access may be
+// used only for contract testing and can never activate the production path.
+export const ALLOW_SPORTSDATAIO_PROVIDER = defineBoolean(
+  "ALLOW_SPORTSDATAIO_PROVIDER",
+  {default: false},
+);
+export const SPORTSDATAIO_ACCESS_MODE = defineString(
+  "SPORTSDATAIO_ACCESS_MODE",
+  {default: "fixture"},
+);
+export const SPORTSDATAIO_ENTITLEMENT_VERIFIED = defineBoolean(
+  "SPORTSDATAIO_ENTITLEMENT_VERIFIED",
+  {default: false},
+);
 
 export const REGION = "us-central1";
 

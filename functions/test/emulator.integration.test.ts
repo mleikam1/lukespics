@@ -2293,6 +2293,146 @@ describe("emulator pick'em lifecycle", () => {
   );
 
   it(
+    "tightens every first-game lock after an earlier manual reschedule",
+    async () => {
+      const owner = await createSignedInApp("first-game-reschedule-owner");
+      const ownerUid = String(getAuth(owner).currentUser?.uid);
+      const adminApp = initializeAdminApp(
+        {projectId},
+        "first-game-reschedule-admin",
+      );
+      const adminDb = getAdminFirestore(adminApp);
+      const created = await call<{leagueId: string}>(owner, "createLeague", {
+        requestId: requestId("first-game-create"),
+        name: "First Game Lock Arena",
+        timezone: "America/Chicago",
+        settings: {
+          providerName: "manual",
+          pickerParticipatesInPicks: true,
+          pickLockPolicy: "firstGame",
+        },
+      });
+      const start = new Date();
+      start.setUTCHours(0, 0, 0, 0);
+      start.setUTCDate(start.getUTCDate() + 1);
+      const end = new Date(start.valueOf() + 7 * 24 * 60 * 60_000);
+      const week = await call<{weekId: string}>(owner, "createDraftWeek", {
+        requestId: requestId("first-game-week"),
+        leagueId: created.leagueId,
+        sequentialNumber: 1,
+        label: "First Game Lock Week",
+        startAt: start.toISOString(),
+        endAt: end.toISOString(),
+      });
+      const createGame = async (input: {
+        label: string;
+        scheduledAtUtc: Date;
+      }) =>
+        call<{gameId: string}>(owner, "createManualGame", {
+          requestId: requestId(`first-game-${input.label}`),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          sportCode: "football",
+          leagueCode: "nfl",
+          leagueName: "NFL",
+          season: String(start.getUTCFullYear()),
+          scheduledAtUtc: input.scheduledAtUtc.toISOString(),
+          venueName: `First Game Field ${input.label}`,
+          neutralSite: false,
+          awayTeam: {
+            id: `first-away-${input.label}`,
+            name: `Away ${input.label}`,
+            shortName: `Away ${input.label}`,
+            abbreviation: `A${input.label.toUpperCase()}`,
+          },
+          homeTeam: {
+            id: `first-home-${input.label}`,
+            name: `Home ${input.label}`,
+            shortName: `Home ${input.label}`,
+            abbreviation: `H${input.label.toUpperCase()}`,
+          },
+        });
+      const [first, sibling] = await Promise.all([
+        createGame({
+          label: "a",
+          scheduledAtUtc: new Date(start.valueOf() + 36 * 60 * 60_000),
+        }),
+        createGame({
+          label: "b",
+          scheduledAtUtc: new Date(start.valueOf() + 48 * 60 * 60_000),
+        }),
+      ]);
+      await call(owner, "publishWeeklySlate", {
+        requestId: requestId("first-game-publish"),
+        leagueId: created.leagueId,
+        weekId: week.weekId,
+      });
+      await call(owner, "submitOrConfirmEntry", {
+        requestId: requestId("first-game-picks"),
+        leagueId: created.leagueId,
+        weekId: week.weekId,
+        picks: [
+          {gameId: first.gameId, selectedTeamId: "first-home-a"},
+          {gameId: sibling.gameId, selectedTeamId: "first-away-b"},
+        ],
+      });
+
+      const tightenedLock = new Date(Date.now() - 60_000);
+      await call(owner, "overrideGameResult", {
+        requestId: requestId("first-game-earlier"),
+        leagueId: created.leagueId,
+        weekId: week.weekId,
+        gameId: first.gameId,
+        scheduledAtUtc: tightenedLock.toISOString(),
+        status: "scheduled",
+        homeScore: null,
+        awayScore: null,
+        winnerTeamId: null,
+        reason: "The first selected game moved to an earlier confirmed time.",
+      });
+
+      const weekPath = `leagues/${created.leagueId}/weeks/${week.weekId}`;
+      const [storedWeek, storedFirst, storedSibling] = await Promise.all([
+        adminDb.doc(weekPath).get(),
+        adminDb.doc(`${weekPath}/games/${first.gameId}`).get(),
+        adminDb.doc(`${weekPath}/games/${sibling.gameId}`).get(),
+      ]);
+      const slateLock = storedWeek.data()?.effectiveSlateLockAtUtc;
+      expect(slateLock).toBeInstanceOf(Timestamp);
+      expect(storedFirst.data()?.effectiveLockAtUtc).toEqual(slateLock);
+      expect(storedSibling.data()?.effectiveLockAtUtc).toEqual(slateLock);
+      await expect(
+        httpsCallable(
+          getFunctions(owner, "us-central1"),
+          "submitOrConfirmEntry",
+        )({
+          requestId: requestId("first-game-late-pick"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          picks: [
+            {gameId: sibling.gameId, selectedTeamId: "first-home-b"},
+          ],
+        }),
+      ).rejects.toThrow();
+
+      const reveal = await call<RevealCallableResult>(
+        owner,
+        "revealLockedGamePicks",
+        {
+          requestId: requestId("first-game-reveal"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+        },
+      );
+      expect(reveal.revealedGameCount).toBe(2);
+      expect(reveal.revealsByGame[first.gameId]?.[0]?.uid).toBe(ownerUid);
+      expect(reveal.revealsByGame[sibling.gameId]?.[0]?.uid).toBe(ownerUid);
+      await deleteAdminApp(adminApp);
+    },
+    120_000,
+  );
+
+  it(
     "publishes a manual fallback game while a connected provider is configured",
     async () => {
       const owner = await createSignedInApp("manual-fallback-owner");

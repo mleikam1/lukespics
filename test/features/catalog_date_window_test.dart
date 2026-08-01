@@ -1,12 +1,77 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lukespics/data/models/sports_catalog.dart';
 import 'package:lukespics/features/sports_catalog/catalog_date_window.dart';
+import 'package:timezone/data/latest.dart' as timezone_data;
 
 void main() {
   const timezone = 'America/Chicago';
   final now = DateTime.utc(2026, 7, 31, 5, 30); // Jul 31, 12:30am CDT.
   final weekStart = DateTime.utc(2026, 7, 30, 14);
   final weekEnd = DateTime.utc(2026, 8, 6, 14);
+
+  setUpAll(timezone_data.initializeTimeZones);
+
+  test('SportsDataIO queries use the canonical Eastern timezone', () {
+    expect(
+      catalogQueryTimezone(provider: 'sportsDataIo', arenaTimezone: timezone),
+      sportsDataIoCatalogTimezone,
+    );
+    expect(
+      catalogQueryTimezone(
+        provider: 'theSportsDbTest',
+        arenaTimezone: timezone,
+      ),
+      timezone,
+    );
+  });
+
+  test('late-night Eastern query dates do not follow the arena day', () {
+    final lateNightUtc = DateTime.utc(2026, 7, 31, 4, 30);
+    final eastern = catalogDateWindow(
+      mode: CatalogDateMode.today,
+      nowUtc: lateNightUtc,
+      timezone: sportsDataIoCatalogTimezone,
+      weekStartAt: DateTime.utc(2026, 7, 30, 4),
+      weekEndAt: DateTime.utc(2026, 8, 7, 4),
+    );
+    final central = catalogDateWindow(
+      mode: CatalogDateMode.today,
+      nowUtc: lateNightUtc,
+      timezone: timezone,
+      weekStartAt: DateTime.utc(2026, 7, 30, 4),
+      weekEndAt: DateTime.utc(2026, 8, 7, 4),
+    );
+
+    expect(eastern?.from, DateTime.utc(2026, 7, 31));
+    expect(central?.from, DateTime.utc(2026, 7, 30));
+  });
+
+  test('Eastern DST transitions retain one canonical calendar day', () {
+    CatalogDateWindow? easternToday(DateTime instant) => catalogDateWindow(
+      mode: CatalogDateMode.today,
+      nowUtc: instant,
+      timezone: sportsDataIoCatalogTimezone,
+      weekStartAt: DateTime.utc(2026, 1, 1),
+      weekEndAt: DateTime.utc(2026, 12, 31, 23, 59),
+    );
+
+    expect(
+      easternToday(DateTime.utc(2026, 3, 8, 6, 30))?.from,
+      DateTime.utc(2026, 3, 8),
+    );
+    expect(
+      easternToday(DateTime.utc(2026, 3, 8, 7, 30))?.from,
+      DateTime.utc(2026, 3, 8),
+    );
+    expect(
+      easternToday(DateTime.utc(2026, 11, 1, 5, 30))?.from,
+      DateTime.utc(2026, 11, 1),
+    );
+    expect(
+      easternToday(DateTime.utc(2026, 11, 1, 6, 30))?.from,
+      DateTime.utc(2026, 11, 1),
+    );
+  });
 
   test('date modes use the arena calendar and active-week bounds', () {
     final today = catalogDateWindow(

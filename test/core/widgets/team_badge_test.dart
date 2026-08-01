@@ -48,14 +48,14 @@ void main() {
 
     test('permits a provider host only when it is explicitly allowlisted', () {
       const reviewedPolicy = TeamLogoPolicy.provider(
-        provider: 'espn',
+        provider: 'reviewedProvider',
         logoRightsVerified: true,
-        allowedHosts: {'a.espncdn.com'},
+        allowedHosts: {'logos.example.test'},
       );
 
       expect(
         reviewedPolicy.permittedUri(
-          Uri.parse('https://a.espncdn.com/i/teamlogos/harbor.png'),
+          Uri.parse('https://logos.example.test/i/teamlogos/harbor.png'),
         ),
         isNotNull,
       );

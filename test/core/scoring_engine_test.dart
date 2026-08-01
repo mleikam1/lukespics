@@ -295,6 +295,74 @@ void main() {
     expect(rescheduled.isLockedAt(now.add(const Duration(minutes: 1))), isTrue);
   });
 
+  test('a same-ID move later never widens an unpublished future lock', () {
+    final originalLock = now.add(const Duration(hours: 2));
+    final original = game(
+      status: GameStatus.scheduled,
+      winner: null,
+      lockAt: originalLock,
+    );
+    final rescheduled = original.withRescheduledStart(
+      now.add(const Duration(days: 1)),
+      now,
+    );
+
+    expect(rescheduled.scheduledAtUtc, now.add(const Duration(days: 1)));
+    expect(rescheduled.publishedScheduledAtUtc, originalLock);
+    expect(rescheduled.effectiveLockAtUtc, originalLock);
+  });
+
+  test('a TBD game becomes consistently scheduled once UTC is confirmed', () {
+    final tbd = Game(
+      id: 'tbd-game',
+      provider: 'sportsDataIo',
+      providerGameId: 'tbd-game',
+      sportCode: 'football',
+      leagueCode: 'nfl',
+      leagueName: 'NFL',
+      season: '2026',
+      scheduledAtUtc: null,
+      publishedScheduledAtUtc: null,
+      effectiveLockAtUtc: null,
+      scheduledDayEastern: '2026-09-15',
+      timeTbd: true,
+      homeTeam: home,
+      awayTeam: away,
+      status: GameStatus.scheduled,
+      providerLastUpdatedAt: now,
+      lastSyncedAt: now,
+      resultVersion: 1,
+      sourcePayloadHash: 'tbd-game-1',
+    );
+    final confirmedStart = now.add(const Duration(days: 1));
+
+    final confirmed = tbd.withRescheduledStart(confirmedStart, now);
+
+    expect(confirmed.timeTbd, isFalse);
+    expect(confirmed.scheduledAtUtc, confirmedStart);
+    expect(confirmed.publishedScheduledAtUtc, confirmedStart);
+    expect(confirmed.effectiveLockAtUtc, confirmedStart);
+    expect(confirmed.hasConfirmedSchedule, isTrue);
+  });
+
+  test('copyWith can explicitly clear nullable schedule fields', () {
+    final original = game(lockAt: now);
+
+    final cleared = original.copyWith(
+      scheduledAtUtc: null,
+      publishedScheduledAtUtc: null,
+      effectiveLockAtUtc: null,
+      scheduledDayEastern: null,
+      timeTbd: true,
+    );
+
+    expect(cleared.scheduledAtUtc, isNull);
+    expect(cleared.publishedScheduledAtUtc, isNull);
+    expect(cleared.effectiveLockAtUtc, isNull);
+    expect(cleared.scheduledDayEastern, isNull);
+    expect(cleared.timeTbd, isTrue);
+  });
+
   test('per-game lock leaves a later game open', () {
     final later = game(
       id: 'game-2',

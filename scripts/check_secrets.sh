@@ -21,8 +21,8 @@ if [[ -n "$blocked_names" ]]; then
   exit 1
 fi
 
-readonly structural_secret_pattern='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|x-apisports-key[[:space:]]*[:=][[:space:]]*[^[:space:]$<{]+|"(private_key|client_secret)"[[:space:]]*:[[:space:]]*"[^"]+"'
-readonly named_secret_pattern="API_SPORTS_KEY[[:space:]]*=[[:space:]]*['\"][^'\"\\$<{][^'\"]*['\"]|COLLEGE_FOOTBALL_DATA_KEY[[:space:]]*=[[:space:]]*['\"][^'\"\\$<{][^'\"]*['\"]|INVITE_CODE_PEPPER[[:space:]]*=[[:space:]]*['\"][^'\"\\$<{][^'\"]*['\"]"
+readonly structural_secret_pattern='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|x-apisports-key[[:space:]]*[:=][[:space:]]*[^[:space:]$<{]+|Ocp-Apim-Subscription-Key[[:space:]]*[:=][[:space:]]*[^[:space:]$<{]+|api\.sportsdata\.io[^[:space:]"'"'"']*[?&]key=[^[:space:]$<{&]+|"(private_key|client_secret)"[[:space:]]*:[[:space:]]*"[^"]+"'
+readonly named_secret_pattern="(API_SPORTS_KEY|SPORTSDATAIO_API_KEY|COLLEGE_FOOTBALL_DATA_KEY|INVITE_CODE_PEPPER)[[:space:]]*=[[:space:]]*['\"][^'\"\\$<{[:space:]][^'\"]*['\"]"
 
 secret_files="$(
   while IFS= read -r file; do

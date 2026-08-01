@@ -424,7 +424,6 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
               (!controller.catalogStale &&
                   controller.isCatalogGameSelectable(game)),
           disabledReason: _disabledReason(controller, game),
-          timezone: controller.leagueTimezone,
           logoPolicy: catalogTeamLogoPolicy(
             presentation: controller.catalogPresentation,
             game: game,
@@ -446,7 +445,22 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
         return false;
       }
       return true;
-    }).toList()..sort((a, b) => a.scheduledAtUtc.compareTo(b.scheduledAtUtc));
+    }).toList()..sort(_compareCatalogGames);
+  }
+
+  int _compareCatalogGames(Game left, Game right) {
+    final leftTime = left.scheduledAtUtc;
+    final rightTime = right.scheduledAtUtc;
+    if (leftTime != null && rightTime != null) {
+      final byTime = leftTime.compareTo(rightTime);
+      return byTime == 0 ? left.id.compareTo(right.id) : byTime;
+    }
+    if (leftTime != null) return -1;
+    if (rightTime != null) return 1;
+    final byDay = (left.scheduledDayEastern ?? '').compareTo(
+      right.scheduledDayEastern ?? '',
+    );
+    return byDay == 0 ? left.id.compareTo(right.id) : byDay;
   }
 
   String? _resolvedSportCode(AppController controller) {
@@ -484,10 +498,14 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     final weekStartAt = controller.weekStartAt;
     final weekEndAt = controller.weekEndAt;
     if (weekStartAt == null || weekEndAt == null) return null;
+    final queryTimezone = catalogQueryTimezone(
+      provider: controller.catalogProvider,
+      arenaTimezone: controller.leagueTimezone,
+    );
     return catalogDateWindow(
       mode: mode ?? _dateMode,
       nowUtc: DateTime.now().toUtc(),
-      timezone: controller.leagueTimezone,
+      timezone: queryTimezone,
       weekStartAt: weekStartAt,
       weekEndAt: weekEndAt,
       customFrom: (customDateRange ?? _customDateRange)?.start,
@@ -503,10 +521,14 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     final weekStartAt = controller.weekStartAt;
     final weekEndAt = controller.weekEndAt;
     if (weekStartAt == null || weekEndAt == null) return null;
+    final queryTimezone = catalogQueryTimezone(
+      provider: controller.catalogProvider,
+      arenaTimezone: controller.leagueTimezone,
+    );
     return catalogSteppedDate(
       currentDate: currentDate,
       dayDelta: dayDelta,
-      timezone: controller.leagueTimezone,
+      timezone: queryTimezone,
       weekStartAt: weekStartAt,
       weekEndAt: weekEndAt,
     );
@@ -558,7 +580,10 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
         season: league.season,
         from: window.from,
         to: window.to,
-        timezone: controller.leagueTimezone,
+        timezone: catalogQueryTimezone(
+          provider: controller.catalogProvider,
+          arenaTimezone: controller.leagueTimezone,
+        ),
         dateMode: dateMode,
         weekStartAt: weekStartAt,
         weekEndAt: weekEndAt,
@@ -574,8 +599,12 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     final weekStartAt = controller.weekStartAt;
     final weekEndAt = controller.weekEndAt;
     if (weekStartAt == null || weekEndAt == null) return;
-    final first = catalogCalendarDate(weekStartAt, controller.leagueTimezone);
-    final last = catalogCalendarDate(weekEndAt, controller.leagueTimezone);
+    final queryTimezone = catalogQueryTimezone(
+      provider: controller.catalogProvider,
+      arenaTimezone: controller.leagueTimezone,
+    );
+    final first = catalogCalendarDate(weekStartAt, queryTimezone);
+    final last = catalogCalendarDate(weekEndAt, queryTimezone);
     if (last.isBefore(first)) return;
     final activeQuery = controller.activeCatalogQuery;
     final initialRange =
@@ -637,15 +666,25 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     if (expiresAt != null && !expiresAt.isAfter(now)) {
       return 'This schedule has expired. Refresh it before adding the game.';
     }
+    if (game.timeTbd || game.scheduledAtUtc == null) {
+      return 'A confirmed start time is required before this game can be added.';
+    }
+    if (game.effectiveLockAtUtc == null) {
+      return 'A confirmed pick deadline is required before this game can be added.';
+    }
+    if (game.selectable == false) {
+      return game.selectionReason ??
+          'This game is not available for selection.';
+    }
+    final scheduledAt = game.scheduledAtUtc!;
+    final effectiveLockAt = game.effectiveLockAtUtc!;
     final weekStartAt = controller.weekStartAt;
     final weekEndAt = controller.weekEndAt;
-    if ((weekStartAt != null &&
-            game.scheduledAtUtc.isBefore(weekStartAt.toUtc())) ||
-        (weekEndAt != null && game.scheduledAtUtc.isAfter(weekEndAt.toUtc()))) {
+    if ((weekStartAt != null && scheduledAt.isBefore(weekStartAt.toUtc())) ||
+        (weekEndAt != null && scheduledAt.isAfter(weekEndAt.toUtc()))) {
       return 'This game is outside the active week.';
     }
-    if (!game.scheduledAtUtc.isAfter(now) ||
-        !game.effectiveLockAtUtc.isAfter(now)) {
+    if (!scheduledAt.isAfter(now) || !effectiveLockAt.isAfter(now)) {
       return 'This game is already locked.';
     }
     return switch (game.status) {
@@ -991,6 +1030,21 @@ class _CatalogEmptyState extends StatelessWidget {
         'An authorized picker can still add a trustworthy manual game.',
         false,
       ),
+      CatalogAvailabilityState.providerConfigurationRequired =>
+        controller.canAdmin
+            ? (
+                'Live sports data needs administrator configuration.',
+                'Have the Firebase project administrator verify the '
+                    'server-side SportsDataIO key and league feed '
+                    'entitlement. Manual game entry remains available.',
+                false,
+              )
+            : (
+                'Live sports data is unavailable.',
+                'Ask an arena commissioner to add the slate manually. '
+                    'Published games and picks are unaffected.',
+                false,
+              ),
       CatalogAvailabilityState.providerUnavailable => (
         'The schedule could not be loaded.',
         'Retry the current sport, league, and date query.',
@@ -1045,7 +1099,6 @@ class _CatalogGameCard extends StatelessWidget {
     required this.selected,
     required this.enabled,
     required this.disabledReason,
-    required this.timezone,
     required this.logoPolicy,
     required this.onChanged,
   });
@@ -1054,31 +1107,29 @@ class _CatalogGameCard extends StatelessWidget {
   final bool selected;
   final bool enabled;
   final String? disabledReason;
-  final String timezone;
   final TeamLogoPolicy logoPolicy;
   final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context) {
-    final time = formatLeagueTime(
-      game.scheduledAtUtc,
-      timezone,
-      'EEE, MMM d · h:mm a',
-    );
+    final time = _catalogGameTimeLabel(game);
     final detail = gameDetailSummary(game);
     final broadcast = gameBroadcastSummary(game);
-    final contextSummary = switch ((detail, broadcast)) {
-      (final detail?, final broadcast?) => '$detail · Broadcast: $broadcast',
-      (final detail?, null) => detail,
-      (null, final broadcast?) => 'Broadcast: $broadcast',
-      (null, null) => null,
-    };
+    final broadcastSummary = broadcast == null ? null : 'Broadcast: $broadcast';
+    final reschedule = _rescheduleSummary(game);
+    final contextParts = <String>[?detail, ?broadcastSummary, ?reschedule];
+    final contextSummary = contextParts.isEmpty
+        ? null
+        : contextParts.join(' · ');
+    final scoreSummary = _scoreSummary(game);
     return Semantics(
       container: true,
       button: enabled,
       checked: selected,
       label:
           '${game.awayTeam.name} at ${game.homeTeam.name}. '
+          '$time. '
+          '${scoreSummary == null ? '' : '$scoreSummary. '}'
           '${selected ? 'Included' : 'Not included'} in the slate.'
           '${disabledReason == null ? '' : ' $disabledReason'}',
       child: Tooltip(
@@ -1135,6 +1186,8 @@ class _CatalogGameCard extends StatelessWidget {
                         const SizedBox(height: 12),
                         _CatalogTeamLine(
                           team: game.awayTeam,
+                          score: game.awayScore,
+                          scoreKey: Key('catalog-away-score-${game.id}'),
                           logoPolicy: logoPolicy,
                         ),
                         const Padding(
@@ -1150,10 +1203,13 @@ class _CatalogGameCard extends StatelessWidget {
                         ),
                         _CatalogTeamLine(
                           team: game.homeTeam,
+                          score: game.homeScore,
+                          scoreKey: Key('catalog-home-score-${game.id}'),
                           logoPolicy: logoPolicy,
                         ),
                         const SizedBox(height: 10),
                         Text(
+                          key: Key('catalog-game-time-${game.id}'),
                           [
                             time,
                             if (game.venueName != null) game.venueName!,
@@ -1224,9 +1280,16 @@ class _CatalogGameCard extends StatelessWidget {
 }
 
 class _CatalogTeamLine extends StatelessWidget {
-  const _CatalogTeamLine({required this.team, required this.logoPolicy});
+  const _CatalogTeamLine({
+    required this.team,
+    required this.score,
+    required this.scoreKey,
+    required this.logoPolicy,
+  });
 
   final Team team;
+  final int? score;
+  final Key scoreKey;
   final TeamLogoPolicy logoPolicy;
 
   @override
@@ -1248,9 +1311,52 @@ class _CatalogTeamLine extends StatelessWidget {
             fontWeight: FontWeight.w800,
           ),
         ),
+        if (score != null) ...[
+          const SizedBox(width: 10),
+          Text(
+            '$score',
+            key: scoreKey,
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
+          ),
+        ],
       ],
     );
   }
+}
+
+String _catalogGameTimeLabel(Game game) {
+  final scheduledAt = game.scheduledAtUtc;
+  if (game.timeTbd || scheduledAt == null) {
+    final day = game.scheduledDayEastern;
+    if (day == null) return 'Time TBD (Eastern)';
+    final parsed = DateTime.tryParse('${day}T00:00:00.000Z');
+    if (parsed == null) return 'Time TBD (Eastern)';
+    return '${DateFormat('EEE, MMM d').format(parsed)} · Time TBD (Eastern)';
+  }
+  final local = scheduledAt.toLocal();
+  final zone = local.timeZoneName.trim();
+  final suffix = zone.isEmpty ? 'local time' : zone;
+  return '${DateFormat('EEE, MMM d · h:mm a').format(local)} $suffix';
+}
+
+String? _scoreSummary(Game game) {
+  final awayScore = game.awayScore;
+  final homeScore = game.homeScore;
+  if (awayScore == null || homeScore == null) return null;
+  return '${game.awayTeam.abbreviation} $awayScore, '
+      '${game.homeTeam.abbreviation} $homeScore';
+}
+
+String? _rescheduleSummary(Game game) {
+  final movedTo = game.rescheduledToLeagueGameId;
+  final movedFrom = game.rescheduledFromLeagueGameId;
+  if (movedTo != null) {
+    return 'Rescheduled to game $movedTo; this selection is not replaced automatically';
+  }
+  if (movedFrom != null) return 'Rescheduled from game $movedFrom';
+  return null;
 }
 
 class _SelectionBar extends StatelessWidget {

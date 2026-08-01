@@ -95,15 +95,15 @@ if ! LC_ALL=C grep -aFq "$production_attestation" "$main_bundle"; then
   exit 1
 fi
 
-readonly forbidden_pattern='wingman-interactive-live|lukes-picks-non-public-local-runtime-v1|USE_FIREBASE_EMULATORS|ENABLE_BROWSER_E2E_AUTH|FIREBASE_(AUTH|FUNCTIONS)_EMULATOR|FIRESTORE_EMULATOR|ALLOW_THESPORTSDB_TEST_PROVIDER|site\.api\.espn\.com|site\.web\.api\.espn\.com|https?://(127\.0\.0\.1|localhost)(:[0-9]+)?|https?://[^[:space:]"'"'"']*(espn\.com|espncdn\.com|thesportsdb\.(com|net))'
+readonly forbidden_pattern='wingman-interactive-live|lukes-picks-non-public-local-runtime-v1|USE_FIREBASE_EMULATORS|ENABLE_BROWSER_E2E_AUTH|FIREBASE_(AUTH|FUNCTIONS)_EMULATOR|FIRESTORE_EMULATOR|ALLOW_(THESPORTSDB_TEST|SPORTSDATAIO|ESPN)_PROVIDER|SPORTSDATAIO_(ACCESS_MODE|ENTITLEMENT_VERIFIED|API_KEY)|Ocp-Apim-Subscription-Key|api\.sportsdata\.io|site\.api\.espn\.com|site\.web\.api\.espn\.com|(^|[^[:alnum:]_])espn([^[:alnum:]_]|$)|https?://(127\.0\.0\.1|localhost)(:[0-9]+)?|https?://[^[:space:]"'"'"']*(espn\.com|espncdn\.com|wikipedia\.org|wikimedia\.org|thesportsdb\.(com|net))'
 forbidden_matches="$(matching_files "$forbidden_pattern")"
 if [[ -n "$forbidden_matches" ]]; then
-  echo "Public build contains a non-public attestation, active runtime flag, ESPN host, or forbidden project in:" >&2
+  echo "Public build contains a non-public attestation, server-only provider material, blocked third-party content, or forbidden project in:" >&2
   printf '%s\n' "$forbidden_matches" >&2
   exit 1
 fi
 
-readonly secret_pattern='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|x-apisports-key[[:space:]]*[:=][[:space:]]*[^[:space:]$<{]+|API_SPORTS_KEY[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"'$<{][^"'"'"']*["'"'"']|COLLEGE_FOOTBALL_DATA_KEY[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"'$<{][^"'"'"']*["'"'"']|INVITE_CODE_PEPPER[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"'$<{][^"'"'"']*["'"'"']|"(private_key|client_secret)"[[:space:]]*:[[:space:]]*"[^"]+"'
+readonly secret_pattern='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|x-apisports-key[[:space:]]*[:=][[:space:]]*[^[:space:]$<{]+|Ocp-Apim-Subscription-Key[[:space:]]*[:=][[:space:]]*[^[:space:]$<{]+|(API_SPORTS_KEY|SPORTSDATAIO_API_KEY|COLLEGE_FOOTBALL_DATA_KEY|INVITE_CODE_PEPPER)[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"'$<{][^"'"'"']*["'"'"']|"(private_key|client_secret)"[[:space:]]*:[[:space:]]*"[^"]+"'
 secret_matches="$(matching_files "$secret_pattern")"
 if [[ -n "$secret_matches" ]]; then
   echo "Public build contains potential secret material in:" >&2

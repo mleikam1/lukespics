@@ -1111,8 +1111,9 @@ void main() {
         (game) =>
             sportCodes.contains(game.sportCode) &&
             leagueKeys.contains('${game.sportCode}:${game.leagueCode}') &&
-            !game.scheduledAtUtc.isBefore(controller.weekStartAt!) &&
-            !game.scheduledAtUtc.isAfter(controller.weekEndAt!),
+            game.scheduledAtUtc != null &&
+            !game.scheduledAtUtc!.isBefore(controller.weekStartAt!) &&
+            !game.scheduledAtUtc!.isAfter(controller.weekEndAt!),
       ),
       isTrue,
     );
@@ -1727,12 +1728,12 @@ void main() {
       final pick = Pick(
         gameId: game.id,
         selectedTeamId: game.homeTeam.id,
-        selectedAt: game.scheduledAtUtc.subtract(const Duration(hours: 2)),
-        updatedAt: game.scheduledAtUtc,
-        serverConfirmedAt: game.scheduledAtUtc.subtract(
+        selectedAt: game.scheduledAtUtc!.subtract(const Duration(hours: 2)),
+        updatedAt: game.scheduledAtUtc!,
+        serverConfirmedAt: game.scheduledAtUtc!.subtract(
           const Duration(hours: 2),
         ),
-        lockAtSnapshot: game.effectiveLockAtUtc,
+        lockAtSnapshot: game.effectiveLockAtUtc!,
         lockedAt: game.effectiveLockAtUtc,
         outcome: PickOutcome.correct,
         points: 1,
@@ -2090,7 +2091,7 @@ void main() {
       awayScore: 1,
       winnerTeamId: scheduled.homeTeam.id,
     );
-    final correctedAt = game.scheduledAtUtc.add(const Duration(days: 8));
+    final correctedAt = game.scheduledAtUtc!.add(const Duration(days: 8));
     _stubArena(
       repository,
       catalogGames: const [],

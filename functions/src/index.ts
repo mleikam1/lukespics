@@ -1,7 +1,10 @@
 import {logger} from "firebase-functions";
 import {onSchedule} from "firebase-functions/v2/scheduler";
 import {callable} from "./callable.js";
-import {INVITE_CODE_PEPPER} from "./config.js";
+import {
+  INVITE_CODE_PEPPER,
+  SPORTSDATAIO_API_KEY,
+} from "./config.js";
 import {
   assignPickerSchema,
   createDraftWeekSchema,
@@ -278,6 +281,7 @@ export const listSportsCatalog = callable(
       },
     });
   },
+  {secrets: [SPORTSDATAIO_API_KEY]},
 );
 
 export const saveDraftSlate = callable(
@@ -345,6 +349,7 @@ function refreshCallable(functionName: string) {
       // bounded per cache chunk, while the callable has room to process
       // multiple chunks and league groups in one claimed operation.
       timeoutSeconds: 540,
+      secrets: [SPORTSDATAIO_API_KEY],
     },
   );
 }
@@ -531,6 +536,7 @@ export const scheduledResultSync = onSchedule(
     timeZone: "UTC",
     retryCount: 0,
     timeoutSeconds: 540,
+    secrets: [SPORTSDATAIO_API_KEY],
   },
   async () => {
     const startedAt = Date.now();

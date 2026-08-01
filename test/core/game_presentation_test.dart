@@ -7,14 +7,14 @@ void main() {
     final game = _game(
       eventDetail: '  Doubleheader · Game 2 ',
       statusDetail: ' First pitch delayed ',
-      broadcast: ' ESPN+ ',
+      broadcast: ' National Stream ',
     );
 
     expect(
       gameDetailSummary(game),
       'Doubleheader · Game 2 · First pitch delayed',
     );
-    expect(gameBroadcastSummary(game), 'ESPN+');
+    expect(gameBroadcastSummary(game), 'National Stream');
   });
 
   test('omits empty, duplicate, and generic status detail', () {

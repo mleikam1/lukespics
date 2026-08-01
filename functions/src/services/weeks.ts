@@ -33,7 +33,7 @@ import type {
   ProviderName,
   ProviderQuery,
 } from "../types.js";
-import {PROVIDER_NAMES} from "../types.js";
+import {isProviderName} from "../types.js";
 import {
   asDate,
   commitWritesInChunks,
@@ -75,9 +75,10 @@ function gameForClient(
 ): Record<string, unknown> {
   return {
     ...game,
-    scheduledAtUtc: game.scheduledAtUtc.toISOString(),
-    publishedScheduledAtUtc: game.publishedScheduledAtUtc.toISOString(),
-    effectiveLockAtUtc: game.effectiveLockAtUtc.toISOString(),
+    scheduledAtUtc: game.scheduledAtUtc?.toISOString() ?? null,
+    publishedScheduledAtUtc:
+      game.publishedScheduledAtUtc?.toISOString() ?? null,
+    effectiveLockAtUtc: game.effectiveLockAtUtc?.toISOString() ?? null,
     providerLastUpdatedAt: game.providerLastUpdatedAt.toISOString(),
     lastSyncedAt: game.lastSyncedAt.toISOString(),
     selectable: selection.selectable,
@@ -128,22 +129,24 @@ export function boundedRemainingWeekRange(input: {
 export function assertCatalogQueryWithinWeek(input: {
   query: ProviderQuery;
   arenaTimezone: string;
+  calendarTimezone?: string;
   weekStartAt: Date;
   weekEndAt: Date;
 }): void {
-  if (input.query.timezone !== input.arenaTimezone) {
+  const calendarTimezone = input.calendarTimezone ?? input.arenaTimezone;
+  if (input.query.timezone !== calendarTimezone) {
     throw new HttpsError(
       "invalid-argument",
-      "The catalog timezone must match the arena timezone.",
+      "The catalog timezone does not match the server calendar policy.",
     );
   }
   const startDate = calendarDateInTimezone(
     input.weekStartAt,
-    input.arenaTimezone,
+    calendarTimezone,
   );
   const endDate = calendarDateInTimezone(
     input.weekEndAt,
-    input.arenaTimezone,
+    calendarTimezone,
   );
   if (input.query.from < startDate || input.query.to > endDate) {
     throw new HttpsError(
@@ -202,6 +205,7 @@ export function emptyCatalogAvailabilityState(input: {
 }
 
 const OPERATION_CLAIM_TTL_MS = 5 * 60_000;
+export const SPORTSDATAIO_CALENDAR_TIMEZONE = "America/New_York";
 export const MAX_REVEAL_PAGE_SIZE = 200;
 const DEFAULT_REVEAL_PAGE_SIZE = MAX_REVEAL_PAGE_SIZE;
 const MAX_REVEAL_GAMES_PER_PAGE = 25;
@@ -231,6 +235,16 @@ function catalogSelectionState(
     return {
       selectable: false,
       reason: `Games with status ${game.status} cannot be added.`,
+    };
+  }
+  if (
+    game.timeTbd === true ||
+    game.scheduledAtUtc === null ||
+    game.effectiveLockAtUtc === null
+  ) {
+    return {
+      selectable: false,
+      reason: "This game has no confirmed kickoff time or lock deadline yet.",
     };
   }
   if (
@@ -391,17 +405,39 @@ async function commitGameResultUpdates(
     const chunk = updates.slice(index, index + 350);
     await db.runTransaction(async (transaction) => {
       const week = await transaction.get(reference);
-      assertResultMutationClaim(week.data(), claimId);
+      const weekData = week.data();
+      assertResultMutationClaim(weekData, claimId);
       for (const update of chunk) {
         transaction.set(update.document.ref, toStoredGame(update.game), {
           merge: true,
         });
       }
-      transaction.update(reference, {
+      const weekUpdate: Record<string, unknown> = {
         gameResultsVersion: FieldValue.increment(1),
         resultMutationHeartbeatAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
-      });
+      };
+      if (weekData.lockPolicySnapshot === "firstGame") {
+        const candidateLockAt = chunk.reduce<Date | null>((earliest, update) => {
+          const lockAt = update.game.effectiveLockAtUtc;
+          if (lockAt === null) return earliest;
+          return earliest === null || lockAt < earliest ? lockAt : earliest;
+        }, null);
+        if (candidateLockAt !== null) {
+          const storedSlateLock = weekData.effectiveSlateLockAtUtc;
+          const currentSlateLockAt =
+            storedSlateLock instanceof Timestamp
+              ? storedSlateLock.toDate()
+              : null;
+          weekUpdate.effectiveSlateLockAtUtc = Timestamp.fromDate(
+            protectedFirstGameSlateLock({
+              currentSlateLockAt,
+              candidateLockAt,
+            }),
+          );
+        }
+      }
+      transaction.update(reference, weekUpdate);
     });
   }
 }
@@ -422,20 +458,20 @@ export async function gradeWeekWithResultClaim(input: {
 }
 
 export function validateCatalogProviderForLeague(
-  catalogProvider: ProviderName,
+  catalogProvider: NormalizedGame["provider"],
   configuredProvider: unknown,
   runtime: ProviderRuntime = providerRuntime(),
 ): ProviderName {
   const configured = configuredProvider ?? "manual";
-  if (!PROVIDER_NAMES.includes(configured as ProviderName)) {
+  if (!isProviderName(configured)) {
     throw new HttpsError(
       "failed-precondition",
       "The arena sports provider configuration is invalid.",
     );
   }
-  const provider = configured as ProviderName;
+  const provider = configured;
   assertProviderAllowedForRuntime(provider, runtime);
-  if (catalogProvider !== provider) {
+  if (!isProviderName(catalogProvider) || catalogProvider !== provider) {
     throw new HttpsError(
       "failed-precondition",
       "The catalog game does not match the arena sports provider.",
@@ -454,6 +490,13 @@ export function isCatalogGameSelectable(
     enabledLeagues?: string[];
   },
 ): boolean {
+  if (
+    game.timeTbd === true ||
+    game.scheduledAtUtc === null ||
+    game.effectiveLockAtUtc === null
+  ) {
+    return false;
+  }
   const scheduledAt = game.scheduledAtUtc.valueOf();
   if (
     !SELECTABLE_CATALOG_STATUSES.has(game.status) ||
@@ -736,6 +779,62 @@ export async function assignPicker(input: {
   });
 }
 
+type GameIdentityDocument = DocumentData | NormalizedGame;
+
+function sportsDataIoGameAliasTokens(game: GameIdentityDocument): string[] {
+  if (game.provider !== "sportsDataIo") return [];
+  const league =
+    typeof game.providerLeagueId === "string" &&
+    game.providerLeagueId.length > 0
+      ? game.providerLeagueId
+      : typeof game.leagueCode === "string" && game.leagueCode.length > 0
+        ? game.leagueCode
+        : null;
+  if (league === null) return [];
+
+  const aliases = [
+    ["score", game.providerScoreId],
+    ["league", game.providerLeagueGameId],
+    ["global", game.providerGlobalGameId],
+    ["gameKey", game.providerGameKey],
+  ] as const;
+  const tokens = aliases.flatMap(([namespace, value]) =>
+    typeof value === "string" && value.length > 0
+      ? [`sportsDataIo:${league}:${namespace}:${value}`]
+      : [],
+  );
+  if (tokens.length > 0) return tokens;
+  return typeof game.providerGameId === "string" &&
+    game.providerGameId.length > 0
+    ? [`sportsDataIo:${league}:canonical:${game.providerGameId}`]
+    : [];
+}
+
+export function hasDuplicateSportsDataIoGameAliases(
+  games: readonly GameIdentityDocument[],
+): boolean {
+  const aliases = new Map<string, string>();
+  for (const game of games) {
+    const identity =
+      typeof game.id === "string" && game.id.length > 0
+        ? game.id
+        : typeof game.providerGameId === "string"
+          ? game.providerGameId
+          : "";
+    for (const alias of sportsDataIoGameAliasTokens(game)) {
+      const existingIdentity = aliases.get(alias);
+      if (
+        existingIdentity !== undefined &&
+        existingIdentity !== identity
+      ) {
+        return true;
+      }
+      aliases.set(alias, identity);
+    }
+  }
+  return false;
+}
+
 async function canonicalCatalogGames(
   games: NormalizedGame[],
   week: DocumentData,
@@ -816,6 +915,12 @@ async function canonicalCatalogGames(
       result.push(game);
     }
   }
+  if (hasDuplicateSportsDataIoGameAliases(result)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "The same SportsDataIO game cannot be selected under multiple provider IDs.",
+    );
+  }
   return result;
 }
 
@@ -887,6 +992,24 @@ export async function saveDraftSlateRecord(input: {
       claimedWeek,
       settings,
     );
+    const existingGames = await reference.collection("games").get();
+    const incomingIds = new Set(canonicalGames.map((game) => game.id));
+    const removalIds = new Set(input.removeGameIds);
+    const finalProviderGames: GameIdentityDocument[] = [
+      ...existingGames.docs
+        .filter(
+          (game) =>
+            !incomingIds.has(game.id) && !removalIds.has(game.id),
+        )
+        .map((game) => game.data()),
+      ...canonicalGames.filter((game) => !removalIds.has(game.id)),
+    ];
+    if (hasDuplicateSportsDataIoGameAliases(finalProviderGames)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "The draft already contains this SportsDataIO game under another provider ID.",
+      );
+    }
     await commitWritesInChunks(db, canonicalGames, (batch, game) => {
       batch.set(reference.collection("games").doc(game.id), {
         ...toStoredGame(game),
@@ -955,6 +1078,16 @@ async function validateGamesForPublish(input: {
   week: DocumentData;
   settings: Partial<LeagueSettings>;
 }): Promise<void> {
+  if (
+    hasDuplicateSportsDataIoGameAliases(
+      input.games.map((game) => game.data()),
+    )
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The slate contains the same SportsDataIO game under multiple provider IDs.",
+    );
+  }
   const now = new Date();
   const weekStartAt = asDate(input.week.startAt, "week startAt");
   const weekEndAt = asDate(input.week.endAt, "week endAt");
@@ -978,7 +1111,7 @@ async function validateGamesForPublish(input: {
   for (const game of input.games) {
     const selected = game.data();
     const providerName = String(selected.provider);
-    if (!PROVIDER_NAMES.includes(providerName as ProviderName)) {
+    if (!isProviderName(providerName)) {
       throw new HttpsError(
         "failed-precondition",
         "A slate game has an unsupported sports provider.",
@@ -986,7 +1119,7 @@ async function validateGamesForPublish(input: {
     }
     if (providerName !== "manual") {
       validateCatalogProviderForLeague(
-        providerName as ProviderName,
+        providerName,
         input.settings.providerName,
       );
     }
@@ -1137,15 +1270,15 @@ async function publishedCatalogPresentation(
     );
   }
   const [providerName] = providerNames;
-  if (!PROVIDER_NAMES.includes(providerName as ProviderName)) {
+  if (!isProviderName(providerName)) {
     throw new HttpsError(
       "failed-precondition",
       "A slate game has an unsupported sports provider.",
     );
   }
-  const provider = await getProvider(providerName as ProviderName);
+  const provider = await getProvider(providerName);
   return {
-    catalogProviderSnapshot: providerName as ProviderName,
+    catalogProviderSnapshot: providerName,
     catalogPresentationSnapshot: {
       provider: provider.presentation.provider,
       attributionText: provider.presentation.attributionText,
@@ -1355,6 +1488,10 @@ export async function publishSlate(input: {
         publishedRequestId: input.requestId,
         selectedGameCount: games.size,
         eligibleMemberCount,
+        effectiveSlateLockAtUtc:
+          claim.week.lockPolicySnapshot === "firstGame"
+            ? Timestamp.fromMillis(earliestLock)
+            : null,
         ...presentation,
         updatedAt: FieldValue.serverTimestamp(),
         publishRequestId: FieldValue.delete(),
@@ -1435,8 +1572,8 @@ export async function submitEntry(input: {
         throw new HttpsError("not-found", "Selected game not found.");
       }
       const now = Timestamp.now();
-      const lockAt = data.effectiveLockAtUtc;
-      if (!(lockAt instanceof Timestamp) || now.toMillis() >= lockAt.toMillis()) {
+      const lockAt = effectiveStoredGameLock(currentWeek.data(), data);
+      if (lockAt === null || now.toMillis() >= lockAt.toMillis()) {
         throw new HttpsError(
           "failed-precondition",
           "This game is already locked.",
@@ -1581,21 +1718,25 @@ export async function listCatalog(input: {
   }
   const weekStartAt = asDate(week.startAt, "week startAt");
   const weekEndAt = asDate(week.endAt, "week endAt");
-  const discovery = input.query.from === undefined;
-  const derivedRange = boundedRemainingWeekRange({
-    now: new Date(),
-    timezone: arenaTimezone,
-    weekStartAt,
-    weekEndAt,
-  });
   const configuredProvider = settings.providerName ?? "manual";
-  if (!PROVIDER_NAMES.includes(configuredProvider as ProviderName)) {
+  if (!isProviderName(configuredProvider)) {
     throw new HttpsError(
       "failed-precondition",
       "The arena sports provider configuration is invalid.",
     );
   }
-  const providerName = configuredProvider as ProviderName;
+  const providerName = configuredProvider;
+  const catalogTimezone =
+    providerName === "sportsDataIo"
+      ? SPORTSDATAIO_CALENDAR_TIMEZONE
+      : arenaTimezone;
+  const discovery = input.query.from === undefined;
+  const derivedRange = boundedRemainingWeekRange({
+    now: new Date(),
+    timezone: catalogTimezone,
+    weekStartAt,
+    weekEndAt,
+  });
   const provider = await getProvider(providerName);
   const [providerSports, providerLeagues] = await Promise.all([
     provider.listSupportedSports(),
@@ -1627,13 +1768,15 @@ export async function listCatalog(input: {
     season: resolvedLeague?.season ?? input.query.season ?? "manual",
     from: input.query.from ?? derivedRange.from,
     to: input.query.to ?? derivedRange.to,
-    // Arena configuration is authoritative; client timezone is context only.
-    timezone: arenaTimezone,
+    // SportsDataIO League API date buckets are US Eastern calendar days. The
+    // server, not a browser offset, owns that policy.
+    timezone: catalogTimezone,
     forceRefresh: input.query.forceRefresh ?? false,
   };
   assertCatalogQueryWithinWeek({
     query: effectiveQuery,
     arenaTimezone,
+    calendarTimezone: catalogTimezone,
     weekStartAt,
     weekEndAt,
   });
@@ -1683,18 +1826,34 @@ export async function listCatalog(input: {
   }
   const cached = await listGamesWithCache(provider, effectiveQuery);
   const now = new Date();
+  const catalogWeekStart = calendarDateInTimezone(
+    weekStartAt,
+    catalogTimezone,
+  );
+  const catalogWeekEnd = calendarDateInTimezone(
+    weekEndAt,
+    catalogTimezone,
+  );
   const visibleGames = cached.games.filter((game) => {
-    const localDate = calendarDateInTimezone(
-      game.scheduledAtUtc,
-      arenaTimezone,
-    );
+    const localDate =
+      game.scheduledDayEastern ??
+      (game.scheduledAtUtc === null
+        ? null
+        : calendarDateInTimezone(game.scheduledAtUtc, catalogTimezone));
+    const insideWeek =
+      game.scheduledAtUtc === null
+        ? localDate !== null &&
+          localDate >= catalogWeekStart &&
+          localDate <= catalogWeekEnd
+        : game.scheduledAtUtc >= weekStartAt &&
+          game.scheduledAtUtc <= weekEndAt;
     return (
       game.sportCode === effectiveQuery.sportCode &&
       game.leagueCode === effectiveQuery.leagueCode &&
+      localDate !== null &&
       localDate >= effectiveQuery.from &&
       localDate <= effectiveQuery.to &&
-      game.scheduledAtUtc >= weekStartAt &&
-      game.scheduledAtUtc <= weekEndAt &&
+      insideWeek &&
       ((settings.enabledSports?.length ?? 0) === 0 ||
         settings.enabledSports?.includes(game.sportCode)) &&
       ((settings.enabledLeagues?.length ?? 0) === 0 ||
@@ -1790,6 +1949,10 @@ type RefreshResult = {
 
 function materialSyncHash(value: DocumentData | NormalizedGame): string {
   return sha256({
+    providerScoreId: value.providerScoreId ?? null,
+    providerLeagueGameId: value.providerLeagueGameId ?? null,
+    providerGlobalGameId: value.providerGlobalGameId ?? null,
+    providerGameKey: value.providerGameKey ?? null,
     scheduledAtUtc: asDate(value.scheduledAtUtc, "scheduledAtUtc"),
     effectiveLockAtUtc: asDate(
       value.effectiveLockAtUtc,
@@ -1802,6 +1965,10 @@ function materialSyncHash(value: DocumentData | NormalizedGame): string {
     awayTeam: value.awayTeam,
     status: value.status,
     statusDetail: value.statusDetail ?? null,
+    isClosed: value.isClosed ?? null,
+    rescheduledFromLeagueGameId:
+      value.rescheduledFromLeagueGameId ?? null,
+    rescheduledToLeagueGameId: value.rescheduledToLeagueGameId ?? null,
     homeScore: value.homeScore ?? null,
     awayScore: value.awayScore ?? null,
     winnerTeamId: value.winnerTeamId ?? null,
@@ -1839,6 +2006,30 @@ export function preserveSelectedGameParticipants(
   return quarantined;
 }
 
+export function preserveSelectedGameSchedule(
+  current: NormalizedGame,
+  refreshed: NormalizedGame,
+): NormalizedGame {
+  if (
+    refreshed.scheduledAtUtc !== null &&
+    refreshed.effectiveLockAtUtc !== null
+  ) {
+    return refreshed;
+  }
+  // A selected game necessarily had a confirmed schedule when it was
+  // published. Provider exception records such as MLB NotNecessary may later
+  // omit DateTimeUTC; retain the selected schedule/lock so cancellation or
+  // review metadata can still resolve the slate without inventing a new time.
+  return {
+    ...refreshed,
+    scheduledAtUtc: current.scheduledAtUtc,
+    effectiveLockAtUtc: current.effectiveLockAtUtc,
+    scheduledDayEastern:
+      refreshed.scheduledDayEastern ?? current.scheduledDayEastern ?? null,
+    timeTbd: current.timeTbd === true,
+  };
+}
+
 export function protectedSelectedGameLock(input: {
   currentLockAt: Date;
   refreshedLockAt: Date;
@@ -1854,22 +2045,128 @@ export function protectedSelectedGameLock(input: {
     : input.refreshedLockAt;
 }
 
+export function protectedFirstGameSlateLock(input: {
+  currentSlateLockAt: Date | null;
+  candidateLockAt: Date;
+}): Date {
+  return input.currentSlateLockAt === null ||
+    input.candidateLockAt < input.currentSlateLockAt
+    ? input.candidateLockAt
+    : input.currentSlateLockAt;
+}
+
+export function effectiveStoredGameLock(
+  week: DocumentData | undefined,
+  game: DocumentData | undefined,
+): Timestamp | null {
+  const gameLock = game?.effectiveLockAtUtc;
+  if (week?.lockPolicySnapshot !== "firstGame") {
+    return gameLock instanceof Timestamp ? gameLock : null;
+  }
+  const slateLock = week.effectiveSlateLockAtUtc;
+  if (!(slateLock instanceof Timestamp)) {
+    return gameLock instanceof Timestamp ? gameLock : null;
+  }
+  if (!(gameLock instanceof Timestamp)) return slateLock;
+  return slateLock.toMillis() < gameLock.toMillis() ? slateLock : gameLock;
+}
+
+function earliestGameLock(
+  games: QueryDocumentSnapshot[],
+): Timestamp | null {
+  return games.reduce<Timestamp | null>((earliest, game) => {
+    const lockAt = game.data().effectiveLockAtUtc;
+    if (!(lockAt instanceof Timestamp)) return earliest;
+    return earliest === null || lockAt.toMillis() < earliest.toMillis()
+      ? lockAt
+      : earliest;
+  }, null);
+}
+
+async function ensureFirstGameSlateLock(
+  reference: FirebaseFirestore.DocumentReference,
+  claimId: string,
+  games: QueryDocumentSnapshot[],
+): Promise<Timestamp | null> {
+  const candidateLockAt = earliestGameLock(games);
+  if (candidateLockAt === null) return null;
+  return db.runTransaction(async (transaction) => {
+    const week = await transaction.get(reference);
+    const data = week.data();
+    assertResultMutationClaim(data, claimId);
+    if (data.lockPolicySnapshot !== "firstGame") return null;
+    const currentSlateLock = data.effectiveSlateLockAtUtc;
+    const protectedLock = protectedFirstGameSlateLock({
+      currentSlateLockAt:
+        currentSlateLock instanceof Timestamp
+          ? currentSlateLock.toDate()
+          : null,
+      candidateLockAt: candidateLockAt.toDate(),
+    });
+    const protectedTimestamp = Timestamp.fromDate(protectedLock);
+    if (
+      !(currentSlateLock instanceof Timestamp) ||
+      currentSlateLock.toMillis() !== protectedTimestamp.toMillis()
+    ) {
+      transaction.update(reference, {
+        effectiveSlateLockAtUtc: protectedTimestamp,
+        resultMutationHeartbeatAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+    return protectedTimestamp;
+  });
+}
+
+async function propagateFirstGameSlateLock(
+  reference: FirebaseFirestore.DocumentReference,
+  claimId: string,
+  games: QueryDocumentSnapshot[],
+): Promise<void> {
+  for (let index = 0; index < games.length; index += 350) {
+    const chunk = games.slice(index, index + 350);
+    await db.runTransaction(async (transaction) => {
+      const week = await transaction.get(reference);
+      const data = week.data();
+      assertResultMutationClaim(data, claimId);
+      if (data.lockPolicySnapshot !== "firstGame") return;
+      const slateLock = data.effectiveSlateLockAtUtc;
+      if (!(slateLock instanceof Timestamp)) return;
+      const currentGames = await transaction.getAll(
+        ...chunk.map((game) => game.ref),
+      );
+      let chunkUpdateCount = 0;
+      for (const game of currentGames) {
+        const gameLock = game.data()?.effectiveLockAtUtc;
+        if (
+          gameLock instanceof Timestamp &&
+          gameLock.toMillis() <= slateLock.toMillis()
+        ) {
+          continue;
+        }
+        transaction.update(game.ref, {effectiveLockAtUtc: slateLock});
+        chunkUpdateCount += 1;
+      }
+      if (chunkUpdateCount > 0) {
+        transaction.update(reference, {
+          gameResultsVersion: FieldValue.increment(1),
+          resultMutationHeartbeatAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+    });
+  }
+}
+
 export function selectedGameRefreshDateRange(input: {
-  provider: string;
   scheduledAtUtc: Date;
   timezone: string;
 }): {from: string; to: string} {
-  const storedArenaDate = calendarDateInTimezone(
+  const storedCalendarDate = calendarDateInTimezone(
     input.scheduledAtUtc,
     input.timezone,
   );
-  if (input.provider !== "espn") {
-    return {from: storedArenaDate, to: storedArenaDate};
-  }
-  return {
-    from: addCalendarDays(storedArenaDate, -1),
-    to: addCalendarDays(storedArenaDate, 5),
-  };
+  return {from: storedCalendarDate, to: storedCalendarDate};
 }
 
 function selectedGameToQuery(
@@ -1880,10 +2177,13 @@ function selectedGameToQuery(
 ): ProviderQuery {
   const data = game.data();
   const scheduled = asDate(data.scheduledAtUtc, "scheduledAtUtc");
+  const calendarTimezone =
+    provider === "sportsDataIo"
+      ? SPORTSDATAIO_CALENDAR_TIMEZONE
+      : timezone;
   const range = selectedGameRefreshDateRange({
-    provider,
     scheduledAtUtc: scheduled,
-    timezone,
+    timezone: calendarTimezone,
   });
   return {
     sportCode: String(data.sportCode),
@@ -1892,7 +2192,7 @@ function selectedGameToQuery(
     season: String(data.season),
     from: range.from,
     to: range.to,
-    timezone,
+    timezone: calendarTimezone,
     forceRefresh,
   };
 }
@@ -1942,6 +2242,13 @@ export async function refreshWeekGames(input: {
     if (input.gameId !== undefined && selected.empty) {
       throw new HttpsError("not-found", "Selected game not found.");
     }
+    if (claimedWeek.lockPolicySnapshot === "firstGame") {
+      const slateGames =
+        input.gameId === undefined
+          ? selected.docs
+          : (await gamesReference.get()).docs;
+      await ensureFirstGameSlateLock(reference, claimId, slateGames);
+    }
     const timezone = String(league.data()?.timezone ?? "").trim();
     try {
       new Intl.DateTimeFormat("en-US", {timeZone: timezone}).format();
@@ -1955,12 +2262,13 @@ export async function refreshWeekGames(input: {
       string,
       {query: ProviderQuery; documents: QueryDocumentSnapshot[]}
     >();
-    // ESPN targets intentionally retain distinct, maximum-seven-day
-    // discovery windows. Adjacent dates can overlap, but coalescing their
-    // union could exceed the reviewed bound and turn a selected refresh into
-    // an unbounded schedule scan.
+    let skippedHistoricalProvider = false;
     for (const game of selected.docs) {
-      const provider = String(game.data().provider);
+      const gameData = game.data();
+      const provider = String(gameData.provider);
+      // A commissioner override is authoritative and must not spend provider
+      // quota merely to discard the response later.
+      if (gameData.manualOverride === true) continue;
       if (provider === "manual") {
         if (input.gameId !== undefined) {
           throw new HttpsError(
@@ -1968,6 +2276,14 @@ export async function refreshWeekGames(input: {
             "Manual games do not have a provider result to refresh.",
           );
         }
+        continue;
+      }
+      // Historical provenance remains readable, but it is intentionally not
+      // network-capable after its adapter has been retired. Leave the stored
+      // result unchanged for commissioner review instead of failing all other
+      // provider groups in the scheduled job.
+      if (!isProviderName(provider)) {
+        skippedHistoricalProvider = true;
         continue;
       }
       const query = selectedGameToQuery(
@@ -1985,17 +2301,17 @@ export async function refreshWeekGames(input: {
       group.documents.push(game);
       groups.set(key, group);
     }
-    let delayed = false;
+    let delayed = skippedHistoricalProvider;
     let updatedGameCount = 0;
     for (const group of groups.values()) {
       const providerName = String(group.documents[0]?.data().provider);
-      if (!PROVIDER_NAMES.includes(providerName as ProviderName)) {
+      if (!isProviderName(providerName)) {
         throw new HttpsError(
           "failed-precondition",
           "A selected game has an unsupported sports provider.",
         );
       }
-      const provider = await getProvider(providerName as ProviderName);
+      const provider = await getProvider(providerName);
       const maximumIds = selectedGameRefreshMaximumIds(provider);
       for (
         let offset = 0;
@@ -2016,7 +2332,10 @@ export async function refreshWeekGames(input: {
           delayed = true;
           continue;
         }
-        delayed ||= refreshed.delayed;
+        delayed ||= refreshed.delayed || refreshed.stale;
+        // Cached fallback or a partial date bucket is useful for display, but
+        // it must never become a newly graded final result.
+        if (refreshed.delayed || refreshed.stale) continue;
         const byProviderId = new Map(
           refreshed.games.map((game) => [game.providerGameId, game]),
         );
@@ -2048,10 +2367,24 @@ export async function refreshWeekGames(input: {
             ),
             lastSyncedAt: asDate(current.lastSyncedAt, "lastSyncedAt"),
           });
-          const next = preserveSelectedGameParticipants(
+          const next = preserveSelectedGameSchedule(
             currentGame,
-            providerUpdate,
+            preserveSelectedGameParticipants(currentGame, providerUpdate),
           );
+          if (next.effectiveLockAtUtc === null) {
+            delayed = true;
+            continue;
+          }
+          next.providerScoreId ??= currentGame.providerScoreId ?? null;
+          next.providerLeagueGameId ??=
+            currentGame.providerLeagueGameId ?? null;
+          next.providerGlobalGameId ??=
+            currentGame.providerGlobalGameId ?? null;
+          next.providerGameKey ??= currentGame.providerGameKey ?? null;
+          next.rescheduledFromLeagueGameId ??=
+            currentGame.rescheduledFromLeagueGameId ?? null;
+          next.rescheduledToLeagueGameId ??=
+            currentGame.rescheduledToLeagueGameId ?? null;
           const currentLockAt = asDate(
             current.effectiveLockAtUtc,
             "effectiveLockAtUtc",
@@ -2084,6 +2417,13 @@ export async function refreshWeekGames(input: {
       }
     }
     const freshGames = await reference.collection("games").get();
+    if (claimedWeek.lockPolicySnapshot === "firstGame") {
+      await propagateFirstGameSlateLock(
+        reference,
+        claimId,
+        freshGames.docs,
+      );
+    }
     const statuses = freshGames.docs.map((game) => String(game.data().status));
     let status = claimedWeek.status;
     if (statuses.some((gameStatus) => gameStatus === "live")) {
@@ -2192,19 +2532,23 @@ export function revealPayloadReadsEnabled(
 }
 
 async function claimGameForReveal(input: {
+  weekReference: FirebaseFirestore.DocumentReference;
   gameReference: FirebaseFirestore.DocumentReference;
   claimId: string;
   requestId: string;
   now: number;
 }): Promise<RevealClaimResult> {
   return db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(input.gameReference);
+    const [week, snapshot] = await Promise.all([
+      transaction.get(input.weekReference),
+      transaction.get(input.gameReference),
+    ]);
     const data = snapshot.data();
     if (data === undefined) {
       return "not-locked";
     }
-    const lockAt = data.effectiveLockAtUtc;
-    if (!(lockAt instanceof Timestamp) || lockAt.toMillis() > input.now) {
+    const lockAt = effectiveStoredGameLock(week.data(), data);
+    if (lockAt === null || lockAt.toMillis() > input.now) {
       return "not-locked";
     }
     if (data.pickRevealCompletedAt instanceof Timestamp) {
@@ -2509,7 +2853,10 @@ export async function revealLockedPicks(input: {
     await requireAdmin(input.leagueId, input.actorUid);
   }
   const reference = weekReference(input.leagueId, input.weekId);
-  const games = await reference.collection("games").get();
+  const [week, games] = await Promise.all([
+    reference.get(),
+    reference.collection("games").get(),
+  ]);
   const completedGameIds = new Set<string>();
   let revealContext:
     | Promise<{
@@ -2524,8 +2871,8 @@ export async function revealLockedPicks(input: {
 
   for (const game of games.docs) {
     const data = game.data();
-    const lockAt = data.effectiveLockAtUtc;
-    if (!(lockAt instanceof Timestamp) || lockAt.toMillis() > now) {
+    const lockAt = effectiveStoredGameLock(week.data(), data);
+    if (lockAt === null || lockAt.toMillis() > now) {
       continue;
     }
     if (data.pickRevealCompletedAt instanceof Timestamp) {
@@ -2536,6 +2883,7 @@ export async function revealLockedPicks(input: {
 
     const claimId = randomUUID();
     const claim = await claimGameForReveal({
+      weekReference: reference,
       gameReference: game.ref,
       claimId,
       requestId: input.requestId,
@@ -2808,8 +3156,16 @@ export async function overrideResult(input: {
   const reference = weekReference(input.leagueId, input.weekId);
   const gameReference = reference.collection("games").doc(input.gameId);
   const claimId = randomUUID();
-  await claimResultMutation(reference, input.requestId, claimId);
+  const claimedWeek = await claimResultMutation(
+    reference,
+    input.requestId,
+    claimId,
+  );
   try {
+    if (claimedWeek.lockPolicySnapshot === "firstGame") {
+      const slateGames = await reference.collection("games").get();
+      await ensureFirstGameSlateLock(reference, claimId, slateGames.docs);
+    }
     const mutation = await db.runTransaction(async (transaction) => {
       const [week, game] = await Promise.all([
         transaction.get(reference),
@@ -2833,6 +3189,16 @@ export async function overrideResult(input: {
           "The stored game cannot be safely overridden.",
         );
       }
+      const currentEffectiveLockAt = effectiveStoredGameLock(
+        weekData,
+        current,
+      );
+      if (currentEffectiveLockAt === null) {
+        throw new HttpsError(
+          "failed-precondition",
+          "The stored game has no safe lock deadline.",
+        );
+      }
       const resolved = resolveGameOverride({
         currentScheduledAtUtc: asDate(
           current.scheduledAtUtc,
@@ -2842,10 +3208,7 @@ export async function overrideResult(input: {
           current.publishedScheduledAtUtc,
           "publishedScheduledAtUtc",
         ),
-        currentEffectiveLockAtUtc: asDate(
-          current.effectiveLockAtUtc,
-          "effectiveLockAtUtc",
-        ),
+        currentEffectiveLockAtUtc: currentEffectiveLockAt.toDate(),
         homeTeamId,
         awayTeamId,
         ...(input.scheduledAtUtc === undefined
@@ -2856,6 +3219,24 @@ export async function overrideResult(input: {
         awayScore: input.awayScore,
         winnerTeamId: input.winnerTeamId,
       });
+      const weekUpdate: Record<string, unknown> = {
+        gameResultsVersion: FieldValue.increment(1),
+        resultMutationHeartbeatAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (weekData.lockPolicySnapshot === "firstGame") {
+        const storedSlateLock = weekData.effectiveSlateLockAtUtc;
+        resolved.effectiveLockAtUtc = protectedFirstGameSlateLock({
+          currentSlateLockAt:
+            storedSlateLock instanceof Timestamp
+              ? storedSlateLock.toDate()
+              : currentEffectiveLockAt.toDate(),
+          candidateLockAt: resolved.effectiveLockAtUtc,
+        });
+        weekUpdate.effectiveSlateLockAtUtc = Timestamp.fromDate(
+          resolved.effectiveLockAtUtc,
+        );
+      }
       const changedAt = Timestamp.now();
       transaction.update(gameReference, {
         scheduledAtUtc: Timestamp.fromDate(resolved.scheduledAtUtc),
@@ -2872,13 +3253,18 @@ export async function overrideResult(input: {
         providerLastUpdatedAt: changedAt,
         lastSyncedAt: changedAt,
       });
-      transaction.update(reference, {
-        gameResultsVersion: FieldValue.increment(1),
-        resultMutationHeartbeatAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      return {current, resolved, changedAt};
+      transaction.update(reference, weekUpdate);
+      return {
+        current,
+        resolved,
+        changedAt,
+        firstGameLock: weekData.lockPolicySnapshot === "firstGame",
+      };
     });
+    if (mutation.firstGameLock) {
+      const slateGames = await reference.collection("games").get();
+      await propagateFirstGameSlateLock(reference, claimId, slateGames.docs);
+    }
     const beforeScheduledAt = asDate(
       mutation.current.scheduledAtUtc,
       "scheduledAtUtc",

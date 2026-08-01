@@ -210,11 +210,13 @@ class _PickGameCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    formatLeagueTime(
-                      game.effectiveLockAtUtc,
-                      timezone,
-                      'EEE, MMM d · h:mm a',
-                    ),
+                    game.effectiveLockAtUtc == null
+                        ? 'Pick deadline unavailable · commissioner review required'
+                        : formatLeagueTime(
+                            game.effectiveLockAtUtc!,
+                            timezone,
+                            'EEE, MMM d · h:mm a',
+                          ),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),

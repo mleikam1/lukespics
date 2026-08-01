@@ -101,12 +101,18 @@ node - <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 
-const allowedEspnProvider = path.resolve("functions/src/providers/espn.ts");
-const allowedEspnProviderHosts = new Map([
-  ["site.api.espn.com", "https://site.api.espn.com"],
-  ["a.espncdn.com", "a.espncdn.com"],
-  ["espn.com", "espn.com"],
-  ["espncdn.com", "espncdn.com"],
+const sportsDataIoClient = path.resolve(
+  "functions/src/providers/sportsDataIoClient.ts",
+);
+const licensingPolicy = path.resolve("functions/src/providers/licensing.ts");
+const configSource = path.resolve("functions/src/config.ts");
+const functionManifest = path.resolve("functions/src/index.ts");
+const sportsDataIoSecretFiles = new Set([configSource, functionManifest]);
+const blockedLogoRoots = new Set([
+  "espn.com",
+  "espncdn.com",
+  "wikipedia.org",
+  "wikimedia.org",
 ]);
 const runtimeRoots = [
   path.resolve("lib"),
@@ -129,7 +135,10 @@ function visit(candidate) {
 for (const root of runtimeRoots) visit(root);
 
 const violations = [];
-const espnHostToken = /[A-Za-z0-9.-]*(?:espn\.com|espncdn\.com)[A-Za-z0-9.-]*/gi;
+const sportsDataIoHostToken =
+  /[A-Za-z0-9.-]*sportsdata\.io[A-Za-z0-9.-]*/gi;
+const blockedLogoHostToken =
+  /[A-Za-z0-9.-]*(?:espn\.com|espncdn\.com|wikipedia\.org|wikimedia\.org)[A-Za-z0-9.-]*/gi;
 function isExactQuotedLiteral(source, hostIndex, host, expectedValue) {
   const hostOffset = expectedValue.indexOf(host);
   const literalStart = hostIndex - hostOffset - 1;
@@ -142,26 +151,64 @@ function isExactQuotedLiteral(source, hostIndex, host, expectedValue) {
 
 for (const file of files) {
   const source = fs.readFileSync(file, "utf8");
+  const relative = path.relative(process.cwd(), file);
   if (source.includes("wingman-interactive-live")) {
-    violations.push(`${path.relative(process.cwd(), file)}: forbidden project`);
+    violations.push(`${relative}: forbidden project`);
   }
-  for (const match of source.matchAll(espnHostToken)) {
+
+  for (const match of source.matchAll(sportsDataIoHostToken)) {
     const host = match[0].toLowerCase();
-    const expectedValue = allowedEspnProviderHosts.get(host);
-    const isReviewedLiteral =
-      match.index !== undefined &&
-      expectedValue !== undefined &&
-      isExactQuotedLiteral(source, match.index, host, expectedValue);
-    if (
-      file !== allowedEspnProvider ||
-      expectedValue === undefined ||
-      !isReviewedLiteral
-    ) {
+    if (file !== sportsDataIoClient || host !== "api.sportsdata.io") {
       violations.push(
-        `${path.relative(process.cwd(), file)}: unapproved ESPN runtime host`,
+        `${relative}: unapproved SportsDataIO runtime host`,
       );
     }
   }
+
+  for (const match of source.matchAll(blockedLogoHostToken)) {
+    const host = match[0].toLowerCase();
+    const isBlockedRootLiteral =
+      match.index !== undefined &&
+      blockedLogoRoots.has(host) &&
+      isExactQuotedLiteral(source, match.index, host, host);
+    if (file !== licensingPolicy || !isBlockedRootLiteral) {
+      violations.push(`${relative}: unapproved third-party logo host`);
+    }
+  }
+
+  if (
+    source.includes("SPORTSDATAIO_API_KEY") &&
+    !sportsDataIoSecretFiles.has(file)
+  ) {
+    violations.push(`${relative}: SportsDataIO secret name outside manifest`);
+  }
+  if (
+    source.includes("Ocp-Apim-Subscription-Key") &&
+    file !== sportsDataIoClient
+  ) {
+    violations.push(`${relative}: provider credential header outside client`);
+  }
+  if (/Wikipedia(?:Logo|WordMark)Url/i.test(source)) {
+    violations.push(`${relative}: unlicensed provider artwork field consumed`);
+  }
+  if (
+    file === sportsDataIoClient &&
+    (/searchParams\.(?:set|append)\(\s*["']key["']/i.test(source) ||
+      /[?&]key=/i.test(source))
+  ) {
+    violations.push(`${relative}: provider credential placed in a URL`);
+  }
+  if (
+    /ALLOW_ESPN_PROVIDER|site\.api\.espn\.com|site\.web\.api\.espn\.com|from\s+["'][^"']*\/espn\.js["']/i.test(
+      source,
+    )
+  ) {
+    violations.push(`${relative}: retired provider integration remains active`);
+  }
+}
+
+if (fs.existsSync(path.resolve("functions/src/providers/espn.ts"))) {
+  violations.push("functions/src/providers/espn.ts: retired adapter still exists");
 }
 
 if (violations.length > 0) {

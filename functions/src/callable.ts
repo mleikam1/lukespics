@@ -85,7 +85,7 @@ export function callable<S extends z.ZodType>(
           safeErrorCode: code,
           error:
             error instanceof Error
-              ? {name: error.name, message: error.message}
+              ? {name: error.name.slice(0, 80)}
               : {name: "UnknownError"},
         });
         if (error instanceof HttpsError) {

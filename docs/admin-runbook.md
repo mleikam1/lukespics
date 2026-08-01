@@ -9,10 +9,10 @@ is currently surfaced or browser-validated. Track observed readiness in
 
 1. Confirm the next sequential draft, boundaries, timezone, and designated
    picker.
-2. Confirm production provider mode is `manual` unless a replacement provider
-   has passed its separate production gate. The ESPN adapter must remain off
-   until written ESPN/Disney authorization and legal/product approval are
-   retained; its logo gate is an independent review.
+2. Confirm production provider mode is `manual` until SportsDataIO's exact NFL
+   and MLB feeds, intended display/grading use, API key, access mode, entitlement
+   verification, configuration, and authorized deployment have all passed.
+   Remote team-mark rights are an independent review.
 3. Picker queries the catalog or enters a trustworthy manual game, selects at
    least one game, removes unwanted games, and reviews the exact saved set.
 4. Publish once; participant and picker-participation settings are snapshotted.

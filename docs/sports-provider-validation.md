@@ -1,351 +1,271 @@
-# Sports provider validation
+# SportsDataIO provider validation
 
-## ESPN Site API candidate — default-off
+## Current state
 
-Research date: 2026-08-01.
+The `sportsDataIo` provider is implemented for NFL and MLB, but it is not
+activated in production. The repository contains no API-key value, no live API
+response, and no claim that the current account is entitled to the required
+feeds. Production arenas must remain on `manual` until the activation checklist
+below is completed and an authorized deployment is approved.
 
-The deployed code isolates the ESPN Site API v2 scoreboard behind the
-server-side provider interface, but the adapter is not production-enabled. On
-2026-08-01 every deployed Function had `ALLOW_ESPN_PROVIDER=false`, both arenas
-remained `manual`, and `systemConfig/espnCatalog` was absent. No live ESPN
-request was made. The reference documentation describes these endpoints as
-unofficial and unsupported, says they may change without notice, and reports no
-official rate limit. There is no SLA, stability commitment, commercial license,
-or logo license associated with unauthenticated technical access.
+The implementation is fixture-tested and fail-closed. A missing key, a disabled
+kill switch, a non-production access mode, an unverified entitlement, an
+emulator runtime, or any Firebase project other than `lukes-picks` prevents the
+provider from being constructed.
 
-The applicable Disney terms also restrict commercial/business use and access,
-copying, or extraction by automated means for data mining or compiling a data
-collection/database without express written permission. This repository does
-not interpret a technically public response as that permission. Before any
-production activation, retain written ESPN/Disney authorization that expressly
-covers the intended schedule/result requests, cache, normalized Firestore
-storage, historical snapshots, and commercial distribution, then record legal
-and product approval. Logo use is a separate rights decision.
-
-The only implemented route is:
+## Server-side flow
 
 ```text
-GET https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard
-    ?dates=YYYYMMDD[-YYYYMMDD]&{allowlistedLeagueParameters}
+Flutter commissioner catalog
+  -> authenticated/App Check callable
+  -> week and commissioner authorization
+  -> provider factory and production gates
+  -> Firestore cache, coalescing lock, quota, circuit breaker
+  -> SportsDataIO client and NFL/MLB adapter
+  -> provider-neutral NormalizedGame records
+  -> exact desired-set draft reconciliation
+  -> immutable publication snapshot
+
+Selected pending games
+  -> authenticated refresh or 30-minute scheduled sync
+  -> one date bucket per league/day through the same gateway
+  -> verified closed result only
+  -> grading and standings
 ```
 
-No Flutter code constructs this URL or parses ESPN JSON. The server accepts a
-centralized league identity and date, constructs the URL itself, validates the
-response defensively, and returns only the normalized Luke's Picks contract.
-It is not an open proxy and does not scrape HTML.
+Flutter never receives the API key, constructs a SportsDataIO URL, or parses a
+vendor response. It receives only normalized catalog fields and safe provider
+health/cache state.
 
-### Centralized league configuration
+## Exact runtime endpoints and feeds
 
-The static server catalog is the authority for these eight entries:
+The client permits only `https://api.sportsdata.io`, HTTPS, the paths below,
+validated season/date parameters, no query string, and no redirects to another
+host. Authentication uses the `Ocp-Apim-Subscription-Key` request header.
 
-| Internal league | ESPN sport/league slugs | Extra query parameters | Ties possible |
+| League | Runtime endpoint | Feed dependency | Purpose |
 |---|---|---|---|
-| NFL | `football/nfl` | `limit=100` | Yes |
-| MLB | `baseball/mlb` | `limit=100` | No |
-| NBA | `basketball/nba` | `limit=100` | No |
-| NHL | `hockey/nhl` | `limit=100` | No |
-| WNBA | `basketball/wnba` | `limit=100` | No |
-| NCAA football | `football/college-football` | `groups=80`, `limit=500` | No |
-| NCAA men's basketball | `basketball/mens-college-basketball` | `groups=50`, `limit=500` | No |
-| NCAA women's basketball | `basketball/womens-college-basketball` | `groups=50`, `limit=500` | No |
+| NFL | `GET /v3/nfl/scores/json/Teams` | Teams / player metadata | Stable team identity and neutral display text |
+| NFL | `GET /v3/nfl/scores/json/SchedulesBasic/{season}` | Schedules & Game Day Information | Season schedule, week, stable IDs, TBD/reschedule metadata |
+| NFL | `GET /v3/nfl/scores/json/ScoresByDate/{date}` | Live & Final Scores | Date-bucket state and scores |
+| MLB | `GET /v3/mlb/scores/json/teams` | Teams / player metadata | Stable team identity and neutral display text |
+| MLB | `GET /v3/mlb/scores/json/GamesByDate/{date}` | Live & Final Scores | Schedule, exception status, stable IDs, and scores |
 
-All use date-based scoreboard discovery. League strings, groups, limits, tie
-policy, enabled defaults, and fallback icon policy must be changed in this one
-server catalog and its tests—not in Flutter. A terminal tied response for a
-league configured without ties is anomalous and remains `reviewRequired`; it
-never produces a guessed winner.
+No `CurrentSeason`, `CurrentWeek`, season-wide MLB game feed, box-score feed, or
+final-only feed is called by this implementation. NFL seasons are reviewed in
+server configuration, and week context is derived from `SchedulesBasic`.
+MLB `GamesByDate` remains the settlement source because a final-only feed would
+omit postponed, suspended, canceled, and `NotNecessary` states.
 
-### Runtime, cache, and schema gates
+The provider date formatter currently emits `YYYY-MMM-DD`, for example
+`2026-AUG-01`, matching the official OpenAPI path examples. The discrepancy
+with official input hints that show `YYYY-MM-DD` is encapsulated in one client
+method and covered by contract tests. Confirm the accepted form with a bounded,
+authenticated, non-production smoke test before activation.
 
-`ALLOW_ESPN_PROVIDER` defaults to `false`, applies only to the exact
-`lukes-picks` production runtime, and is insufficient by itself. Trusted code
-also requires `systemConfig/espnCatalog.enabled == true`. The document is
-Admin-only, requires bounded `authorizationReference` and ISO
-`authorizationReviewedAt` metadata identifying the retained approval record,
-and owns fail-closed presentation/logo policy. No secret or legal-document body
-belongs in Firestore. A missing or malformed document keeps the adapter
-unavailable. Both activation gates remain closed until the written-authorization
-gate above passes.
+## Configuration
 
-Schedule reads are cache-first and protected by the shared lease, throttling,
-timeout, retry, and circuit-breaker boundary. Valid empty ESPN responses cache
-for 30 minutes. ESPN live games cache for 10 minutes; games within two hours of
-start for 15 minutes; games two to 24 hours out for 30 minutes; farther games
-for one hour; and unresolved anomaly states for one hour. Terminal catalog data is
-retained long-term, while selected terminal games reconcile after 12 hours. A
-bounded refresh failure may return an existing stale cache with an explicit
-stale/delayed indicator.
-The scheduled result sync runs every 30 minutes and refreshes only active
-selected games; a distributed lock prevents overlapping provider work.
-Selected ESPN events are looked up over an inclusive seven-day window from one
-arena-local day before through five days after their stored date. Later moves
-outside that deliberately bounded discovery window require an audited
-commissioner start-time correction or void.
-Adjacent selected-date groups may produce overlapping bounded windows. This is
-a documented request-efficiency limitation, not an authorization bypass: every
-window stays within the reviewed seven-day maximum, shared leases/cache reduce
-duplicates, and the soft request budget still applies.
+`systemConfig/sportsDataIoCatalog` is server-readable only. It contains the
+enabled flag, NFL/MLB league/season definitions, and bounded operational
+settings; it never contains a key or contract document. Only NFL and MLB are
+valid automatic-provider entries. Other sports remain manual.
 
-The adapter allows at most three accounted attempts per scoreboard load, uses
-an eight-second default timeout capped at 15 seconds, rejects redirects and
-responses above 10 MB, and reserves retry budget before retrying. The internal
-`ESPN_SOFT_DAILY_LIMIT` defaults to 500 attempts and is configuration-capped at
-20,000. That is a Luke's Picks safety budget, not a claim about an ESPN limit;
-the external documentation publishes no official rate limit.
+The production path requires every gate:
 
-Every ESPN event is parsed independently. Missing or malformed nested data must
-not fail the whole schedule: invalid events are skipped with a structured safe
-reason, unknown statuses normalize conservatively, and full payloads are not
-logged or copied to clients. Canonical IDs are
-`espn:{sportCode}:{eventId}`. The event ID distinguishes doubleheaders and
-reschedules. Week games snapshot the normalized fields so provider downtime or
-later schema changes cannot erase a submitted slate.
+- Firebase project is exactly `lukes-picks` and the Functions emulator is off.
+- `ALLOW_SPORTSDATAIO_PROVIDER=true`.
+- `SPORTSDATAIO_ACCESS_MODE=production`.
+- `SPORTSDATAIO_ENTITLEMENT_VERIFIED=true` after the operator checks the actual
+  key and contract against every endpoint and intended display/grading use.
+- `systemConfig/sportsDataIoCatalog.enabled=true` with reviewed NFL/MLB season
+  entries.
+- `SPORTSDATAIO_API_KEY` is available to the provider-bearing Function.
 
-### Manual activation gate
+The safe defaults are `false`, `fixture`, and `false`. Turning
+`ALLOW_SPORTSDATAIO_PROVIDER` off is the immediate server-side kill switch.
+Returning an arena's `providerName` to `manual` is the application fallback.
 
-Before changing either technical gate:
+Valid access-mode names are `fixture`, `trial`, `discovery`, and `production`.
+Only `production` can pass the production provider gate. Trial and Dev data may
+be scrambled or display-restricted. Discovery data is delayed and has its own
+personal/hobby and redistribution limits. The mode flag records an operator's
+decision; it does not expand contractual rights.
 
-1. retain written authorization and complete legal/product and separate
-   team-mark rights review;
-2. validate all eight live contracts without storing unrestricted payloads;
-3. capture sanitized fixtures for missing fields, status variants, ties,
-   doubleheaders, delays, postponements, cancellations, and finals;
-4. run the full Flutter, Functions, rules, emulator, browser, and source/build
-   scan matrix on the reviewed tree;
-5. inspect and guard the exact `lukes-picks` project immediately before each
-   separately authorized configuration or deployment write; and
-6. deploy to a preview first, verify cache/sync/manual-fallback behavior, and
-   obtain separate authorization for any live promotion.
+## Secret handling and rotation
 
-Rollback begins by setting `ALLOW_ESPN_PROVIDER=false` and returning affected
-arenas to `manual`; disabling the server document is defense in depth. Preserve
-week snapshots and historical scores. Never delete provider cache, slate, pick,
-or standings data as a rollback shortcut.
+Create or rotate `SPORTSDATAIO_API_KEY` only after running the repository's
+project guard for `lukes-picks`, using Firebase/Google Secret Manager's normal
+secret-version workflow. Never pass the value on a command line that will be
+saved, paste it into source or documentation, or store it in Firestore, Remote
+Config, Hosting, Flutter defines, fixtures, screenshots, analytics, or logs.
 
-API-Sports research dates: 2026-07-27 and 2026-07-31.
+The secret is bound only to:
 
-TheSportsDB internal-path validation date: 2026-07-30.
+- `listSportsCatalog`;
+- `refreshSelectedGames`;
+- `syncSelectedGameResults`;
+- `scheduledResultSync`.
 
-Status: official documentation validation is complete. Authenticated live
-coverage validation is blocked because no existing provider key was available.
-No current league ID, live entitlement, fixture, or observed quota is asserted.
+After rotation, deploy only those Functions through
+`scripts/release_firebase.sh functions` in an explicitly authorized release.
+Keep the old secret version until the guarded deployment and smoke checks pass,
+then disable or destroy it according to the account's rotation policy. Never
+print either version during verification.
 
-## Production-gate recheck — 2026-07-31
+## Normalization and identity
 
-The `lukes-picks` project guard passed immediately before inspecting Secret
-Manager metadata. An `API_SPORTS_KEY` secret did not exist, and no ignored local
-developer credential was present. No secret value was requested or displayed.
-The authenticated `/status`, `/leagues`, or `/games` checks therefore were not
-attempted, and the production provider remains disabled.
+NFL and MLB use separate decoders. They tolerate unknown additive fields and
+nullable optional fields, but reject records without enough identity and team
+data to be a real game. Canonical IDs remain provider-qualified. Persisted
+metadata can include score, league-game, global-game, game-key, team, global-
+team, closure, and reschedule IDs when the endpoint supplies them.
 
-The current official API-BASEBALL coverage page still lists MLB schedule and
-historical coverage and documents a 100-request/day free plan. This is public
-catalog information only; it is not proof of this project's entitlement, the
-current MLB provider league ID or season, response shape, or usable quota.
-Those values must still be discovered from authenticated official endpoints and
-must not be guessed.
+MLB doubleheaders are never deduplicated by matchup/date; each `GameID` remains
+distinct. A nullable basic-record ID is skipped only when the record cannot be
+identified as a real game.
 
-The official API-Sports terms were also rechecked. They state that the provider
-does not grant a publication license for its data and does not own the logos,
-images, or trademarks returned by the API; third-party authorization may be
-required. No MLB or club mark authorization was available in this review.
-Consequently:
+A known Eastern calendar day with no real `DateTimeUTC` is stored as
+`timeTbd: true`, with nullable schedule/publication/lock instants. It is visible
+in the commissioner catalog but cannot be selected or published. Luke's Picks
+does not invent midnight, noon, or a lock deadline.
 
-- production remote logos remain disabled;
-- the production allowed-logo-host set is empty;
-- neutral initials badges remain the required production fallback; and
-- no API-Sports catalog or production arena may be enabled until both the
-  authenticated provider gate and the applicable data/mark rights gate pass.
+`DateTimeUTC` is parsed explicitly as UTC even when the source omits a suffix.
+SportsDataIO query buckets use `America/New_York`; the server derives them from
+the commissioner's intended Eastern date. Flutter converts the stored UTC
+instant to the browser's timezone only for display. DST and late-night cases
+are fixture-tested.
 
-## Release policy update — 2026-07-30
+## Status and settlement policy
 
-Production provider mode for `lukes-picks` is `manual` until a provider passes
-every production gate. `mock` is emulator/test-only. The TheSportsDB adapter is
-implemented only as `theSportsDbTest`, with sanitized fixtures and a runtime
-policy gate. Its fixture/policy suites and connected three-user browser
-lifecycle pass under the isolated emulator project.
+| Upstream condition | Luke's Picks state | Settlement behavior |
+|---|---|---|
+| `Scheduled` | `scheduled` | Not settled |
+| `InProgress` or equivalent flags | `live` | Not settled |
+| `Delayed` | `delayed` | Not settled |
+| `Postponed` | `postponed` | Not settled |
+| `Suspended` | `suspended` | Not settled; may resume under the same ID |
+| `Canceled` / MLB `NotNecessary` | `cancelled` | Existing pool rule voids/excludes it |
+| `Final` / NFL `F/OT` and `IsClosed == true`, scores present | `final` | Winner or tie policy applied |
+| Final text with `IsClosed != true` | `reviewRequired` | Never graded |
+| Forfeit, unknown state, closed missing scores, malformed ambiguity | `reviewRequired` | Manual review/override required |
 
-TheSportsDB is restricted to Firebase emulator/internal validation. Its official
-API documentation and terms were revalidated before implementation. The
-documented paths used or permitted by this adapter are:
+NFL uses `HomeScore`/`AwayScore`; MLB uses
+`HomeTeamRuns`/`AwayTeamRuns`. Equal or missing scores never default to the home
+team. NFL ties remain explicit and require the existing tie/push decision.
+Stale, delayed, or partial refresh data never becomes a newly graded result.
 
-- `eventsday.php`
-- `eventsnextleague.php`
-- `eventsseason.php`
-- `lookupteam.php`
-- `search_all_teams.php`
+Manual overrides remain versioned and authoritative. Provider refresh skips an
+overridden game. Same-ID schedule changes can update catalog observations but
+cannot rewrite the published schedule/lock snapshot. Reschedule links are
+stored and surfaced, but a replacement ID never silently replaces a published
+selection; the commissioner uses the audited correction workflow.
 
-Requirements:
+## Cache, synchronization, and transport
 
-- official API responses only, never website scraping;
-- server-side calls or a fixture importer, never direct Flutter calls;
-- `ALLOW_THESPORTSDB_TEST_PROVIDER=true` plus an emulator/internal condition;
-- unconditional rejection when the project ID is `lukes-picks`;
-- normalized provider/event/team IDs;
-- HTTPS, allowlisted hosts, timeout, bounded retry, and quota headroom;
-- schedule/team caches, validation, duplicate suppression, timestamps, and a
-  raw-response hash;
-- sanitized fixtures instead of unrestricted raw payload storage;
-- visible attribution and internal-test-only team badges with neutral fallback.
+The provider uses the existing Firestore cache, cache lock/request coalescing,
+soft quota, circuit breaker, and stale fallback. Cache identity includes
+provider, sport, league, season, Eastern date range, and request type.
 
-The documented test key mentioned in the task is not production permission. Do
-not enable TheSportsDB in a public preview or store build.
+- Teams are retained inside a provider instance and fetched only when needed.
+- Future catalog games cache for 60 minutes.
+- Games two to 24 hours away cache for 30 minutes.
+- Games within two hours cache for 15 minutes.
+- Live games cache for 10 minutes.
+- Valid empty/off-season buckets cache for 30 minutes.
+- Selected terminal games remain recheckable for corrections.
+- The scheduled result job remains a centralized 30-minute poll.
 
-## API-Sports product mapping
+This cadence is intentionally slower than the published minimum call intervals
+for live feeds. MLB selected-game refresh fetches each necessary
+`GamesByDate` bucket once and filters by stable ID; it does not fan out per game
+or per browser.
 
-| App target | API-Sports product | API version | Catalog name | Live validated |
-|---|---|---:|---|---|
-| NFL | API-NFL & NCAA | v1 | NFL | No |
-| NCAA football | API-NFL & NCAA | v1 | NCAA | No |
-| NBA | API-BASKETBALL | v1 | NBA | No |
-| WNBA | API-BASKETBALL | v1 | NBA W | No |
-| NCAA men’s basketball | API-BASKETBALL | v1 | NCAA | No |
-| NCAA women’s basketball | API-BASKETBALL | v1 | NCAA Women | No |
-| MLB | API-BASEBALL | v1 | MLB | No |
-| NHL | API-HOCKEY | v1 | NHL | No |
+Transport has an 8-second request timeout, a 5 MB response limit, and at most
+three attempts. Network failures, timeouts, `429`, and transient `5xx` may retry
+with bounded exponential backoff, jitter, and bounded `Retry-After`. Normal
+`4xx` responses do not retry. Errors are normalized; raw bodies, full URLs,
+headers, and keys are not logged or returned.
 
-The public catalog documents schedule and historical coverage for all targets.
-That is not proof that each target is exposed by the current free plan.
-API-Sports states that free-plan data availability is limited and may change.
+## Team marks
 
-## Endpoints
+The app uses its own neutral abbreviation/initial badges in light and dark
+themes. It does not consume provider Wikipedia-logo or team-color fields and
+does not hotlink, download, cache, or rehost third-party marks.
 
-Each product has a separate v1 host:
+Remote marks may be enabled only after the owner confirms entitlement to one
+exact documented image operation and its display/cache/redistribution rights.
+That later change must add a narrow server and UI allowlist plus tests. Logo
+rights are independent of schedule/result activation.
 
-- `https://v1.american-football.api-sports.io`
-- `https://v1.basketball.api-sports.io`
-- `https://v1.baseball.api-sports.io`
-- `https://v1.hockey.api-sports.io`
+## Local verification
 
-Required endpoints per product:
+Normal tests use sanitized, secret-free NFL and MLB fixtures and never call the
+internet:
 
-- `GET /status`: subscription/quota health; documented as not consuming quota
-- `GET /leagues`: authoritative discovery; never guess or stale-hardcode IDs
-- `GET /games`: schedules and final results using product-specific filters
-- `GET /teams`: team metadata and optional identifying logo URLs
+```bash
+npm --prefix functions run lint
+npm --prefix functions run typecheck
+npm --prefix functions test
+npm --prefix functions run test:rules
+npm --prefix functions run test:integration
+dart format --output=none --set-exit-if-changed .
+flutter analyze
+flutter test
+./scripts/test_browser_e2e.sh
+flutter build web --release
+./scripts/check_public_source.sh
+./scripts/check_public_build.sh build/web
+```
 
-Documentation examples contain game IDs, timestamps/timezones, league/team
-identity, provider status, and scores. Those fields remain documentation-only
-until authenticated fixtures are captured. The adapter must not assume a
-uniform winner field. It derives a winner only for a terminal status with
-unequal final totals; ties and ambiguous statuses require commissioner review.
+The source/build scanners enforce that the key/header/host remain server-only,
+that retired provider code is absent, and that blocked third-party logo hosts,
+secrets, test flags, and source maps do not enter Hosting output.
 
-On the validation date, unauthenticated `/status` and `/leagues` calls to all
-four hosts returned HTTP 403 for a missing application key, as expected.
+An authenticated smoke test is optional and must not run in CI. It is allowed
+only when a valid non-production key and explicit entitlement are already
+available. Make at most one request to each required endpoint, record only the
+HTTP outcome/schema compatibility, and never save the raw response or key. A
+successful trial/discovery smoke does not satisfy the production gate.
 
-## Quota behavior
+## Safe activation and rollback
 
-API-Sports advertises 100 requests/day **for each API** on the free plan.
-Direct-dashboard quotas reset at 00:00 UTC. Authenticated responses document
-daily and per-minute limit/remaining headers. The adapter reads reported limits
-dynamically and reserves safety headroom rather than assuming exactly 100.
+1. Confirm the account is entitled to both leagues' exact schedule, team, and
+   live/final feeds, plus the intended public display and pick-grading use.
+2. Keep neutral marks unless the separate image rights review passes.
+3. Create/rotate `SPORTSDATAIO_API_KEY` in `lukes-picks` Secret Manager without
+   exposing the value.
+4. Run the bounded non-production smoke and the complete deterministic suite.
+5. Review and create `systemConfig/sportsDataIoCatalog` with `enabled: false`
+   and correct NFL/MLB season entries.
+6. In an explicitly authorized release, set access mode to `production`, mark
+   entitlement verified, deploy through the guarded wrapper, and inspect logs.
+7. Enable the catalog document, then change one test arena from `manual` to
+   `sportsDataIo`. Validate catalog, publication, refresh, and settlement before
+   expanding scope.
+8. Monitor cache state, error categories, request budget, and unresolved games.
 
-No authenticated quota was observed; “not observed” is distinct from zero.
-Only sanitized quota fields may be stored because raw status responses can
-contain account identity.
+To roll back, disable `ALLOW_SPORTSDATAIO_PROVIDER` and return affected arenas
+to `manual`. Do not delete selected games, picks, audit records, or old provider
+provenance. Already-published slates remain immutable and readable.
 
-Direct API-Sports access is preferred over RapidAPI so quota exhaustion cannot
-trigger RapidAPI overage behavior. No plan purchase or billing action is
-authorized.
+## Historical compatibility
 
-## Free-tier validation gate
+The retired provider name may remain only as a persisted historical provenance
+value so old published weeks continue to parse and display neutral badges. It
+is not in the active provider union, cannot be configured, and has no client,
+factory branch, URL, DTO, fixture, or network path. No data migration is
+required.
 
-A real competition is enabled only after an authenticated spike confirms:
+## References
 
-1. current league ID and season;
-2. free-plan entitlement;
-3. a usable upcoming schedule when the competition is in season;
-4. a recent completed game;
-5. stable game/team identifiers, UTC start, status, scores, logo metadata, and
-   winner semantics; and
-6. sanitized fixtures and contract tests.
-
-## Optional CollegeFootballData fallback
-
-CollegeFootballData REST API v2 is an NCAA-football-only fallback. The current
-base is `https://api.collegefootballdata.com`; live OpenAPI metadata reported
-service version 5.20.1 on the validation date.
-
-Relevant endpoints are `GET /games`, `/teams` or `/teams/fbs`, `/info`, and
-`/info/usage`. The games schema includes stable ID, start date, completion flag,
-home/away IDs and names, and scores. Team logos come from team metadata. The
-winner is derived only when completed and scores are unequal.
-
-The documented free tier is 1,000 calls per calendar month with no credit card
-and covers core/historical endpoints. Live scoreboard capability begins at a
-paid tier, so a no-purchase fallback cannot be relied on for rich live,
-postponed, cancelled, or suspended semantics. Manual anomaly review remains
-mandatory.
-
-No CFBD key was available. Unauthenticated info/usage/games requests returned
-HTTP 401. A key request requires the user’s email flow; no account was created.
-
-## API-Sports production gate
-
-A pre-existing API-Sports key, supplied only through Firebase Functions secret
-configuration, is required to:
-
-1. call all four `/status` endpoints;
-2. discover current IDs through `/leagues`;
-3. verify free-plan access for every target;
-4. fetch an upcoming schedule and recent final per enabled competition;
-5. verify canonical fields and mappings; and
-6. save sanitized test fixtures.
-
-If API-Sports fails NCAA football coverage, a separate CFBD bearer key is then
-required. Until then, manual mode is the production fallback and mock mode is
-the emulator/automated-test fallback. The connected browser scenario passed
-manual result handling. The emulator integration suite separately creates and
-publishes a manual MLB game under a configured connected provider, proving the
-authorized fallback without making a production-provider claim.
-
-## Fallback behavior
-
-- Disable unvalidated targets in real-provider mode.
-- Continue with manual schedules/results in production and mock fixtures only
-  in emulators/tests.
-- Serve cached data through quota/provider failures.
-- Permit commissioner manual games and results with audit reasons.
-- Use only the reviewed default-off Site API scoreboard adapter after written
-  authorization; never add an undocumented fallback endpoint or scrape HTML.
-- Never expose provider credentials to Flutter clients.
-
-The optional CollegeFootballData research in this document is not a current
-application provider mode and has no authorized key. It must not weaken the
-manual-production or TheSportsDB-internal gates above.
-
-## Remaining authenticated validation
-
-- [ ] Capture sanitized status output for all API-Sports products
-- [ ] Discover current league IDs
-- [ ] Verify free-plan entitlement for every target
-- [ ] Capture upcoming and final fixtures
-- [ ] Confirm timestamps, statuses, team metadata, scores, and winner logic
-- [ ] Add redacted contract fixtures and adapter tests
-- [ ] Evaluate CFBD only if NCAA football remains unsupported
-- [x] Revalidate TheSportsDB documentation and terms for internal testing
-- [x] Add sanitized TheSportsDB schedule/team fixtures
-- [x] Prove the emulator-only flag and `lukes-picks` rejection
-- [x] Verify test badge hosts, fallbacks, and attribution
-
-## Official sources
-
-- [Unofficial Public ESPN API reference](https://github.com/pseudo-r/Public-ESPN-API)
-- [Disney Terms of Use](https://disneytermsofuse.com/english/)
-
-- [TheSportsDB API guide](https://www.thesportsdb.com/docs_api_guide)
-- [TheSportsDB terms of use](https://www.thesportsdb.com/docs_terms_of_use.php)
-- [API-Sports home and free plan](https://api-sports.io/)
-- [API-Sports terms and quota behavior](https://api-sports.io/terms)
-- [NFL & NCAA coverage](https://api-sports.io/sports/nfl)
-- [Basketball coverage](https://api-sports.io/sports/basketball)
-- [Baseball coverage](https://api-sports.io/sports/baseball)
-- [Hockey coverage](https://api-sports.io/sports/hockey)
-- [NFL v1 documentation](https://api-sports.io/documentation/nfl/v1)
-- [Basketball v1 documentation](https://api-sports.io/documentation/basketball/v1)
-- [Baseball v1 documentation](https://api-sports.io/documentation/baseball/v1)
-- [Hockey v1 documentation](https://api-sports.io/documentation/hockey/v1)
-- [CollegeFootballData REST/OpenAPI](https://api.collegefootballdata.com/)
-- [CollegeFootballData access tiers](https://collegefootballdata.com/api-tiers)
-- [CollegeFootballData free key](https://collegefootballdata.com/key)
-- [CollegeFootballData REST v2 announcement](https://blog.collegefootballdata.com/api-v2-is-now-in-general-availability/)
+- [SportsDataIO Getting Started](https://sportsdata.io/developers/apis#getting-started)
+- [League API](https://sportsdata.io/league-api)
+- [NFL API documentation](https://sportsdata.io/developers/api-documentation/nfl)
+- [NFL OpenAPI](https://cdn.sportsdata.io/openapi/NFL-openapi-3.1.json)
+- [NFL workflow guide](https://sportsdata.io/developers/workflow-guide/nfl)
+- [MLB API documentation](https://sportsdata.io/developers/api-documentation/mlb)
+- [MLB OpenAPI](https://cdn.sportsdata.io/openapi/MLB-openapi-3.1.json)
+- [MLB workflow guide](https://sportsdata.io/developers/workflow-guide/mlb)
+- [Scrambled-data explanation](https://sportsdata.io/help/scrambled-data)
+- [API FAQ](https://sportsdata.io/help/faq)
+- [Service status](https://status.sportsdata.io/)

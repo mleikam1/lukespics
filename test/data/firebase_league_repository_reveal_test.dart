@@ -17,6 +17,14 @@ class _MockHttpsCallable extends Mock implements HttpsCallable {}
 class _MockHttpsCallableResult extends Mock
     implements HttpsCallableResult<Object?> {}
 
+final class _TestFirebaseFunctionsException extends FirebaseFunctionsException {
+  _TestFirebaseFunctionsException({
+    required super.message,
+    required super.code,
+    super.details,
+  });
+}
+
 void main() {
   late _MockFirebaseFunctions functions;
   late _MockHttpsCallable callable;
@@ -139,6 +147,54 @@ void main() {
     );
   });
 
+  test('preserves every allowlisted provider configuration reason', () async {
+    final catalogCallable = _MockHttpsCallable();
+    when(
+      () => functions.httpsCallable('listSportsCatalog'),
+    ).thenReturn(catalogCallable);
+    for (final (reason, message) in const [
+      (
+        sportsDataIoApiKeyConfigurationReason,
+        'SportsDataIO API key is not configured.',
+      ),
+      (
+        sportsDataIoCredentialsConfigurationReason,
+        'SportsDataIO server credentials need administrator configuration.',
+      ),
+      (
+        sportsDataIoEntitlementConfigurationReason,
+        'SportsDataIO league feed entitlement needs administrator '
+            'configuration.',
+      ),
+    ]) {
+      when(() => catalogCallable.call<Object?>(any())).thenThrow(
+        _TestFirebaseFunctionsException(
+          code: 'failed-precondition',
+          message: message,
+          details: {
+            'reason': reason,
+            'upstreamBody': 'sensitive upstream body',
+          },
+        ),
+      );
+
+      await expectLater(
+        repository.listSportsCatalog(leagueId: 'league-1', weekId: 'week-0001'),
+        throwsA(
+          isA<RepositoryException>()
+              .having((error) => error.code, 'code', 'failed-precondition')
+              .having((error) => error.reason, 'reason', reason)
+              .having((error) => error.safeMessage, 'message', message)
+              .having(
+                (error) => error.toString(),
+                'safe rendering',
+                isNot(contains('sensitive upstream body')),
+              ),
+        ),
+      );
+    }
+  });
+
   test(
     'saves the exact result version carried by the chosen snapshot',
     () async {
@@ -162,6 +218,10 @@ void main() {
         'id': 'apiSports:baseball:42',
         'provider': 'apiSports',
         'providerGameId': '42',
+        if (includeMetadata) 'providerScoreId': 'score-42',
+        if (includeMetadata) 'providerLeagueGameId': 'league-game-42',
+        if (includeMetadata) 'providerGlobalGameId': 'global-game-42',
+        if (includeMetadata) 'providerGameKey': '2030-JUL-01-AWY-HOM',
         'providerLeagueId': '4424',
         'sportCode': 'baseball',
         'leagueCode': 'mlb',
@@ -180,6 +240,8 @@ void main() {
           'abbreviation': 'HOM',
           'logoUrl': null,
           if (includeMetadata) 'color': '#112233',
+          if (includeMetadata) 'providerTeamId': 'home-42',
+          if (includeMetadata) 'providerGlobalTeamId': 'global-home-42',
         },
         'awayTeam': {
           'id': 'away',
@@ -188,19 +250,26 @@ void main() {
           'abbreviation': 'AWY',
           'logoUrl': null,
           if (includeMetadata) 'color': '#aabbcc',
+          if (includeMetadata) 'providerTeamId': 'away-42',
+          if (includeMetadata) 'providerGlobalTeamId': 'global-away-42',
         },
         'status': 'scheduled',
         if (includeMetadata) 'statusDetail': 'First pitch delayed',
+        if (includeMetadata) 'isClosed': false,
+        if (includeMetadata) 'rescheduledFromLeagueGameId': 'league-game-41',
+        if (includeMetadata) 'rescheduledToLeagueGameId': 'league-game-43',
         'homeScore': null,
         'awayScore': null,
         'winnerTeamId': null,
-        if (includeMetadata) 'broadcast': 'ESPN+',
+        if (includeMetadata) 'broadcast': 'National Stream',
         if (includeMetadata) 'eventDetail': 'Doubleheader · Game 2',
         'providerLastUpdatedAt': observedAt,
         'lastSyncedAt': observedAt,
         'resultVersion': resultVersion,
         if (includeMetadata) 'rawResponseVersion': 2,
         'sourcePayloadHash': sourcePayloadHash,
+        if (includeMetadata) 'selectable': true,
+        if (includeMetadata) 'selectionReason': null,
       };
 
       Map<String, Object?> catalogEnvelope(Map<String, Object?> value) => {
@@ -283,13 +352,27 @@ void main() {
       );
       expect(newer.games.single.resultVersionToken, newerVersion);
       expect(newer.games.single.providerLeagueId, '4424');
+      expect(newer.games.single.providerScoreId, 'score-42');
+      expect(newer.games.single.providerLeagueGameId, 'league-game-42');
+      expect(newer.games.single.providerGlobalGameId, 'global-game-42');
+      expect(newer.games.single.providerGameKey, '2030-JUL-01-AWY-HOM');
       expect(newer.games.single.seasonType, 'Regular Season');
       expect(newer.games.single.statusDetail, 'First pitch delayed');
-      expect(newer.games.single.broadcast, 'ESPN+');
+      expect(newer.games.single.broadcast, 'National Stream');
       expect(newer.games.single.eventDetail, 'Doubleheader · Game 2');
       expect(newer.games.single.rawResponseVersion, 2);
       expect(newer.games.single.homeTeam.color, '#112233');
       expect(newer.games.single.awayTeam.color, '#aabbcc');
+      expect(newer.games.single.homeTeam.providerTeamId, 'home-42');
+      expect(
+        newer.games.single.homeTeam.providerGlobalTeamId,
+        'global-home-42',
+      );
+      expect(newer.games.single.awayTeam.providerTeamId, 'away-42');
+      expect(newer.games.single.isClosed, isFalse);
+      expect(newer.games.single.rescheduledFromLeagueGameId, 'league-game-41');
+      expect(newer.games.single.rescheduledToLeagueGameId, 'league-game-43');
+      expect(newer.games.single.selectable, isTrue);
       expect(older.games.single.seasonType, isNull);
       expect(older.games.single.statusDetail, isNull);
       expect(older.games.single.broadcast, isNull);
@@ -298,16 +381,31 @@ void main() {
       expect(older.games.single.homeTeam.color, isNull);
       expect(older.games.single.awayTeam.color, isNull);
       expect(serialized['providerLeagueId'], '4424');
+      expect(serialized['providerScoreId'], 'score-42');
+      expect(serialized['providerLeagueGameId'], 'league-game-42');
+      expect(serialized['providerGlobalGameId'], 'global-game-42');
+      expect(serialized['providerGameKey'], '2030-JUL-01-AWY-HOM');
       expect(serialized['resultVersion'], newerVersion);
       expect(serialized['sourcePayloadHash'], newerHash);
       expect(serialized['seasonType'], 'Regular Season');
       expect(serialized['statusDetail'], 'First pitch delayed');
-      expect(serialized['broadcast'], 'ESPN+');
+      expect(serialized['broadcast'], 'National Stream');
       expect(serialized['eventDetail'], 'Doubleheader · Game 2');
       expect(serialized['rawResponseVersion'], 2);
+      expect(serialized['isClosed'], isFalse);
+      expect(serialized['rescheduledFromLeagueGameId'], 'league-game-41');
+      expect(serialized['rescheduledToLeagueGameId'], 'league-game-43');
+      expect(serialized['selectable'], isTrue);
+      expect(serialized['selectionReason'], isNull);
       expect(
         Map<String, Object?>.from(serialized['homeTeam'] as Map)['color'],
         '#112233',
+      );
+      expect(
+        Map<String, Object?>.from(
+          serialized['homeTeam'] as Map,
+        )['providerTeamId'],
+        'home-42',
       );
       expect(
         Map<String, Object?>.from(serialized['awayTeam'] as Map)['color'],
