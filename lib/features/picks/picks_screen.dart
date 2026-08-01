@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../app/bootstrap.dart';
 import '../../core/domain/league_time.dart';
 import '../../core/responsive/breakpoints.dart';
+import '../../core/widgets/catalog_logo_policy.dart';
 import '../../core/widgets/ui.dart';
 import '../../data/demo/demo_repository.dart';
 import '../../data/models/game.dart';
@@ -81,7 +81,10 @@ class PicksScreen extends ConsumerWidget {
                         saving: controller.pickRequestInFlight(game.id),
                         errorMessage: controller.pickErrorFor(game.id),
                         timezone: controller.leagueTimezone,
-                        logoPolicy: _logoPolicy(controller, game),
+                        logoPolicy: catalogTeamLogoPolicy(
+                          presentation: controller.catalogPresentation,
+                          game: game,
+                        ),
                         onChoose: (teamId) =>
                             controller.chooseTeam(game, teamId),
                         onRetry: () => controller.retryPick(game),
@@ -103,18 +106,6 @@ class PicksScreen extends ConsumerWidget {
           ],
         ],
       ),
-    );
-  }
-
-  TeamLogoPolicy _logoPolicy(AppController controller, Game game) {
-    if (controller.runtimeMode != AppRuntimeMode.firebaseEmulator ||
-        game.provider != 'theSportsDbTest') {
-      return const TeamLogoPolicy.disabled();
-    }
-    return const TeamLogoPolicy.provider(
-      provider: 'theSportsDbTest',
-      logoRightsVerified: true,
-      allowedHosts: {'r2.thesportsdb.com'},
     );
   }
 }

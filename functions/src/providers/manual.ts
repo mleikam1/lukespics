@@ -7,9 +7,11 @@ import type {
   SportsDataProvider,
   Team,
 } from "../types.js";
+import {neutralCatalogPresentation} from "./presentation.js";
 
 export class ManualSportsProvider implements SportsDataProvider {
   readonly name = "manual";
+  readonly presentation = neutralCatalogPresentation(this.name);
 
   async listSupportedSports(): Promise<string[]> {
     return [];

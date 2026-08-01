@@ -5,6 +5,103 @@ command, runtime version, exit code, test count, warnings, and whether each
 warning blocks release. The live web artifact records source commit
 `c38136070082a0895c6cca0f118841bb0972520e`.
 
+The dated evidence below belongs to the previously deployed manual-provider
+release. The current `codex/live-sports-catalog-and-slate` source is a new,
+undeployed candidate; existing green counts and browser evidence must not be
+used to claim that its API-Sports path is released or production-connected.
+
+## Live-catalog candidate validation
+
+The candidate adds testable coverage for:
+
+- typed Flutter parsing of server-discovered sports, leagues, canonical
+  provider league/season metadata, cache/availability state, presentation
+  policy, effective query, and week bounds;
+- controller separation of current query results, cross-query canonical cache,
+  desired draft selections, persisted draft IDs, and live week games, including
+  out-of-order query responses and selection persistence across filters;
+- Today, Tomorrow, Later, All dates, and custom ranges in the arena timezone,
+  with active-week clamping and a seven-inclusive-day maximum;
+- shared logo policy requiring a matching provider, reviewed rights date,
+  HTTPS, exact hosts/query keys, and neutral fallback;
+- publish-time week presentation snapshots that hydrate for ordinary members
+  without granting them picker-only catalog access, with legacy and provider
+  mismatch cases failing closed;
+- publication invalidating late draft-catalog responses, external week changes
+  clearing prior week state before fresh discovery, stale save/publish actions
+  aborting across week boundaries, rapid transition subscriptions retaining only
+  the newest week, and publish retries remaining idempotent throughout
+  post-publication statuses;
+- next-week creation waiting for the finalized server rotation marker, rejecting
+  stale picker overrides, consuming the authoritative next picker, and
+  transactionally skipping that picker if the member becomes inactive;
+- finalized-only follow-up repair coordinating with reopen, plus stale publish
+  takeover responses returning the stored authoritative game/member counts;
+- league-wide standings epoch fencing so a delayed repair cannot restore points
+  from a different week that was concurrently reopened;
+- sanitized API-Sports baseball normalization, unknown/malformed result
+  handling, config/response drift rejection, bounded requests, and default-off
+  presentation;
+- server-side week/range validation, canonical catalog resolution, forged
+  metadata rejection, and timezone/provider metadata cache separation;
+- `API_SPORTS_KEY` declaration and binding only to
+  `listSportsCatalog`, `refreshSelectedGames`,
+  `syncSelectedGameResults`, and `scheduledResultSync`; and
+- default-false `ALLOW_API_SPORTS_PROVIDER` runtime policy plus emulator and
+  production provider rejection paths.
+
+Relevant focused files are
+`test/data/sports_catalog_parsing_test.dart`,
+`test/features/catalog_date_window_test.dart`,
+`test/core/widgets/catalog_logo_policy_test.dart`,
+`test/data/connected_controller_test.dart`,
+`functions/test/provider-hardening.test.ts`, and
+`functions/test/emulator.integration.test.ts`.
+
+There is currently no approved `API_SPORTS_KEY`, so authenticated provider
+status/quota, current MLB discovery, and live response-contract checks cannot
+run. Sanitized fixtures are permitted for parser coverage but cannot satisfy
+that production gate. The missing secret also blocks deployment of the
+candidate Functions manifest.
+
+## Live-catalog candidate local matrix — 2026-07-31
+
+The settled candidate passed locally under Flutter 3.44.4 / Dart 3.12.2,
+Node 22.23.2, Java 21.0.12, Firebase CLI 15.24.0, and Chrome 151.0.7922.71:
+
+- dependency resolution passed; formatting checked 58 source Dart files with zero
+  changes; analysis reported no issues; and Flutter passed 91/91 tests;
+- release web, Android debug, and iOS simulator builds passed;
+- Functions clean install, lint, typecheck, and build passed; the unit/contract
+  suite passed 54/54 tests, including 37 provider-hardening cases;
+- Firestore rules passed 10/10 and the Auth/Firestore/Functions emulator
+  integration suite passed 8/8, including manual MLB fallback creation,
+  publication while a connected provider was configured, publish/entry
+  contention, finalized follow-up repair/reopen coordination, legacy repair
+  generation retry, league-wide standings epoch restart, and rotation healing;
+- the connected browser lifecycle passed all 13 checkpoints with three isolated
+  users: Baseball/MLB date queries, cross-query selection retention, exact
+  add/remove reconciliation, reload restoration, review removal, one-game
+  publication, member picks, privacy, lock/reveal, manual result, finalization,
+  standings, rotation, Week 2, and browser/network diagnostics;
+- shell syntax, repository secret/source scans, the fresh production web-bundle
+  scan, and `git diff --check` passed; and
+- the production dependency audit found zero vulnerabilities. The full audit
+  remains nonzero with three moderate development-only findings inherited from
+  Firebase CLI through `@google-cloud/pubsub`/`@opentelemetry/core`; npm offers
+  only a forced breaking Firebase CLI downgrade, which was not applied. There
+  are no remaining high or critical audit findings.
+
+The first unsuppressed analysis invocation reported no code issues but then
+failed while sending optional Google Analytics telemetry. Re-running with
+`FLUTTER_SUPPRESS_ANALYTICS=true` exited successfully; this was a tooling
+telemetry failure, not an application diagnostic. Android also emitted Flutter's
+forward-looking Kotlin-plugin migration warning; the APK build succeeded.
+
+This matrix validates the local candidate and sanitized/emulated provider
+contracts only. It is not authenticated API-Sports, preview, or production
+evidence.
+
 ## Connected release evidence — 2026-07-30/31
 
 `./scripts/test_browser_e2e.sh` passed under Flutter 3.44.4 / Dart 3.12.2,
@@ -183,12 +280,18 @@ that exercises the documented initials fallback.
 
 Sanitized fixtures—not live calls—must cover:
 
+- the server-discovered catalog response and malformed optional metadata;
+- API-Sports baseball root response shape, canonical provider league/season,
+  final winner derivation, response drift, and incomplete pagination;
 - TheSportsDB event/team normalization and malformed responses;
 - HTTPS and host allowlists;
 - schedule/team cache freshness and duplicate suppression;
 - timeout, bounded retry, rate limit, and raw-response hash;
 - production rejection of `mock` and `theSportsDbTest`;
-- API-Sports disabled behavior without a key;
+- API-Sports default-false deploy flag, exact project restriction, selective
+  secret bindings, absent-secret behavior, and server-catalog rejection;
+- arena-timezone queries inside the active week with an inclusive seven-day
+  maximum and canonical provider metadata in the cache key;
 - missing, broken, and disallowed logos falling back to neutral initials;
 - production logo-rights gate and TheSportsDB attribution.
 

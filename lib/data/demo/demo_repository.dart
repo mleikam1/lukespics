@@ -114,8 +114,26 @@ final class AppController extends ChangeNotifier {
   bool _catalogStale = false;
   bool _catalogDelayed = false;
   DateTime? _catalogCachedAt;
+  DateTime? _catalogExpiresAt;
   String? _catalogError;
   DateTime? _lastCatalogRefreshAt;
+  DateTime? _weekStartAt;
+  DateTime? _weekEndAt;
+  CatalogQuery? _activeCatalogQuery;
+  int _catalogRequestGeneration = 0;
+  int _activeContextGeneration = 0;
+  int _weekSubscriptionGeneration = 0;
+  int _draftSaveGeneration = 0;
+  int _standingsContextGeneration = 0;
+  int _standingsEpoch = 0;
+  int _standingsBuiltEpoch = 0;
+  int? _standingsBuiltMemberCount;
+  List<CatalogSport> _catalogSports = const <CatalogSport>[];
+  List<CatalogLeague> _catalogLeagues = const <CatalogLeague>[];
+  CatalogPresentation _catalogPresentation =
+      const CatalogPresentation.disabled();
+  CatalogAvailability _catalogAvailability =
+      const CatalogAvailability.unknown();
   DraftSyncState _draftSyncState = DraftSyncState.pristine;
   String? _draftOperationId;
   String? _manualGameOperationKey;
@@ -138,8 +156,8 @@ final class AppController extends ChangeNotifier {
   final Map<String, StreamSubscription<List<RevealedPick>>>
   _revealSubscriptions = {};
 
-  final Set<String> _selectedGameIds = {};
   final Set<String> _serverDraftGameIds = {};
+  final Map<String, Game> _serverDraftGamesById = {};
   final Map<String, String> _pickTeamIds = {};
   final Map<String, String> _confirmedPickTeamIds = {};
   final Map<String, PickSyncState> _pickSyncStates = {};
@@ -149,9 +167,12 @@ final class AppController extends ChangeNotifier {
   final Map<String, List<RevealedPick>> _revealedPicks = {};
   final List<EntrySummary> _entries = [];
   final List<WeekSummary> _historyWeeks = [];
-  final List<Game> _catalogGames = [];
+  final Map<String, Game> _currentCatalogResultsById = {};
+  final Map<String, Game> _catalogGameCacheById = {};
+  final Map<String, Game> _selectedDraftGamesById = {};
   final List<Game> _selectedWeekGames = [];
   final List<LeagueMember> _members = [];
+  final List<Standing> _latestStandingsSnapshot = [];
   final List<Standing> _standings = [];
 
   bool get signedIn => _signedIn;
@@ -166,6 +187,14 @@ final class AppController extends ChangeNotifier {
   bool get catalogStale => _catalogStale;
   bool get catalogDelayed => _catalogDelayed;
   DateTime? get catalogCachedAt => _catalogCachedAt;
+  DateTime? get catalogExpiresAt => _catalogExpiresAt;
+  List<CatalogSport> get catalogSports => List.unmodifiable(_catalogSports);
+  List<CatalogLeague> get catalogLeagues => List.unmodifiable(_catalogLeagues);
+  CatalogPresentation get catalogPresentation => _catalogPresentation;
+  CatalogAvailability get catalogAvailability => _catalogAvailability;
+  CatalogQuery? get activeCatalogQuery => _activeCatalogQuery;
+  DateTime? get weekStartAt => _weekStartAt;
+  DateTime? get weekEndAt => _weekEndAt;
   DraftSyncState get draftSyncState => _draftSyncState;
   bool get draftSaving => _draftSaving;
   int get eligibleMemberCount => _eligibleMemberCount;
@@ -248,25 +277,43 @@ final class AppController extends ChangeNotifier {
           ? _pickerParticipatesInPicks
           : _weekPickerParticipatesInPicks);
 
-  List<Game> get games => List.unmodifiable(_catalogGames);
-  List<Game> get catalogGames => List.unmodifiable(_catalogGames);
+  List<Game> get games =>
+      List<Game>.unmodifiable(_currentCatalogResultsById.values);
+  List<Game> get catalogGames => games;
+  Map<String, Game> get currentCatalogResultsById =>
+      Map.unmodifiable(_currentCatalogResultsById);
+  Map<String, Game> get catalogGameCacheById =>
+      Map.unmodifiable(_catalogGameCacheById);
+  Map<String, Game> get selectedDraftGamesById =>
+      Map.unmodifiable(_selectedDraftGamesById);
+  Set<String> get serverDraftGameIds => Set.unmodifiable(_serverDraftGameIds);
   List<Game> get selectedWeekGames => List.unmodifiable(_selectedWeekGames);
   List<Game> get selectedGames {
     if (_slatePublished) {
       return List<Game>.of(_selectedWeekGames)
         ..sort((a, b) => a.scheduledAtUtc.compareTo(b.scheduledAtUtc));
     }
-    final byId = <String, Game>{
-      for (final game in _catalogGames) game.id: game,
-      for (final game in _selectedWeekGames) game.id: game,
-    };
-    return [
-      for (final id in _selectedGameIds)
-        if (byId[id] != null) byId[id]!,
-    ]..sort((a, b) => a.scheduledAtUtc.compareTo(b.scheduledAtUtc));
+    return List<Game>.of(_selectedDraftGamesById.values)
+      ..sort((a, b) => a.scheduledAtUtc.compareTo(b.scheduledAtUtc));
   }
 
-  Set<String> get selectedGameIds => Set.unmodifiable(_selectedGameIds);
+  Set<String> get selectedGameIds =>
+      Set.unmodifiable(_selectedDraftGamesById.keys);
+  int get unsavedDraftChangeCount {
+    final desiredIds = _selectedDraftGamesById.keys.toSet();
+    final changedIds = desiredIds.intersection(_serverDraftGameIds).where((id) {
+      final desired = _selectedDraftGamesById[id];
+      final server = _serverDraftGamesById[id];
+      return desired == null ||
+          server == null ||
+          !_sameDraftSnapshot(desired, server);
+    });
+    return desiredIds.difference(_serverDraftGameIds).length +
+        _serverDraftGameIds.difference(desiredIds).length +
+        changedIds.length;
+  }
+
+  bool get hasUnsavedDraftChanges => unsavedDraftChangeCount > 0;
   Map<String, String> get picks => Map.unmodifiable(_pickTeamIds);
   List<LeagueMember> get members => List.unmodifiable(_members);
   List<Standing> get standings => List.unmodifiable(_standings);
@@ -469,17 +516,18 @@ final class AppController extends ChangeNotifier {
     await _cancelLeagueSubscriptions();
     _signedIn = false;
     _hasLeague = false;
-    _activeLeagueId = null;
-    _activeWeekId = null;
-    _catalogGames.clear();
+    _setActiveLeagueId(null);
+    _setActiveWeekId(null);
+    _clearCatalogState();
     _selectedWeekGames.clear();
-    _selectedGameIds.clear();
+    _selectedDraftGamesById.clear();
     _serverDraftGameIds.clear();
+    _serverDraftGamesById.clear();
     _pickTeamIds.clear();
     _confirmedPickTeamIds.clear();
     _pickSyncStates.clear();
     _members.clear();
-    _standings.clear();
+    _resetStandingsState();
     _entries.clear();
     _historyWeeks.clear();
     notifyListeners();
@@ -509,7 +557,7 @@ final class AppController extends ChangeNotifier {
                 : 'manual',
           },
         );
-        _activeLeagueId = created.leagueId;
+        _setActiveLeagueId(created.leagueId);
         _inviteCode = created.inviteCode;
         _hasLeague = true;
         final now = DateTime.now().toUtc();
@@ -520,16 +568,17 @@ final class AppController extends ChangeNotifier {
           startAt: now,
           endAt: now.add(const Duration(days: 7)),
         );
-        _activeWeekId = week.weekId;
+        _setActiveWeekId(week.weekId);
         _currentPickerId = week.pickerUid;
         _weekSequentialNumber = 1;
         _weekLabel = 'Week 1';
         _weekStatus = 'draft';
         _weekPickerParticipatesInPicks = pickerParticipatesInPicks;
-        _catalogGames.clear();
+        _clearCatalogState();
         _selectedWeekGames.clear();
-        _selectedGameIds.clear();
+        _selectedDraftGamesById.clear();
         _serverDraftGameIds.clear();
+        _serverDraftGamesById.clear();
         _pickTeamIds.clear();
         _confirmedPickTeamIds.clear();
         _pickSyncStates.clear();
@@ -556,9 +605,11 @@ final class AppController extends ChangeNotifier {
       if (_repository == null) {
         await Future<void>.delayed(const Duration(milliseconds: 140));
       } else {
-        _activeLeagueId = await _repository.joinLeagueByCode(
-          inviteCode: inviteCode.trim(),
-          nickname: _displayName,
+        _setActiveLeagueId(
+          await _repository.joinLeagueByCode(
+            inviteCode: inviteCode.trim(),
+            nickname: _displayName,
+          ),
         );
         await _hydrateJoinedLeague(_activeLeagueId!);
         await _startLeagueSubscriptions(_activeLeagueId!);
@@ -581,28 +632,44 @@ final class AppController extends ChangeNotifier {
   }
 
   void toggleSlateGame(String gameId) {
-    if (_slatePublished || !canDraftSlate) return;
-    if (_selectedGameIds.remove(gameId)) {
+    if (_slatePublished || !canDraftSlate || _draftSaving) return;
+    if (_selectedDraftGamesById.remove(gameId) != null) {
       _markDraftDirty();
       notifyListeners();
       return;
     }
-    final matches = _catalogGames.where((game) => game.id == gameId);
-    if (matches.isEmpty || !isCatalogGameSelectable(matches.first)) return;
-    _selectedGameIds.add(gameId);
+    final game = _currentCatalogResultsById[gameId];
+    if (game == null || !isCatalogGameSelectable(game)) return;
+    _catalogGameCacheById[game.id] = game;
+    _selectedDraftGamesById[game.id] = game;
     _markDraftDirty();
     notifyListeners();
   }
 
   void removeSlateGame(String gameId) {
-    if (_slatePublished || !canDraftSlate) return;
-    if (_selectedGameIds.remove(gameId)) _markDraftDirty();
+    if (_slatePublished || !canDraftSlate || _draftSaving) return;
+    if (_selectedDraftGamesById.remove(gameId) != null) _markDraftDirty();
     notifyListeners();
   }
 
   bool isCatalogGameSelectable(Game game) {
     if (_slatePublished || !canDraftSlate || _draftSaving) return false;
-    if (!game.scheduledAtUtc.isAfter(DateTime.now().toUtc())) return false;
+    final now = DateTime.now().toUtc();
+    if (_catalogStale ||
+        (_catalogExpiresAt != null && !_catalogExpiresAt!.isAfter(now))) {
+      return false;
+    }
+    final weekStartAt = _weekStartAt;
+    final weekEndAt = _weekEndAt;
+    if ((weekStartAt != null &&
+            game.scheduledAtUtc.isBefore(weekStartAt.toUtc())) ||
+        (weekEndAt != null && game.scheduledAtUtc.isAfter(weekEndAt.toUtc()))) {
+      return false;
+    }
+    if (!game.scheduledAtUtc.isAfter(now) ||
+        !game.effectiveLockAtUtc.isAfter(now)) {
+      return false;
+    }
     return game.status == GameStatus.scheduled ||
         game.status == GameStatus.delayed;
   }
@@ -612,20 +679,130 @@ final class AppController extends ChangeNotifier {
     _draftOperationId = null;
   }
 
+  void _clearCatalogState() {
+    _catalogRequestGeneration += 1;
+    _catalogLoading = false;
+    _currentCatalogResultsById.clear();
+    _catalogGameCacheById.clear();
+    _catalogSports = const <CatalogSport>[];
+    _catalogLeagues = const <CatalogLeague>[];
+    _catalogPresentation = const CatalogPresentation.disabled();
+    _catalogAvailability = const CatalogAvailability.unknown();
+    _activeCatalogQuery = null;
+    _catalogProvider = 'manual';
+    _catalogCacheHit = false;
+    _catalogStale = false;
+    _catalogDelayed = false;
+    _catalogCachedAt = null;
+    _catalogExpiresAt = null;
+    _catalogError = null;
+    _lastCatalogRefreshAt = null;
+    _weekStartAt = null;
+    _weekEndAt = null;
+  }
+
+  void _resetForExternalWeekChange() {
+    _clearCatalogState();
+    _selectedWeekGames.clear();
+    _selectedDraftGamesById.clear();
+    _serverDraftGameIds.clear();
+    _serverDraftGamesById.clear();
+    _draftSyncState = DraftSyncState.pristine;
+    _draftOperationId = null;
+    _manualGameOperationKey = null;
+    _manualGameRequestId = null;
+    _publishRequestId = null;
+    _pickTeamIds.clear();
+    _confirmedPickTeamIds.clear();
+    _pickSyncStates.clear();
+    _pickErrors.clear();
+    _pickRequestsInFlight.clear();
+    _overrideReasons.clear();
+    _entries.clear();
+    _revealedPicks.clear();
+    _eligibleMemberCount = 0;
+    _weekFinalized = false;
+    _lastNextPickerUid = null;
+    _slatePublished = true;
+    _weekStatus = 'loading';
+  }
+
   Future<void> loadCatalog({
+    CatalogQuery? query,
     bool forceRefresh = false,
     String? sportCode,
     String? leagueCode,
     String? providerLeagueId,
+    String? season,
     DateTime? from,
     DateTime? to,
+    String? timezone,
+    CatalogDateMode? dateMode,
   }) async {
     if (_repository == null || !canDraftSlate || _slatePublished) return;
     final leagueId = _activeLeagueId;
     final weekId = _activeWeekId;
-    if (leagueId == null || weekId == null || _catalogLoading) return;
+    if (leagueId == null || weekId == null) return;
     final now = DateTime.now().toUtc();
-    if (forceRefresh &&
+    var requestedQuery = query ?? _activeCatalogQuery;
+    final hasLegacyOverride =
+        sportCode != null ||
+        leagueCode != null ||
+        providerLeagueId != null ||
+        season != null ||
+        from != null ||
+        to != null ||
+        timezone != null ||
+        dateMode != null;
+    if (requestedQuery == null && hasLegacyOverride) {
+      if (sportCode == null ||
+          leagueCode == null ||
+          providerLeagueId == null ||
+          season == null ||
+          from == null ||
+          to == null) {
+        _catalogError =
+            'Choose a supported sport, league, and date range before loading.';
+        notifyListeners();
+        return;
+      }
+      requestedQuery = CatalogQuery(
+        sportCode: sportCode,
+        leagueCode: leagueCode,
+        providerLeagueId: providerLeagueId,
+        season: season,
+        from: from,
+        to: to,
+        timezone: timezone ?? _leagueTimezone,
+        dateMode: dateMode ?? CatalogDateMode.custom,
+        weekStartAt: _weekStartAt,
+        weekEndAt: _weekEndAt,
+      );
+    } else if (requestedQuery != null) {
+      requestedQuery = requestedQuery.copyWith(
+        sportCode: sportCode,
+        leagueCode: leagueCode,
+        providerLeagueId: providerLeagueId,
+        season: season,
+        from: from,
+        to: to,
+        timezone: timezone,
+        dateMode: dateMode,
+        weekStartAt: requestedQuery.weekStartAt ?? _weekStartAt,
+        weekEndAt: requestedQuery.weekEndAt ?? _weekEndAt,
+      );
+    }
+    final shouldForceRefresh = forceRefresh || query?.forceRefresh == true;
+    requestedQuery = requestedQuery?.copyWith(forceRefresh: shouldForceRefresh);
+    if (_catalogLoading &&
+        !shouldForceRefresh &&
+        ((requestedQuery == null && _activeCatalogQuery == null) ||
+            (requestedQuery != null &&
+                _activeCatalogQuery?.sameVisibleQuery(requestedQuery) ==
+                    true))) {
+      return;
+    }
+    if (shouldForceRefresh &&
         _lastCatalogRefreshAt != null &&
         now.difference(_lastCatalogRefreshAt!) < const Duration(seconds: 15)) {
       _catalogError =
@@ -633,57 +810,137 @@ final class AppController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    final requestGeneration = ++_catalogRequestGeneration;
+    final changesVisibleQuery =
+        requestedQuery != null &&
+        (_activeCatalogQuery == null ||
+            !_activeCatalogQuery!.sameVisibleQuery(requestedQuery));
+    if (changesVisibleQuery) {
+      _currentCatalogResultsById.clear();
+    }
+    if (requestedQuery != null) {
+      _activeCatalogQuery = requestedQuery.copyWith(forceRefresh: false);
+    }
     _catalogLoading = true;
     _catalogError = null;
-    if (forceRefresh) _lastCatalogRefreshAt = now;
+    if (shouldForceRefresh) _lastCatalogRefreshAt = now;
     notifyListeners();
     try {
-      final start = from?.toUtc() ?? now;
-      // The provider gateway accepts an inclusive range of at most seven
-      // days. MLB is the deterministic in-season default for the internal
-      // emulator path; production remains manual until a provider is approved.
-      final internalSportsTest = runtimeMode == AppRuntimeMode.firebaseEmulator;
-      final effectiveSportCode =
-          sportCode ?? (internalSportsTest ? 'baseball' : 'football');
-      final effectiveLeagueCode =
-          leagueCode ?? (internalSportsTest ? 'mlb' : 'nfl');
-      final effectiveProviderLeagueId =
-          providerLeagueId ?? (internalSportsTest ? '4424' : '4391');
-      final end = to?.toUtc() ?? now.add(const Duration(days: 6));
       final result = await _repository.listSportsCatalog(
         leagueId: leagueId,
         weekId: weekId,
-        query: CatalogQuery(
-          sportCode: effectiveSportCode,
-          leagueCode: effectiveLeagueCode,
-          providerLeagueId: effectiveProviderLeagueId,
-          season: '${start.year}',
-          from: start,
-          to: end,
-          forceRefresh: forceRefresh,
-        ),
+        query: requestedQuery,
+        timezone: requestedQuery?.timezone ?? _leagueTimezone,
+        weekStartAt: requestedQuery?.weekStartAt ?? _weekStartAt,
+        weekEndAt: requestedQuery?.weekEndAt ?? _weekEndAt,
+        forceRefresh: shouldForceRefresh,
       );
-      final unique = <String, Game>{};
-      for (final game in result.games) {
-        unique[game.id] = game;
-      }
-      _catalogGames
-        ..clear()
-        ..addAll(unique.values);
-      _catalogProvider = result.provider;
-      _catalogCacheHit = result.cacheHit;
-      _catalogStale = result.stale;
-      _catalogDelayed = result.delayed;
-      _catalogCachedAt = result.cachedAt;
-      _offline = false;
+      if (requestGeneration != _catalogRequestGeneration) return;
+      _applyCatalogResult(result, requestedQuery);
     } on RepositoryException catch (error) {
+      if (requestGeneration != _catalogRequestGeneration) return;
       _catalogError = error.safeMessage;
+      _catalogAvailability = CatalogAvailability(
+        state: switch (error.code) {
+          'unauthenticated' ||
+          'permission-denied' => CatalogAvailabilityState.unauthorized,
+          'resource-exhausted' => CatalogAvailabilityState.quotaDelayed,
+          'failed-precondition' =>
+            CatalogAvailabilityState.providerNotConfigured,
+          _ => CatalogAvailabilityState.providerUnavailable,
+        },
+        message: error.safeMessage,
+      );
     } on Object {
+      if (requestGeneration != _catalogRequestGeneration) return;
       _catalogError = 'The sports schedule could not be loaded. Try again.';
+      _catalogAvailability = const CatalogAvailability(
+        state: CatalogAvailabilityState.providerUnavailable,
+        message: 'The sports schedule could not be loaded. Try again.',
+      );
     } finally {
-      _catalogLoading = false;
-      notifyListeners();
+      if (requestGeneration == _catalogRequestGeneration) {
+        _catalogLoading = false;
+        notifyListeners();
+      }
     }
+  }
+
+  void _applyCatalogResult(
+    SportsCatalogResult result,
+    CatalogQuery? requestedQuery,
+  ) {
+    if (_slatePublished) return;
+    final current = <String, Game>{};
+    var selectedSnapshotChanged = false;
+    for (final game in result.games) {
+      final canonical = _newerGame(_catalogGameCacheById[game.id], game);
+      _catalogGameCacheById[game.id] = canonical;
+      current[game.id] = canonical;
+      if (_selectedDraftGamesById.containsKey(game.id)) {
+        final previous = _selectedDraftGamesById[game.id]!;
+        _selectedDraftGamesById[game.id] = canonical;
+        selectedSnapshotChanged =
+            selectedSnapshotChanged || !_sameDraftSnapshot(previous, canonical);
+      }
+    }
+    if (selectedSnapshotChanged && !_slatePublished) _markDraftDirty();
+    _currentCatalogResultsById
+      ..clear()
+      ..addAll(current);
+    _catalogSports = List<CatalogSport>.unmodifiable(result.supportedSports);
+    _catalogLeagues = List<CatalogLeague>.unmodifiable(result.supportedLeagues);
+    _catalogPresentation = result.presentation;
+    _catalogAvailability = result.availability;
+    _catalogProvider = result.provider;
+    _catalogCacheHit = result.cacheHit;
+    _catalogStale = result.stale;
+    _catalogDelayed = result.delayed;
+    _catalogCachedAt = result.cachedAt;
+    _catalogExpiresAt = result.expiresAt;
+    _weekStartAt = result.weekStartAt ?? _weekStartAt;
+    _weekEndAt = result.weekEndAt ?? _weekEndAt;
+    final effectiveQuery = result.effectiveQuery ?? requestedQuery?.snapshot;
+    if (effectiveQuery != null) {
+      _activeCatalogQuery = effectiveQuery.toQuery(forceRefresh: false);
+    }
+    _offline = false;
+  }
+
+  Game _newerGame(Game? existing, Game candidate) {
+    if (existing == null) return candidate;
+    return candidate.providerLastUpdatedAt.isBefore(
+          existing.providerLastUpdatedAt,
+        )
+        ? existing
+        : candidate;
+  }
+
+  bool _sameIds(Set<String> left, Set<String> right) =>
+      left.length == right.length && left.containsAll(right);
+
+  bool _sameDraftSnapshot(Game left, Game right) =>
+      left.id == right.id &&
+      left.provider == right.provider &&
+      left.providerGameId == right.providerGameId &&
+      left.sportCode == right.sportCode &&
+      left.leagueCode == right.leagueCode &&
+      left.providerLeagueId == right.providerLeagueId &&
+      left.season == right.season &&
+      left.scheduledAtUtc.toUtc() == right.scheduledAtUtc.toUtc() &&
+      left.effectiveLockAtUtc.toUtc() == right.effectiveLockAtUtc.toUtc() &&
+      left.status == right.status &&
+      left.homeScore == right.homeScore &&
+      left.awayScore == right.awayScore &&
+      left.winnerTeamId == right.winnerTeamId &&
+      left.resultVersionToken == right.resultVersionToken &&
+      left.sourcePayloadHash == right.sourcePayloadHash;
+
+  bool _draftSnapshotNeedsSave(Game game) {
+    final server = _serverDraftGamesById[game.id];
+    return !_serverDraftGameIds.contains(game.id) ||
+        server == null ||
+        !_sameDraftSnapshot(game, server);
   }
 
   Future<bool> saveDraftSlate() async {
@@ -691,7 +948,10 @@ final class AppController extends ChangeNotifier {
     if (_repository == null) {
       _serverDraftGameIds
         ..clear()
-        ..addAll(_selectedGameIds);
+        ..addAll(_selectedDraftGamesById.keys);
+      _serverDraftGamesById
+        ..clear()
+        ..addAll(_selectedDraftGamesById);
       _draftSyncState = DraftSyncState.saved;
       notifyListeners();
       return true;
@@ -699,6 +959,8 @@ final class AppController extends ChangeNotifier {
     final leagueId = _activeLeagueId;
     if (leagueId == null) return false;
     final weekId = _requireWeekId();
+    final contextGeneration = _activeContextGeneration;
+    final saveGeneration = ++_draftSaveGeneration;
     _draftSaving = true;
     _draftSyncState = DraftSyncState.saving;
     _errorMessage = null;
@@ -708,22 +970,28 @@ final class AppController extends ChangeNotifier {
     notifyListeners();
     try {
       const chunkSize = 75;
-      final byId = <String, Game>{
-        for (final game in _catalogGames) game.id: game,
-        for (final game in _selectedWeekGames) game.id: game,
-      };
-      final additions = _selectedGameIds
-          .difference(_serverDraftGameIds)
-          .map((id) => byId[id])
-          .whereType<Game>()
+      final desiredIds = _selectedDraftGamesById.keys.toSet();
+      // Submit additions plus provider snapshots the picker explicitly saw
+      // change during a catalog refresh. Unseen server-side changes must remain
+      // publish blockers until the picker reviews the refreshed game. Manual
+      // games use their own trusted creation action.
+      final canonicalWrites = _selectedDraftGamesById.values
+          .where(
+            (game) =>
+                game.provider != 'manual' && _draftSnapshotNeedsSave(game),
+          )
           .toList(growable: false);
       final removals = _serverDraftGameIds
-          .difference(_selectedGameIds)
+          .difference(desiredIds)
           .toList(growable: false);
       var chunk = 0;
-      for (var offset = 0; offset < additions.length; offset += chunkSize) {
-        final end = (offset + chunkSize).clamp(0, additions.length);
-        final values = additions.sublist(offset, end);
+      for (
+        var offset = 0;
+        offset < canonicalWrites.length;
+        offset += chunkSize
+      ) {
+        final end = (offset + chunkSize).clamp(0, canonicalWrites.length);
+        final values = canonicalWrites.sublist(offset, end);
         await _repository.saveDraftSlate(
           leagueId: leagueId,
           weekId: weekId,
@@ -732,7 +1000,17 @@ final class AppController extends ChangeNotifier {
           removeGameIds: const [],
           requestId: '${operationId}_add_$chunk',
         );
+        if (!_isActiveWeekContext(
+          leagueId: leagueId,
+          weekId: weekId,
+          generation: contextGeneration,
+        )) {
+          return false;
+        }
         _serverDraftGameIds.addAll(values.map((game) => game.id));
+        _serverDraftGamesById.addEntries(
+          values.map((game) => MapEntry(game.id, game)),
+        );
         chunk += 1;
       }
       chunk = 0;
@@ -747,49 +1025,85 @@ final class AppController extends ChangeNotifier {
           removeGameIds: values,
           requestId: '${operationId}_remove_$chunk',
         );
+        if (!_isActiveWeekContext(
+          leagueId: leagueId,
+          weekId: weekId,
+          generation: contextGeneration,
+        )) {
+          return false;
+        }
         _serverDraftGameIds.removeAll(values);
+        for (final id in values) {
+          _serverDraftGamesById.remove(id);
+        }
         chunk += 1;
       }
-      if (additions.isEmpty && removals.isEmpty) {
-        _serverDraftGameIds
-          ..clear()
-          ..addAll(_selectedGameIds);
-      }
+      assert(_sameIds(_serverDraftGameIds, desiredIds));
       _draftSyncState = DraftSyncState.saved;
       _draftOperationId = null;
       unawaited(_telemetry.log('slate_draft_saved'));
       return true;
     } on RepositoryException catch (error) {
-      _draftSyncState = DraftSyncState.error;
-      _errorMessage = error.safeMessage;
+      if (_isActiveWeekContext(
+        leagueId: leagueId,
+        weekId: weekId,
+        generation: contextGeneration,
+      )) {
+        _draftSyncState = DraftSyncState.error;
+        _errorMessage = error.safeMessage;
+      }
       return false;
     } finally {
-      _draftSaving = false;
+      if (_draftSaveGeneration == saveGeneration) {
+        _draftSaving = false;
+      }
       notifyListeners();
     }
   }
 
   Future<bool> publishSlate() async {
-    if (_selectedGameIds.isEmpty) return false;
+    if (_selectedDraftGamesById.isEmpty) return false;
     _errorMessage = null;
+    final leagueId = _activeLeagueId;
+    final weekId = _activeWeekId;
+    final contextGeneration = _activeContextGeneration;
     try {
       if (_repository != null) {
-        final leagueId = _activeLeagueId;
-        if (leagueId == null) {
+        if (leagueId == null || weekId == null) {
           throw const RepositoryException(
             'no-league',
             'Open or create an arena before publishing.',
           );
         }
         if (!await saveDraftSlate()) return false;
+        if (!_isActiveWeekContext(
+          leagueId: leagueId,
+          weekId: weekId,
+          generation: contextGeneration,
+        )) {
+          return false;
+        }
         _publishRequestId ??=
-            'publish_${_requireWeekId()}_'
+            'publish_${weekId}_'
             '${DateTime.now().microsecondsSinceEpoch}';
+        final requestId = _publishRequestId;
         await _repository.publishWeeklySlate(
           leagueId: leagueId,
-          weekId: _requireWeekId(),
-          requestId: _publishRequestId,
+          weekId: weekId,
+          requestId: requestId,
         );
+        if (!_isActiveWeekContext(
+          leagueId: leagueId,
+          weekId: weekId,
+          generation: contextGeneration,
+        )) {
+          return false;
+        }
+      }
+      _catalogRequestGeneration += 1;
+      _catalogLoading = false;
+      if (!_slatePublished) {
+        _catalogPresentation = const CatalogPresentation.disabled();
       }
       _slatePublished = true;
       _publishRequestId = null;
@@ -797,8 +1111,17 @@ final class AppController extends ChangeNotifier {
       notifyListeners();
       return true;
     } on RepositoryException catch (error) {
-      _errorMessage = error.safeMessage;
-      notifyListeners();
+      if (_repository == null ||
+          (leagueId != null &&
+              weekId != null &&
+              _isActiveWeekContext(
+                leagueId: leagueId,
+                weekId: weekId,
+                generation: contextGeneration,
+              ))) {
+        _errorMessage = error.safeMessage;
+        notifyListeners();
+      }
       return false;
     }
   }
@@ -854,10 +1177,12 @@ final class AppController extends ChangeNotifier {
           resultVersion: 1,
           sourcePayloadHash: 'manual-demo-$id',
         );
-        _catalogGames.add(game);
+        _currentCatalogResultsById[game.id] = game;
+        _catalogGameCacheById[game.id] = game;
         _selectedWeekGames.add(game);
-        _selectedGameIds.add(game.id);
+        _selectedDraftGamesById[game.id] = game;
         _serverDraftGameIds.add(game.id);
+        _serverDraftGamesById[game.id] = game;
         _draftSyncState = DraftSyncState.saved;
       } else {
         final leagueId = _activeLeagueId!;
@@ -1231,12 +1556,24 @@ final class AppController extends ChangeNotifier {
 
   Future<bool> finalizeWeek() async {
     if (isDemo && !_demoReviewReady) return false;
+    final repository = _repository;
+    final leagueId = _activeLeagueId;
+    final weekId = _activeWeekId;
+    final contextGeneration = _activeContextGeneration;
     try {
-      if (_repository != null && _activeLeagueId != null) {
-        final result = await _repository.finalizeWeek(
-          leagueId: _activeLeagueId!,
-          weekId: _requireWeekId(),
+      if (repository != null) {
+        if (leagueId == null || weekId == null) return false;
+        final result = await repository.finalizeWeek(
+          leagueId: leagueId,
+          weekId: weekId,
         );
+        if (!_isActiveWeekContext(
+          leagueId: leagueId,
+          weekId: weekId,
+          generation: contextGeneration,
+        )) {
+          return false;
+        }
         _lastNextPickerUid = result.nextPickerUid;
       }
       _weekFinalized = true;
@@ -1244,8 +1581,17 @@ final class AppController extends ChangeNotifier {
       notifyListeners();
       return true;
     } on RepositoryException catch (error) {
-      _errorMessage = error.safeMessage;
-      notifyListeners();
+      if (repository == null ||
+          (leagueId != null &&
+              weekId != null &&
+              _isActiveWeekContext(
+                leagueId: leagueId,
+                weekId: weekId,
+                generation: contextGeneration,
+              ))) {
+        _errorMessage = error.safeMessage;
+        notifyListeners();
+      }
       return false;
     }
   }
@@ -1281,22 +1627,26 @@ final class AppController extends ChangeNotifier {
         label: 'Week $nextNumber',
         startAt: start,
         endAt: start.add(const Duration(days: 7)),
-        pickerUid: _lastNextPickerUid ?? proposedNextPicker?.uid,
+        // The server owns rotation and reads the authoritative picker advanced
+        // by finalization. A client cache must never override that value.
+        pickerUid: null,
         requestId:
             'next_${leagueId}_$nextNumber'
             '_${DateTime.now().microsecondsSinceEpoch}',
       );
-      _activeWeekId = created.weekId;
+      _setActiveWeekId(created.weekId);
       _currentPickerId = created.pickerUid;
       _weekSequentialNumber = nextNumber;
       _weekLabel = 'Week $nextNumber';
       _weekStatus = 'draft';
       _weekFinalized = false;
+      _lastNextPickerUid = null;
       _slatePublished = false;
-      _catalogGames.clear();
+      _clearCatalogState();
       _selectedWeekGames.clear();
-      _selectedGameIds.clear();
+      _selectedDraftGamesById.clear();
       _serverDraftGameIds.clear();
+      _serverDraftGamesById.clear();
       _draftSyncState = DraftSyncState.pristine;
       await _startWeekSubscriptions(leagueId, created.weekId);
       await loadCatalog();
@@ -1340,8 +1690,8 @@ final class AppController extends ChangeNotifier {
       return false;
     }
     _hasLeague = false;
-    _activeLeagueId = null;
-    _activeWeekId = null;
+    _setActiveLeagueId(null);
+    _setActiveWeekId(null);
     _inviteCode = null;
     await _cancelLeagueSubscriptions();
     notifyListeners();
@@ -1389,21 +1739,89 @@ final class AppController extends ChangeNotifier {
     return weekId;
   }
 
+  void _setActiveLeagueId(String? leagueId) {
+    if (_activeLeagueId == leagueId) return;
+    _activeLeagueId = leagueId;
+    _activeContextGeneration += 1;
+    _draftSaveGeneration += 1;
+    _standingsContextGeneration += 1;
+    _draftSaving = false;
+    _resetStandingsState();
+  }
+
+  bool _isActiveStandingsContext(String leagueId, int generation) =>
+      _activeLeagueId == leagueId && _standingsContextGeneration == generation;
+
+  void _applyStandingsFence(LeagueSummary league) {
+    _standingsEpoch = league.standingsEpoch;
+    _standingsBuiltEpoch = league.standingsBuiltEpoch;
+    _standingsBuiltMemberCount = league.standingsBuiltMemberCount;
+    _refreshVisibleStandings();
+  }
+
+  void _retainStandingsSnapshot(List<Standing> standings) {
+    _latestStandingsSnapshot
+      ..clear()
+      ..addAll(standings);
+    _refreshVisibleStandings();
+  }
+
+  void _refreshVisibleStandings() {
+    _standings.clear();
+    final expectedCount = _standingsBuiltMemberCount;
+    final snapshotIsComplete =
+        _standingsBuiltEpoch == _standingsEpoch &&
+        _latestStandingsSnapshot.every(
+          (standing) => standing.standingsEpoch == _standingsEpoch,
+        ) &&
+        (expectedCount == null ||
+            expectedCount == _latestStandingsSnapshot.length);
+    if (snapshotIsComplete) {
+      _standings.addAll(_latestStandingsSnapshot);
+    }
+  }
+
+  void _resetStandingsState() {
+    _standingsEpoch = 0;
+    _standingsBuiltEpoch = 0;
+    _standingsBuiltMemberCount = null;
+    _latestStandingsSnapshot.clear();
+    _standings.clear();
+  }
+
+  void _setActiveWeekId(String? weekId) {
+    if (_activeWeekId == weekId) return;
+    _activeWeekId = weekId;
+    _activeContextGeneration += 1;
+    _draftSaveGeneration += 1;
+    _draftSaving = false;
+  }
+
+  bool _isActiveWeekContext({
+    required String leagueId,
+    required String weekId,
+    required int generation,
+  }) =>
+      _activeLeagueId == leagueId &&
+      _activeWeekId == weekId &&
+      _activeContextGeneration == generation;
+
   void _handleAuthStateChange(User? user) {
     if (user == null) {
       _signedIn = false;
       _hasLeague = false;
-      _activeLeagueId = null;
-      _activeWeekId = null;
-      _catalogGames.clear();
+      _setActiveLeagueId(null);
+      _setActiveWeekId(null);
+      _clearCatalogState();
       _selectedWeekGames.clear();
-      _selectedGameIds.clear();
+      _selectedDraftGamesById.clear();
       _serverDraftGameIds.clear();
+      _serverDraftGamesById.clear();
       _pickTeamIds.clear();
       _confirmedPickTeamIds.clear();
       _pickSyncStates.clear();
       _members.clear();
-      _standings.clear();
+      _resetStandingsState();
       _entries.clear();
       unawaited(_cancelLeagueSubscriptions());
       notifyListeners();
@@ -1426,8 +1844,8 @@ final class AppController extends ChangeNotifier {
       final leagueIds = await repository.findActiveLeagueIds();
       if (leagueIds.isEmpty) {
         _hasLeague = false;
-        _activeLeagueId = null;
-        _activeWeekId = null;
+        _setActiveLeagueId(null);
+        _setActiveWeekId(null);
         await _cancelLeagueSubscriptions();
         return;
       }
@@ -1435,7 +1853,7 @@ final class AppController extends ChangeNotifier {
       final leagueId = preferred != null && leagueIds.contains(preferred)
           ? preferred
           : leagueIds.first;
-      _activeLeagueId = leagueId;
+      _setActiveLeagueId(leagueId);
       await _hydrateJoinedLeague(leagueId);
       await _startLeagueSubscriptions(leagueId);
       _hasLeague = true;
@@ -1455,24 +1873,33 @@ final class AppController extends ChangeNotifier {
   Future<void> _startLeagueSubscriptions(String leagueId) async {
     final repository = _repository;
     if (repository == null) return;
+    final standingsContextGeneration = _standingsContextGeneration;
     await _cancelLeagueSubscriptions();
+    if (!_isActiveStandingsContext(leagueId, standingsContextGeneration)) {
+      return;
+    }
     _leagueSubscription = repository.watchLeague(leagueId).listen((league) {
+      if (!_isActiveStandingsContext(leagueId, standingsContextGeneration)) {
+        return;
+      }
       if (league == null) return;
       _leagueName = league.name;
       _leagueTimezone = league.timezone;
       _pickerParticipatesInPicks = league.pickerParticipatesInPicks;
       _pickLockPolicy = league.pickLockPolicy;
+      _applyStandingsFence(league);
       if (league.currentPickerUid != null) {
         _currentPickerId = league.currentPickerUid!;
       }
       final nextWeekId = league.currentWeekId;
       if (nextWeekId != null && nextWeekId != _activeWeekId) {
-        _activeWeekId = nextWeekId;
+        _resetForExternalWeekChange();
+        _setActiveWeekId(nextWeekId);
         unawaited(_startWeekSubscriptions(leagueId, nextWeekId));
       }
       if (canDraftSlate &&
           !_slatePublished &&
-          _catalogGames.isEmpty &&
+          _currentCatalogResultsById.isEmpty &&
           !_catalogLoading) {
         unawaited(loadCatalog());
       }
@@ -1488,7 +1915,7 @@ final class AppController extends ChangeNotifier {
       }
       if (canDraftSlate &&
           !_slatePublished &&
-          _catalogGames.isEmpty &&
+          _currentCatalogResultsById.isEmpty &&
           !_catalogLoading) {
         unawaited(loadCatalog());
       }
@@ -1497,9 +1924,10 @@ final class AppController extends ChangeNotifier {
     _standingsSubscription = repository.watchStandings(leagueId).listen((
       standings,
     ) {
-      _standings
-        ..clear()
-        ..addAll(standings);
+      if (!_isActiveStandingsContext(leagueId, standingsContextGeneration)) {
+        return;
+      }
+      _retainStandingsSnapshot(standings);
       notifyListeners();
     }, onError: _handleLiveStreamError);
     _historySubscription = repository.watchFinalizedWeeks(leagueId).listen((
@@ -1519,84 +1947,225 @@ final class AppController extends ChangeNotifier {
   Future<void> _startWeekSubscriptions(String leagueId, String weekId) async {
     final repository = _repository;
     if (repository == null) return;
+    final subscriptionGeneration = ++_weekSubscriptionGeneration;
     await _cancelWeekSubscriptions();
-    _weekSubscription = repository.watchWeek(leagueId, weekId).listen((week) {
-      if (week == null) return;
-      _weekLabel = week.label;
-      _weekStatus = week.status;
-      _weekSequentialNumber = week.sequentialNumber;
-      _eligibleMemberCount = week.eligibleMemberCount;
-      _weekPickerParticipatesInPicks = week.pickerParticipatesInPicks;
-      _weekLockPolicy = week.lockPolicy;
-      _weekFinalized = week.isFinalized;
-      _slatePublished = week.status != 'draft';
-      if (week.pickerUid.isNotEmpty) _currentPickerId = week.pickerUid;
-      notifyListeners();
-    }, onError: _handleLiveStreamError);
-    _gamesSubscription = repository.watchWeekGames(leagueId, weekId).listen((
-      games,
-    ) {
-      _selectedWeekGames
-        ..clear()
-        ..addAll(games);
-      _serverDraftGameIds
-        ..clear()
-        ..addAll(games.map((game) => game.id));
-      if (_draftSyncState != DraftSyncState.dirty &&
-          _draftSyncState != DraftSyncState.error &&
-          !_draftSaving) {
-        _selectedGameIds
-          ..clear()
-          ..addAll(_serverDraftGameIds);
-        _draftSyncState = DraftSyncState.saved;
-      }
-      _syncRevealSubscriptions(leagueId, weekId, games);
-      notifyListeners();
-    }, onError: _handleLiveStreamError);
+    if (!_isActiveWeekSubscription(
+      leagueId: leagueId,
+      weekId: weekId,
+      generation: subscriptionGeneration,
+    )) {
+      return;
+    }
+    _weekSubscription = repository
+        .watchWeek(leagueId, weekId)
+        .listen(
+          (week) {
+            if (week == null ||
+                !_isActiveWeekSubscription(
+                  leagueId: leagueId,
+                  weekId: weekId,
+                  generation: subscriptionGeneration,
+                )) {
+              return;
+            }
+            final published = week.status != 'draft';
+            if (published) {
+              _catalogRequestGeneration += 1;
+              _catalogLoading = false;
+            }
+            _weekLabel = week.label;
+            _weekStatus = week.status;
+            _weekSequentialNumber = week.sequentialNumber;
+            _eligibleMemberCount = week.eligibleMemberCount;
+            _weekPickerParticipatesInPicks = week.pickerParticipatesInPicks;
+            _weekLockPolicy = week.lockPolicy;
+            _weekFinalized = week.isFinalized;
+            _lastNextPickerUid = week.isFinalized ? week.nextPickerUid : null;
+            _slatePublished = published;
+            _weekStartAt = week.startAt;
+            _weekEndAt = week.endAt;
+            if (published) {
+              _catalogPresentation = week.catalogPresentation;
+            }
+            if (week.pickerUid.isNotEmpty) _currentPickerId = week.pickerUid;
+            if (!published &&
+                canDraftSlate &&
+                _activeCatalogQuery == null &&
+                !_catalogLoading) {
+              unawaited(loadCatalog());
+            }
+            notifyListeners();
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (_isActiveWeekSubscription(
+              leagueId: leagueId,
+              weekId: weekId,
+              generation: subscriptionGeneration,
+            )) {
+              _handleLiveStreamError(error, stackTrace);
+            }
+          },
+        );
+    _gamesSubscription = repository
+        .watchWeekGames(leagueId, weekId)
+        .listen(
+          (games) {
+            if (!_isActiveWeekSubscription(
+              leagueId: leagueId,
+              weekId: weekId,
+              generation: subscriptionGeneration,
+            )) {
+              return;
+            }
+            _selectedWeekGames
+              ..clear()
+              ..addAll(games);
+            _serverDraftGameIds
+              ..clear()
+              ..addAll(games.map((game) => game.id));
+            _serverDraftGamesById
+              ..clear()
+              ..addEntries(games.map((game) => MapEntry(game.id, game)));
+            for (final game in games) {
+              final canonical = _newerGame(
+                _catalogGameCacheById[game.id],
+                game,
+              );
+              _catalogGameCacheById[game.id] = canonical;
+              if (_selectedDraftGamesById.containsKey(game.id)) {
+                _selectedDraftGamesById[game.id] = canonical;
+              }
+            }
+            if (_draftSyncState != DraftSyncState.dirty &&
+                _draftSyncState != DraftSyncState.error &&
+                !_draftSaving) {
+              _selectedDraftGamesById
+                ..clear()
+                ..addEntries(
+                  games.map(
+                    (game) => MapEntry(
+                      game.id,
+                      _catalogGameCacheById[game.id] ?? game,
+                    ),
+                  ),
+                );
+              _draftSyncState = DraftSyncState.saved;
+            }
+            _syncRevealSubscriptions(
+              leagueId,
+              weekId,
+              games,
+              subscriptionGeneration,
+            );
+            notifyListeners();
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (_isActiveWeekSubscription(
+              leagueId: leagueId,
+              weekId: weekId,
+              generation: subscriptionGeneration,
+            )) {
+              _handleLiveStreamError(error, stackTrace);
+            }
+          },
+        );
     _entriesSubscription = repository
         .watchPublicEntries(leagueId, weekId)
-        .listen((entries) {
-          _entries
-            ..clear()
-            ..addAll(entries);
-          notifyListeners();
-        }, onError: _handleLiveStreamError);
+        .listen(
+          (entries) {
+            if (!_isActiveWeekSubscription(
+              leagueId: leagueId,
+              weekId: weekId,
+              generation: subscriptionGeneration,
+            )) {
+              return;
+            }
+            _entries
+              ..clear()
+              ..addAll(entries);
+            notifyListeners();
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (_isActiveWeekSubscription(
+              leagueId: leagueId,
+              weekId: weekId,
+              generation: subscriptionGeneration,
+            )) {
+              _handleLiveStreamError(error, stackTrace);
+            }
+          },
+        );
     _ownPicksSubscription = repository
         .watchOwnPrivatePicks(leagueId, weekId)
-        .listen((picks) {
-          final serverIds = <String>{};
-          for (final pick in picks) {
-            serverIds.add(pick.gameId);
-            _confirmedPickTeamIds[pick.gameId] = pick.selectedTeamId;
-            if (!_pickRequestsInFlight.contains(pick.gameId) &&
-                _pickSyncStates[pick.gameId] != PickSyncState.offline) {
-              _pickTeamIds[pick.gameId] = pick.selectedTeamId;
-              _pickSyncStates[pick.gameId] = pick.serverConfirmedAt == null
-                  ? PickSyncState.saving
-                  : PickSyncState.synced;
+        .listen(
+          (picks) {
+            if (!_isActiveWeekSubscription(
+              leagueId: leagueId,
+              weekId: weekId,
+              generation: subscriptionGeneration,
+            )) {
+              return;
             }
-          }
-          for (final gameId in _confirmedPickTeamIds.keys.toList()) {
-            if (serverIds.contains(gameId)) continue;
-            _confirmedPickTeamIds.remove(gameId);
-            if (!_pickRequestsInFlight.contains(gameId) &&
-                _pickSyncStates[gameId] != PickSyncState.offline) {
-              _pickTeamIds.remove(gameId);
-              _pickSyncStates.remove(gameId);
+            final serverIds = <String>{};
+            for (final pick in picks) {
+              serverIds.add(pick.gameId);
+              _confirmedPickTeamIds[pick.gameId] = pick.selectedTeamId;
+              if (!_pickRequestsInFlight.contains(pick.gameId) &&
+                  _pickSyncStates[pick.gameId] != PickSyncState.offline) {
+                _pickTeamIds[pick.gameId] = pick.selectedTeamId;
+                _pickSyncStates[pick.gameId] = pick.serverConfirmedAt == null
+                    ? PickSyncState.saving
+                    : PickSyncState.synced;
+              }
             }
-          }
-          _offline = false;
-          notifyListeners();
-        }, onError: _handleLiveStreamError);
+            for (final gameId in _confirmedPickTeamIds.keys.toList()) {
+              if (serverIds.contains(gameId)) continue;
+              _confirmedPickTeamIds.remove(gameId);
+              if (!_pickRequestsInFlight.contains(gameId) &&
+                  _pickSyncStates[gameId] != PickSyncState.offline) {
+                _pickTeamIds.remove(gameId);
+                _pickSyncStates.remove(gameId);
+              }
+            }
+            _offline = false;
+            notifyListeners();
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (_isActiveWeekSubscription(
+              leagueId: leagueId,
+              weekId: weekId,
+              generation: subscriptionGeneration,
+            )) {
+              _handleLiveStreamError(error, stackTrace);
+            }
+          },
+        );
   }
+
+  bool _isActiveWeekSubscription({
+    required String leagueId,
+    required String weekId,
+    required int generation,
+  }) =>
+      _activeLeagueId == leagueId &&
+      _activeWeekId == weekId &&
+      _weekSubscriptionGeneration == generation;
 
   void _syncRevealSubscriptions(
     String leagueId,
     String weekId,
     List<Game> games,
+    int subscriptionGeneration,
   ) {
     final repository = _repository;
-    if (repository == null) return;
+    if (repository == null ||
+        !_isActiveWeekSubscription(
+          leagueId: leagueId,
+          weekId: weekId,
+          generation: subscriptionGeneration,
+        )) {
+      return;
+    }
     final revealable = games
         .where((game) => game.pickRevealCompletedAt != null)
         .map((game) => game.id)
@@ -1610,10 +2179,28 @@ final class AppController extends ChangeNotifier {
       if (_revealSubscriptions.containsKey(gameId)) continue;
       _revealSubscriptions[gameId] = repository
           .watchRevealedPicks(leagueId, weekId, gameId)
-          .listen((picks) {
-            _revealedPicks[gameId] = picks;
-            notifyListeners();
-          }, onError: _handleLiveStreamError);
+          .listen(
+            (picks) {
+              if (!_isActiveWeekSubscription(
+                leagueId: leagueId,
+                weekId: weekId,
+                generation: subscriptionGeneration,
+              )) {
+                return;
+              }
+              _revealedPicks[gameId] = picks;
+              notifyListeners();
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              if (_isActiveWeekSubscription(
+                leagueId: leagueId,
+                weekId: weekId,
+                generation: subscriptionGeneration,
+              )) {
+                _handleLiveStreamError(error, stackTrace);
+              }
+            },
+          );
     }
   }
 
@@ -1628,55 +2215,100 @@ final class AppController extends ChangeNotifier {
   }
 
   Future<void> _cancelLeagueSubscriptions() async {
-    await Future.wait([
-      if (_leagueSubscription != null) _leagueSubscription!.cancel(),
-      if (_membersSubscription != null) _membersSubscription!.cancel(),
-      if (_standingsSubscription != null) _standingsSubscription!.cancel(),
-      if (_historySubscription != null) _historySubscription!.cancel(),
-    ]);
+    final leagueSubscription = _leagueSubscription;
+    final membersSubscription = _membersSubscription;
+    final standingsSubscription = _standingsSubscription;
+    final historySubscription = _historySubscription;
     _leagueSubscription = null;
     _membersSubscription = null;
     _standingsSubscription = null;
     _historySubscription = null;
-    await _cancelWeekSubscriptions();
+    _weekSubscriptionGeneration += 1;
+    final cancelWeekSubscriptions = _cancelWeekSubscriptions();
+    await Future.wait([
+      if (leagueSubscription != null) leagueSubscription.cancel(),
+      if (membersSubscription != null) membersSubscription.cancel(),
+      if (standingsSubscription != null) standingsSubscription.cancel(),
+      if (historySubscription != null) historySubscription.cancel(),
+      cancelWeekSubscriptions,
+    ]);
   }
 
   Future<void> _cancelWeekSubscriptions() async {
-    await Future.wait([
-      if (_weekSubscription != null) _weekSubscription!.cancel(),
-      if (_gamesSubscription != null) _gamesSubscription!.cancel(),
-      if (_entriesSubscription != null) _entriesSubscription!.cancel(),
-      if (_ownPicksSubscription != null) _ownPicksSubscription!.cancel(),
-      ..._revealSubscriptions.values.map(
-        (subscription) => subscription.cancel(),
-      ),
-    ]);
+    final weekSubscription = _weekSubscription;
+    final gamesSubscription = _gamesSubscription;
+    final entriesSubscription = _entriesSubscription;
+    final ownPicksSubscription = _ownPicksSubscription;
+    final revealSubscriptions = _revealSubscriptions.values.toList();
     _weekSubscription = null;
     _gamesSubscription = null;
     _entriesSubscription = null;
     _ownPicksSubscription = null;
     _revealSubscriptions.clear();
     _revealedPicks.clear();
+    await Future.wait([
+      if (weekSubscription != null) weekSubscription.cancel(),
+      if (gamesSubscription != null) gamesSubscription.cancel(),
+      if (entriesSubscription != null) entriesSubscription.cancel(),
+      if (ownPicksSubscription != null) ownPicksSubscription.cancel(),
+      ...revealSubscriptions.map((subscription) => subscription.cancel()),
+    ]);
   }
 
   Future<void> _hydrateJoinedLeague(String leagueId) async {
+    final standingsContextGeneration = _standingsContextGeneration;
     final league = await _repository
         ?.watchLeague(leagueId)
         .first
         .timeout(const Duration(seconds: 6));
+    if (!_isActiveStandingsContext(leagueId, standingsContextGeneration)) {
+      return;
+    }
     if (league != null) {
       _leagueName = league.name;
       _leagueTimezone = league.timezone;
       _pickerParticipatesInPicks = league.pickerParticipatesInPicks;
       _pickLockPolicy = league.pickLockPolicy;
+      _applyStandingsFence(league);
     }
-    _activeWeekId = league?.currentWeekId;
+    _setActiveWeekId(league?.currentWeekId);
     if (league?.currentPickerUid != null) {
       _currentPickerId = league!.currentPickerUid!;
     }
-    await _hydrateMembersAndStandings(leagueId);
+    await _hydrateMembersAndStandings(
+      leagueId,
+      standingsContextGeneration: standingsContextGeneration,
+    );
+    if (!_isActiveStandingsContext(leagueId, standingsContextGeneration)) {
+      return;
+    }
     final weekId = _activeWeekId;
     if (weekId != null) {
+      final liveWeek = await _repository
+          ?.watchWeek(leagueId, weekId)
+          .first
+          .timeout(const Duration(seconds: 6));
+      if (liveWeek != null) {
+        _weekLabel = liveWeek.label;
+        _weekStatus = liveWeek.status;
+        _weekSequentialNumber = liveWeek.sequentialNumber;
+        _eligibleMemberCount = liveWeek.eligibleMemberCount;
+        _weekPickerParticipatesInPicks = liveWeek.pickerParticipatesInPicks;
+        _weekLockPolicy = liveWeek.lockPolicy;
+        _weekFinalized = liveWeek.isFinalized;
+        _lastNextPickerUid = liveWeek.isFinalized
+            ? liveWeek.nextPickerUid
+            : null;
+        _slatePublished = liveWeek.status != 'draft';
+        _weekStartAt = liveWeek.startAt;
+        _weekEndAt = liveWeek.endAt;
+        if (liveWeek.status != 'draft') {
+          _catalogPresentation = liveWeek.catalogPresentation;
+        }
+        if (liveWeek.pickerUid.isNotEmpty) {
+          _currentPickerId = liveWeek.pickerUid;
+        }
+      }
       final liveGames = await _repository
           ?.watchWeekGames(leagueId, weekId)
           .first
@@ -1688,19 +2320,31 @@ final class AppController extends ChangeNotifier {
         _serverDraftGameIds
           ..clear()
           ..addAll(liveGames.map((game) => game.id));
-        _selectedGameIds
+        _serverDraftGamesById
           ..clear()
-          ..addAll(_serverDraftGameIds);
+          ..addEntries(liveGames.map((game) => MapEntry(game.id, game)));
+        _catalogGameCacheById.addEntries(
+          liveGames.map((game) => MapEntry(game.id, game)),
+        );
+        _selectedDraftGamesById
+          ..clear()
+          ..addEntries(liveGames.map((game) => MapEntry(game.id, game)));
         _draftSyncState = DraftSyncState.saved;
       }
     }
   }
 
-  Future<void> _hydrateMembersAndStandings(String leagueId) async {
+  Future<void> _hydrateMembersAndStandings(
+    String leagueId, {
+    int? standingsContextGeneration,
+  }) async {
+    final contextGeneration =
+        standingsContextGeneration ?? _standingsContextGeneration;
     final liveMembers = await _repository
         ?.watchMembers(leagueId)
         .first
         .timeout(const Duration(seconds: 6));
+    if (!_isActiveStandingsContext(leagueId, contextGeneration)) return;
     if (liveMembers != null && liveMembers.isNotEmpty) {
       _members
         ..clear()
@@ -1716,10 +2360,9 @@ final class AppController extends ChangeNotifier {
         ?.watchStandings(leagueId)
         .first
         .timeout(const Duration(seconds: 6));
+    if (!_isActiveStandingsContext(leagueId, contextGeneration)) return;
     if (liveStandings != null) {
-      _standings
-        ..clear()
-        ..addAll(liveStandings);
+      _retainStandingsSnapshot(liveStandings);
     }
   }
 
@@ -1823,7 +2466,7 @@ final class AppController extends ChangeNotifier {
       );
     }
 
-    _catalogGames.addAll([
+    final seededGames = <Game>[
       game(
         id: 'football-1',
         sport: 'Football',
@@ -1900,8 +2543,97 @@ final class AppController extends ChangeNotifier {
         startOffset: const Duration(days: -2),
         status: GameStatus.voided,
       ),
-    ]);
-    _selectedGameIds.addAll([
+    ];
+    final weekStartDate = DateTime.utc(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(const Duration(days: 2));
+    final weekEndDate = weekStartDate.add(const Duration(days: 7));
+    final queryFrom = DateTime.utc(now.year, now.month, now.day);
+    _weekStartAt = weekStartDate;
+    _weekEndAt = weekEndDate;
+    _catalogSports = const <CatalogSport>[
+      CatalogSport(code: 'Football', displayName: 'Football'),
+      CatalogSport(code: 'Basketball', displayName: 'Basketball'),
+      CatalogSport(code: 'Baseball', displayName: 'Baseball'),
+      CatalogSport(code: 'Hockey', displayName: 'Hockey'),
+    ];
+    _catalogLeagues = <CatalogLeague>[
+      CatalogLeague(
+        code: 'pro-football',
+        displayName: 'Pro Football',
+        sportCode: 'Football',
+        providerLeagueId: 'pro-football',
+        season: '${now.year}',
+      ),
+      CatalogLeague(
+        code: 'college-football',
+        displayName: 'College Football',
+        sportCode: 'Football',
+        providerLeagueId: 'college-football',
+        season: '${now.year}',
+      ),
+      CatalogLeague(
+        code: 'women’s-basketball',
+        displayName: 'Women’s Basketball',
+        sportCode: 'Basketball',
+        providerLeagueId: 'women’s-basketball',
+        season: '${now.year}',
+      ),
+      CatalogLeague(
+        code: 'pro-basketball',
+        displayName: 'Pro Basketball',
+        sportCode: 'Basketball',
+        providerLeagueId: 'pro-basketball',
+        season: '${now.year}',
+      ),
+      CatalogLeague(
+        code: 'college-basketball',
+        displayName: 'College Basketball',
+        sportCode: 'Basketball',
+        providerLeagueId: 'college-basketball',
+        season: '${now.year}',
+      ),
+      CatalogLeague(
+        code: 'pro-baseball',
+        displayName: 'Pro Baseball',
+        sportCode: 'Baseball',
+        providerLeagueId: 'pro-baseball',
+        season: '${now.year}',
+      ),
+      CatalogLeague(
+        code: 'pro-hockey',
+        displayName: 'Pro Hockey',
+        sportCode: 'Hockey',
+        providerLeagueId: 'pro-hockey',
+        season: '${now.year}',
+      ),
+    ];
+    _activeCatalogQuery = CatalogQuery(
+      sportCode: 'Football',
+      leagueCode: 'pro-football',
+      providerLeagueId: 'pro-football',
+      season: '${now.year}',
+      from: queryFrom,
+      to: weekEndDate,
+      timezone: _leagueTimezone,
+      dateMode: CatalogDateMode.allDates,
+      weekStartAt: weekStartDate,
+      weekEndAt: weekEndDate,
+    );
+    _catalogAvailability = const CatalogAvailability(
+      state: CatalogAvailabilityState.available,
+    );
+    _catalogPresentation = const CatalogPresentation.disabled(
+      provider: 'mock',
+      attributionText: 'Synthetic demo schedule',
+    );
+    _currentCatalogResultsById.addEntries(
+      seededGames.map((game) => MapEntry(game.id, game)),
+    );
+    _catalogGameCacheById.addAll(_currentCatalogResultsById);
+    const selectedIds = <String>{
       'football-1',
       'football-2',
       'basketball-1',
@@ -1909,8 +2641,12 @@ final class AppController extends ChangeNotifier {
       'hockey-1',
       'baseball-2',
       'basketball-3',
-    ]);
-    _serverDraftGameIds.addAll(_selectedGameIds);
+    };
+    _selectedDraftGamesById.addEntries(
+      selectedIds.map((id) => MapEntry(id, _currentCatalogResultsById[id]!)),
+    );
+    _serverDraftGameIds.addAll(_selectedDraftGamesById.keys);
+    _serverDraftGamesById.addAll(_selectedDraftGamesById);
     _draftSyncState = DraftSyncState.saved;
     _pickTeamIds
       ..['basketball-2'] = 'forge'

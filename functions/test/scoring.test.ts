@@ -9,7 +9,12 @@ import {
   gameResultVersionsAreStable,
   scoreEntry,
 } from "../src/services/scoring.js";
-import {isCatalogGameSelectable} from "../src/services/weeks.js";
+import {
+  emptyCatalogAvailabilityState,
+  isCatalogGameSelectable,
+  preserveSelectedGameParticipants,
+  protectedSelectedGameLock,
+} from "../src/services/weeks.js";
 
 describe("authoritative scoring", () => {
   const games = [
@@ -169,6 +174,7 @@ describe("result normalization", () => {
       id: "mock:football:1",
       provider: "mock",
       providerGameId: "1",
+      providerLeagueId: "demo-football",
       sportCode: "football",
       leagueCode: "demo-football",
       leagueName: "Demo Football",
@@ -227,10 +233,11 @@ describe("mock provider contract", () => {
     const query = {
       sportCode: "football",
       leagueCode: "demo-football",
-      leagueId: "demo-football",
+      providerLeagueId: "demo-football",
       season: "demo",
       from: "2030-09-01",
       to: "2030-09-01",
+      timezone: "UTC",
     };
     const first = await provider.listGames(query);
     const second = await provider.listGames(query);
@@ -243,15 +250,43 @@ describe("mock provider contract", () => {
 });
 
 describe("catalog eligibility", () => {
+  it("distinguishes an empty exact date from an empty broader range", () => {
+    expect(
+      emptyCatalogAvailabilityState({
+        discovery: false,
+        dateMode: "today",
+        from: "2030-09-01",
+        to: "2030-09-01",
+      }),
+    ).toBe("noGamesScheduled");
+    expect(
+      emptyCatalogAvailabilityState({
+        discovery: false,
+        dateMode: "allDates",
+        from: "2030-09-01",
+        to: "2030-09-07",
+      }),
+    ).toBe("offSeason");
+    expect(
+      emptyCatalogAvailabilityState({
+        discovery: true,
+        dateMode: undefined,
+        from: "2030-09-01",
+        to: "2030-09-01",
+      }),
+    ).toBe("offSeason");
+  });
+
   it("accepts only future scheduled-like games in the configured week", async () => {
     const provider = new MockSportsProvider();
     const [game] = await provider.listGames({
       sportCode: "football",
       leagueCode: "demo-football",
-      leagueId: "demo-football",
+      providerLeagueId: "demo-football",
       season: "demo",
       from: "2030-09-01",
       to: "2030-09-01",
+      timezone: "UTC",
     });
     expect(game).toBeDefined();
     if (game === undefined) return;
@@ -265,7 +300,7 @@ describe("catalog eligibility", () => {
     expect(isCatalogGameSelectable(game, input)).toBe(true);
     expect(
       isCatalogGameSelectable({...game, status: "postponed"}, input),
-    ).toBe(true);
+    ).toBe(false);
     expect(isCatalogGameSelectable({...game, status: "final"}, input)).toBe(
       false,
     );
@@ -287,5 +322,61 @@ describe("catalog eligibility", () => {
         enabledLeagues: ["another-league"],
       }),
     ).toBe(false);
+  });
+});
+
+describe("selected-game result trust", () => {
+  it("never widens a published first-game lock during result refresh", () => {
+    const mondayLock = new Date("2030-09-02T18:00:00.000Z");
+    const tuesdayProviderStart = new Date("2030-09-03T18:00:00.000Z");
+    expect(
+      protectedSelectedGameLock({
+        currentLockAt: mondayLock,
+        refreshedLockAt: tuesdayProviderStart,
+        alreadyExposed: false,
+      }),
+    ).toEqual(mondayLock);
+    const earlierCorrection = new Date("2030-09-02T16:00:00.000Z");
+    expect(
+      protectedSelectedGameLock({
+        currentLockAt: mondayLock,
+        refreshedLockAt: earlierCorrection,
+        alreadyExposed: false,
+      }),
+    ).toEqual(earlierCorrection);
+  });
+
+  it("quarantines a provider participant change without rewriting the slate", async () => {
+    const provider = new MockSportsProvider();
+    const [current, replacement] = await provider.listGames({
+      sportCode: "football",
+      leagueCode: "demo-football",
+      providerLeagueId: "demo-football",
+      season: "demo",
+      from: "2030-09-01",
+      to: "2030-09-01",
+      timezone: "UTC",
+    });
+    expect(current).toBeDefined();
+    expect(replacement).toBeDefined();
+    if (current === undefined || replacement === undefined) return;
+
+    const reconciled = preserveSelectedGameParticipants(current, {
+      ...current,
+      homeTeam: replacement.homeTeam,
+      awayTeam: replacement.awayTeam,
+      status: "final",
+      homeScore: 5,
+      awayScore: 2,
+      winnerTeamId: replacement.homeTeam.id,
+      sourcePayloadHash: replacement.sourcePayloadHash,
+    });
+
+    expect(reconciled.homeTeam.id).toBe(current.homeTeam.id);
+    expect(reconciled.awayTeam.id).toBe(current.awayTeam.id);
+    expect(reconciled.status).toBe("reviewRequired");
+    expect(reconciled.homeScore).toBeNull();
+    expect(reconciled.awayScore).toBeNull();
+    expect(reconciled.winnerTeamId).toBeNull();
   });
 });

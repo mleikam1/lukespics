@@ -1,6 +1,8 @@
 import {HttpsError} from "firebase-functions/v2/https";
-import {isEmulator} from "../config.js";
+import {ALLOW_API_SPORTS_PROVIDER} from "../config.js";
 import type {ProviderName} from "../types.js";
+
+const AUTHORIZED_API_SPORTS_PROJECT_ID = "lukes-picks";
 
 export type ProviderRuntime = {
   projectId: string | null;
@@ -37,12 +39,18 @@ export function runtimeProjectId(
 export function providerRuntime(
   environment: NodeJS.ProcessEnv = process.env,
 ): ProviderRuntime {
+  const emulator =
+    environment.FUNCTIONS_EMULATOR === "true" ||
+    environment.FIRESTORE_EMULATOR_HOST !== undefined;
   return {
     projectId: runtimeProjectId(environment),
-    emulator: isEmulator,
+    emulator,
     allowTheSportsDbTest:
       environment.ALLOW_THESPORTSDB_TEST_PROVIDER === "true",
-    allowApiSports: environment.ALLOW_API_SPORTS_PROVIDER === "true",
+    allowApiSports:
+      environment === process.env
+        ? ALLOW_API_SPORTS_PROVIDER.value()
+        : environment.ALLOW_API_SPORTS_PROVIDER === "true",
   };
 }
 
@@ -51,7 +59,13 @@ export function isProviderAllowed(
   runtime: ProviderRuntime,
 ): boolean {
   if (name === "manual") return true;
-  if (name === "apiSports") return runtime.allowApiSports;
+  if (name === "apiSports") {
+    return (
+      !runtime.emulator &&
+      runtime.projectId === AUTHORIZED_API_SPORTS_PROJECT_ID &&
+      runtime.allowApiSports
+    );
+  }
 
   const internalEmulator =
     runtime.emulator && runtime.projectId === "demo-lukes-picks-local";

@@ -3,10 +3,53 @@
 This project has no automatic deploy. A passing CI run does not authorize a
 cloud write.
 
+## Live sports catalog candidate — not deployed
+
+The current `codex/live-sports-catalog-and-slate` source adds a typed,
+server-discovered catalog and a hardened API-Sports path. It is not part of the
+recorded preview/live artifact below. The deployed site remains the prior
+manual-provider release.
+
+The source now declares `API_SPORTS_KEY` and selectively binds it only to:
+
+- `listSportsCatalog`;
+- `refreshSelectedGames`;
+- `syncSelectedGameResults`; and
+- `scheduledResultSync`.
+
+No approved `API_SPORTS_KEY` currently exists for this release. Because the
+candidate Functions manifest references that secret, do not deploy its
+Functions and do not deploy or promote a web artifact that claims production
+schedules work. Required handoff:
+
+`MATT_ACTION_REQUIRED: Add an approved API-Sports key to the API_SPORTS_KEY Firebase secret for project lukes-picks.`
+
+Secret existence is necessary but not sufficient. `ALLOW_API_SPORTS_PROVIDER`
+is a deploy-time boolean with a fail-closed `false` default. Keep it false until
+an authenticated key/status/quota check passes, current MLB league ID and
+season are discovered from the official provider, sanitized contract fixtures
+match, and a reviewed server-only `systemConfig/apiSportsCatalog` document is
+ready. That document owns product base URLs, paths, canonical league IDs,
+seasons, final-status mappings, and presentation policy; none may come from
+Flutter or be guessed during deployment.
+
+Catalog requests use the arena's stored IANA timezone, must remain within the
+active week, and may span at most seven inclusive calendar days. Remote logos
+remain off unless a separate rights review supplies a review date and exact
+host/query allowlists. Without that policy, normalization and Flutter both use
+neutral initials even if the provider returns a URL.
+
+After the user supplies the secret, the remaining gates still require a fresh
+project assertion immediately before every cloud read/write, authenticated
+provider validation without printing the value, full local/CI/browser tests,
+source and fresh-build scans, an authenticated guarded preview smoke test, and
+separate authorization before any exact-artifact live promotion.
+
 ## Connected preview and live web release — 2026-07-31
 
-The connected implementation completed its guarded preview release and the
-separately authorized promotion of that exact preview artifact to live:
+The previously deployed connected implementation completed its guarded preview
+release and the separately authorized promotion of that exact preview artifact
+to live:
 
 - the actual Flutter UI and backend passed the isolated three-user browser
   lifecycle with picker participation disabled and enabled;
@@ -55,7 +98,9 @@ does not authorize future live Hosting writes.
 
 ## Release gates
 
-Do not deploy until all of the following are recorded:
+For a future live-catalog release, do not deploy until all of the following are
+recorded on the final reviewed tree. The checked historical release below does
+not satisfy these new gates:
 
 1. The complete Flutter, Functions, rules, emulator, provider-fixture, secret,
    and fresh-build matrix passes on the reviewed tree or intended commit.
@@ -63,15 +108,22 @@ Do not deploy until all of the following are recorded:
    participation disabled and enabled.
 3. Connected startup uses `lukes-picks`, loads no demo state, and never connects
    a public build to emulators.
-4. Production provider mode is `manual`; mock and TheSportsDB test modes are
-   server-rejected in `lukes-picks`.
+4. Mock and TheSportsDB test modes are server-rejected in `lukes-picks`.
+   API-Sports remains rejected unless the exact project and explicit
+   default-false deploy parameter both pass.
 5. Google Auth and authorized domains are verified.
-6. Required APIs are enabled, `INVITE_CODE_PEPPER` exists, and no unavailable
-   API-Sports key is bound as a deployment requirement.
-7. Existing Firestore data, rules, indexes, Functions, and Hosting releases are
+6. Required APIs are enabled, `INVITE_CODE_PEPPER` exists, the approved
+   `API_SPORTS_KEY` version exists without exposing its value, and selective
+   Function binding is reviewed.
+7. Authenticated API-Sports status/quota, current MLB league/season, schedule,
+   completed-result shape, and terms are validated; the reviewed
+   `systemConfig/apiSportsCatalog` entry matches that evidence.
+8. Existing Firestore data, rules, indexes, Functions, and Hosting releases are
    inspected for additive compatibility.
-8. The npm advisories are reviewed without a forced upgrade.
-9. The source and fresh public-build scans pass.
+9. The npm advisories are reviewed without a forced upgrade.
+10. The source and fresh public-build scans pass.
+11. Remote-logo publication remains disabled unless its independent rights and
+    exact-host policy gate passes.
 
 Stop if a command proposes deleting an unexpected Function, index, site,
 release, secret, or other resource.
@@ -89,6 +141,12 @@ inspect the existing state first and run:
 immediately before each explicit `lukes-picks` write. Record the target and
 command without recording secret values. Do not treat an earlier guard result
 as authorization for a later command.
+
+For this candidate, adding `API_SPORTS_KEY`, creating or updating
+`systemConfig/apiSportsCatalog`, and configuring
+`ALLOW_API_SPORTS_PROVIDER` are separate changes. Each requires its own reviewed
+target and immediately adjacent guard. Never enter a secret value into a
+command line, source file, Firestore document, log, screenshot, or report.
 
 ## Allowed release commands
 
@@ -206,4 +264,10 @@ use idempotent retries only after the target diff is understood.
 - force deployment that deletes unexpected resources;
 - billing, payment, DNS, domain, IAM, or Firestore-location changes;
 - enabling a public TheSportsDB test provider;
+- enabling `ALLOW_API_SPORTS_PROVIDER` before the credential, contract, quota,
+  server-catalog, terms, and runtime-project gates pass;
+- creating a production provider catalog from guessed or stale league IDs,
+  seasons, response shapes, or hosts;
+- deploying the live-catalog Functions manifest while `API_SPORTS_KEY` is
+  absent;
 - publishing Android or iOS store builds.

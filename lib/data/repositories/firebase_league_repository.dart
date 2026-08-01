@@ -25,7 +25,6 @@ final class FirebaseLeagueRepository implements LeagueRepository {
   final FirebaseFirestore _firestore;
   final FirebaseFunctions _functions;
   final Random _random = Random.secure();
-  final Map<String, String> _wireResultVersions = {};
 
   @override
   Future<String> ensureUserProfile({String? displayName, Uri? photoUrl}) async {
@@ -188,43 +187,48 @@ final class FirebaseLeagueRepository implements LeagueRepository {
   Future<SportsCatalogResult> listSportsCatalog({
     required String leagueId,
     required String weekId,
-    required CatalogQuery query,
+    CatalogQuery? query,
+    String? timezone,
+    DateTime? weekStartAt,
+    DateTime? weekEndAt,
+    bool forceRefresh = false,
   }) async {
     final date = (DateTime value) =>
-        value.toUtc().toIso8601String().substring(0, 10);
+        '${value.year.toString().padLeft(4, '0')}-'
+        '${value.month.toString().padLeft(2, '0')}-'
+        '${value.day.toString().padLeft(2, '0')}';
     final result = await _call('listSportsCatalog', {
       'leagueId': leagueId,
       'weekId': weekId,
-      'sportCode': query.sportCode,
-      'leagueCode': query.leagueCode,
-      'leagueIdForProvider': query.providerLeagueId,
-      'season': query.season,
-      'from': date(query.from),
-      'to': date(query.to),
-      'forceRefresh': query.forceRefresh,
+      if (query != null) ...{
+        'sportCode': query.sportCode,
+        'leagueCode': query.leagueCode,
+        'leagueIdForProvider': query.providerLeagueId,
+        'season': query.season,
+        'from': date(query.from),
+        'to': date(query.to),
+        'dateMode': query.dateMode.name,
+      },
+      'forceRefresh': query?.forceRefresh ?? forceRefresh,
+      'timezone': query?.timezone ?? timezone ?? 'UTC',
+      if ((query?.weekStartAt ?? weekStartAt) case final value?)
+        'weekStartAt': value.toUtc().toIso8601String(),
+      if ((query?.weekEndAt ?? weekEndAt) case final value?)
+        'weekEndAt': value.toUtc().toIso8601String(),
+      if (query == null) 'discovery': true,
     });
     final rawGames = result['games'];
     final games = rawGames is List
         ? [
             for (final value in rawGames)
               if (value is Map)
-                _gameFromJson(
-                  '${value['id'] ?? ''}',
-                  _map(value),
-                  wireResultVersions: _wireResultVersions,
-                ),
+                _gameFromJson('${value['id'] ?? ''}', _map(value)),
           ]
         : <Game>[];
-    final cache = result['cache'] is Map
-        ? _map(result['cache'])
-        : const <String, Object?>{};
-    return SportsCatalogResult(
-      provider: result['provider'] as String? ?? 'unknown',
+    return parseSportsCatalogResult(
+      result,
+      requestedQuery: query,
       games: games,
-      cacheHit: cache['hit'] as bool? ?? false,
-      stale: cache['stale'] as bool? ?? false,
-      delayed: cache['delayed'] as bool? ?? false,
-      cachedAt: _dateOrNull(cache['cachedAt']),
     );
   }
 
@@ -245,8 +249,9 @@ final class FirebaseLeagueRepository implements LeagueRepository {
           .map(
             (game) => _gameToJson(
               game,
-              wireResultVersion:
-                  _wireResultVersions[game.id] ?? game.sourcePayloadHash,
+              wireResultVersion: game.resultVersionToken.isNotEmpty
+                  ? game.resultVersionToken
+                  : game.sourcePayloadHash,
             ),
           )
           .toList(growable: false),
@@ -548,21 +553,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
     ) {
       final data = snapshot.data();
       if (data == null) return null;
-      final settings = data['settings'] is Map
-          ? _map(data['settings'])
-          : const <String, Object?>{};
-      return LeagueSummary(
-        id: snapshot.id,
-        name: data['name'] as String? ?? 'Luke’s Picks Arena',
-        timezone: data['timezone'] as String? ?? 'America/Chicago',
-        currentWeekId: data['currentWeekId'] as String?,
-        currentPickerUid: data['currentPickerUid'] as String?,
-        pickerParticipatesInPicks:
-            settings['pickerParticipatesInPicks'] as bool? ?? false,
-        pickLockPolicy: settings['pickLockPolicy'] == 'firstGame'
-            ? PickLockPolicy.firstGame
-            : PickLockPolicy.perGame,
-      );
+      return parseLeagueSummary(snapshot.id, data);
     });
   }
 
@@ -576,7 +567,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
         .snapshots()
         .map((snapshot) {
           final data = snapshot.data();
-          return data == null ? null : _weekFromJson(snapshot.id, data);
+          return data == null ? null : parseWeekSummary(snapshot.id, data);
         });
   }
 
@@ -592,7 +583,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
         .snapshots()
         .map(
           (snapshot) => snapshot.docs
-              .map((document) => _weekFromJson(document.id, document.data()))
+              .map((document) => parseWeekSummary(document.id, document.data()))
               .toList(growable: false),
         );
   }
@@ -622,9 +613,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
         .snapshots()
         .map(
           (snapshot) => snapshot.docs
-              .map(
-                (document) => _standingFromJson(document.id, document.data()),
-              )
+              .map((document) => parseStanding(document.id, document.data()))
               .toList(growable: false),
         );
   }
@@ -641,13 +630,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
         .snapshots()
         .map(
           (snapshot) => snapshot.docs
-              .map(
-                (document) => _gameFromJson(
-                  document.id,
-                  document.data(),
-                  wireResultVersions: _wireResultVersions,
-                ),
-              )
+              .map((document) => _gameFromJson(document.id, document.data()))
               .toList(growable: false),
         );
   }
@@ -776,6 +759,315 @@ final class FirebaseLeagueRepository implements LeagueRepository {
       '${DateTime.now().microsecondsSinceEpoch}_${_random.nextInt(0x3fffffff)}';
 }
 
+/// Parses the non-game portion of the sports-catalog callable contract.
+///
+/// Games are parsed by the repository's canonical game decoder before reaching
+/// this helper. Optional presentation and discovery metadata is deliberately
+/// fail-closed: malformed entries are ignored and remote logos remain disabled.
+SportsCatalogResult parseSportsCatalogResult(
+  Map<String, Object?> result, {
+  CatalogQuery? requestedQuery,
+  required List<Game> games,
+}) {
+  final provider = _nonEmptyString(result['provider']) ?? 'unknown';
+  final cache = _mapOrEmpty(result['cache']);
+  final cacheHit = cache['hit'] as bool? ?? false;
+  final stale = cache['stale'] as bool? ?? false;
+  final delayed = cache['delayed'] as bool? ?? false;
+  final sports = _catalogSports(result['supportedSports'] ?? result['sports']);
+  final leagues = _catalogLeagues(
+    result['supportedLeagues'] ?? result['leagues'],
+  );
+  final presentation = _catalogPresentation(
+    result['presentation'],
+    attribution: result['attribution'],
+    fallbackProvider: provider,
+  );
+  final effectiveQuery = _catalogQuerySnapshot(
+    result['effectiveQuery'] ?? result['query'],
+    fallback: requestedQuery,
+  );
+  final week = _mapOrEmpty(result['week']);
+  final weekStartAt =
+      _dateOrNull(result['weekStartAt']) ??
+      _dateOrNull(week['startAt']) ??
+      effectiveQuery?.weekStartAt ??
+      requestedQuery?.weekStartAt;
+  final weekEndAt =
+      _dateOrNull(result['weekEndAt']) ??
+      _dateOrNull(week['endAt']) ??
+      effectiveQuery?.weekEndAt ??
+      requestedQuery?.weekEndAt;
+  final availability = _catalogAvailability(
+    result['availability'],
+    provider: provider,
+    games: games,
+    delayed: delayed,
+  );
+
+  return SportsCatalogResult(
+    provider: provider,
+    supportedSports: sports,
+    supportedLeagues: leagues,
+    games: games,
+    cacheHit: cacheHit,
+    stale: stale,
+    delayed: delayed,
+    cachedAt: _dateOrNull(cache['cachedAt']),
+    expiresAt: _dateOrNull(cache['expiresAt']),
+    presentation: presentation,
+    effectiveQuery: effectiveQuery == null
+        ? null
+        : CatalogQuerySnapshot(
+            sportCode: effectiveQuery.sportCode,
+            leagueCode: effectiveQuery.leagueCode,
+            providerLeagueId: effectiveQuery.providerLeagueId,
+            season: effectiveQuery.season,
+            from: effectiveQuery.from,
+            to: effectiveQuery.to,
+            timezone: effectiveQuery.timezone,
+            dateMode: effectiveQuery.dateMode,
+            weekStartAt: weekStartAt,
+            weekEndAt: weekEndAt,
+          ),
+    availability: availability,
+    weekStartAt: weekStartAt,
+    weekEndAt: weekEndAt,
+  );
+}
+
+List<CatalogSport> _catalogSports(Object? value) {
+  if (value is! List) return const <CatalogSport>[];
+  final byCode = <String, CatalogSport>{};
+  for (final item in value) {
+    if (item is String) {
+      final code = item.trim();
+      if (code.isEmpty) continue;
+      byCode[code] = CatalogSport(code: code, displayName: _displayName(code));
+      continue;
+    }
+    final data = _mapOrEmpty(item);
+    final code = _nonEmptyString(
+      data['code'] ?? data['sportCode'] ?? data['id'],
+    );
+    if (code == null) continue;
+    byCode[code] = CatalogSport(
+      code: code,
+      displayName:
+          _nonEmptyString(data['displayName'] ?? data['name']) ??
+          _displayName(code),
+    );
+  }
+  return List<CatalogSport>.unmodifiable(byCode.values);
+}
+
+List<CatalogLeague> _catalogLeagues(Object? value) {
+  if (value is! List) return const <CatalogLeague>[];
+  final byCode = <String, CatalogLeague>{};
+  for (final item in value) {
+    final data = _mapOrEmpty(item);
+    final code = _nonEmptyString(data['code'] ?? data['leagueCode']);
+    final sportCode = _nonEmptyString(data['sportCode']);
+    final providerLeagueId = _nonEmptyString(
+      data['providerLeagueId'] ??
+          data['leagueIdForProvider'] ??
+          data['leagueId'],
+    );
+    final season = _nonEmptyString(data['season']);
+    if (code == null ||
+        sportCode == null ||
+        providerLeagueId == null ||
+        season == null) {
+      continue;
+    }
+    byCode['$sportCode:$code'] = CatalogLeague(
+      code: code,
+      displayName:
+          _nonEmptyString(data['displayName'] ?? data['name']) ??
+          _displayName(code),
+      sportCode: sportCode,
+      providerLeagueId: providerLeagueId,
+      season: season,
+    );
+  }
+  return List<CatalogLeague>.unmodifiable(byCode.values);
+}
+
+CatalogPresentation _catalogPresentation(
+  Object? value, {
+  required Object? attribution,
+  required String fallbackProvider,
+}) {
+  final data = _mapOrEmpty(value);
+  final attributionData = _mapOrEmpty(attribution);
+  final provider = _nonEmptyString(data['provider']);
+  final providerMatchesEnvelope =
+      fallbackProvider != 'unknown' && provider == fallbackProvider;
+  final attributionText =
+      _nonEmptyString(data['attributionText']) ??
+      _nonEmptyString(attributionData['text']) ??
+      '';
+  final attributionUrl = Uri.tryParse(
+    _nonEmptyString(data['attributionUrl'] ?? attributionData['url']) ?? '',
+  );
+  final reviewDate = _dateOrNull(
+    data['logoRightsReviewDate'] ?? data['logoRightsReviewedAt'],
+  );
+  final hosts = _stringSet(data['allowedLogoHosts'] ?? data['allowedHosts']);
+  final queryParameters = _stringSet(
+    data['allowedLogoQueryParameters'] ?? data['allowedQueryParameters'],
+  );
+  final allowRemoteLogos = data['allowRemoteLogos'] == true;
+  if (!providerMatchesEnvelope ||
+      !allowRemoteLogos ||
+      reviewDate == null ||
+      hosts.isEmpty) {
+    return CatalogPresentation.disabled(
+      provider: provider ?? '',
+      attributionText: attributionText,
+      attributionUrl: attributionUrl?.hasScheme == true ? attributionUrl : null,
+    );
+  }
+  return CatalogPresentation(
+    provider: provider!,
+    attributionText: attributionText,
+    attributionUrl: attributionUrl?.hasScheme == true ? attributionUrl : null,
+    allowRemoteLogos: true,
+    allowedLogoHosts: hosts,
+    allowedLogoQueryParameters: queryParameters,
+    logoRightsReviewDate: reviewDate,
+  );
+}
+
+CatalogQuerySnapshot? _catalogQuerySnapshot(
+  Object? value, {
+  required CatalogQuery? fallback,
+}) {
+  final data = _mapOrEmpty(value);
+  final sportCode = _nonEmptyString(data['sportCode']) ?? fallback?.sportCode;
+  final leagueCode =
+      _nonEmptyString(data['leagueCode']) ?? fallback?.leagueCode;
+  final providerLeagueId =
+      _nonEmptyString(
+        data['providerLeagueId'] ??
+            data['leagueIdForProvider'] ??
+            data['leagueId'],
+      ) ??
+      fallback?.providerLeagueId;
+  final season = _nonEmptyString(data['season']) ?? fallback?.season;
+  final from = _dateOrNull(data['from']) ?? fallback?.from;
+  final to = _dateOrNull(data['to']) ?? fallback?.to;
+  if (sportCode == null ||
+      leagueCode == null ||
+      providerLeagueId == null ||
+      season == null ||
+      from == null ||
+      to == null) {
+    return null;
+  }
+  return CatalogQuerySnapshot(
+    sportCode: sportCode,
+    leagueCode: leagueCode,
+    providerLeagueId: providerLeagueId,
+    season: season,
+    from: from,
+    to: to,
+    timezone: _nonEmptyString(data['timezone']) ?? fallback?.timezone ?? 'UTC',
+    dateMode:
+        _catalogDateMode(data['dateMode']) ??
+        fallback?.dateMode ??
+        CatalogDateMode.allDates,
+    weekStartAt: _dateOrNull(data['weekStartAt']) ?? fallback?.weekStartAt,
+    weekEndAt: _dateOrNull(data['weekEndAt']) ?? fallback?.weekEndAt,
+  );
+}
+
+CatalogAvailability _catalogAvailability(
+  Object? value, {
+  required String provider,
+  required List<Game> games,
+  required bool delayed,
+}) {
+  final data = _mapOrEmpty(value);
+  final rawState = value is String
+      ? value
+      : _nonEmptyString(data['state'] ?? data['code']);
+  final inferred = provider == 'manual'
+      ? CatalogAvailabilityState.providerNotConfigured
+      : delayed
+      ? CatalogAvailabilityState.quotaDelayed
+      : games.isEmpty
+      ? CatalogAvailabilityState.noGames
+      : CatalogAvailabilityState.available;
+  return CatalogAvailability(
+    state: _availabilityState(rawState) ?? inferred,
+    message: _nonEmptyString(data['message']),
+  );
+}
+
+CatalogAvailabilityState? _availabilityState(String? value) => switch (value) {
+  'available' || 'success' || 'stale' => CatalogAvailabilityState.available,
+  'noGames' ||
+  'noGamesScheduled' ||
+  'no_games' ||
+  'no-games' => CatalogAvailabilityState.noGames,
+  'offSeason' ||
+  'off_season' ||
+  'off-season' => CatalogAvailabilityState.offSeason,
+  'providerNotConfigured' ||
+  'provider_not_configured' ||
+  'provider-not-configured' ||
+  'notConfigured' => CatalogAvailabilityState.providerNotConfigured,
+  'providerUnavailable' ||
+  'provider_unavailable' ||
+  'provider-unavailable' ||
+  'unavailable' => CatalogAvailabilityState.providerUnavailable,
+  'quotaDelayed' ||
+  'quota_delayed' ||
+  'quota-delayed' ||
+  'delayed' => CatalogAvailabilityState.quotaDelayed,
+  'unauthorized' ||
+  'permissionDenied' ||
+  'permission-denied' => CatalogAvailabilityState.unauthorized,
+  'unknown' => CatalogAvailabilityState.unknown,
+  _ => null,
+};
+
+CatalogDateMode? _catalogDateMode(Object? value) => switch (value) {
+  'today' => CatalogDateMode.today,
+  'tomorrow' => CatalogDateMode.tomorrow,
+  'later' => CatalogDateMode.later,
+  'allDates' || 'all_dates' || 'all-dates' || 'all' => CatalogDateMode.allDates,
+  'custom' => CatalogDateMode.custom,
+  _ => null,
+};
+
+Set<String> _stringSet(Object? value) {
+  if (value is! List) return const <String>{};
+  return Set<String>.unmodifiable(
+    value
+        .whereType<String>()
+        .map((item) => item.trim().toLowerCase())
+        .where((item) => item.isNotEmpty),
+  );
+}
+
+String? _nonEmptyString(Object? value) {
+  if (value is! String && value is! num) return null;
+  final normalized = '$value'.trim();
+  return normalized.isEmpty ? null : normalized;
+}
+
+String _displayName(String code) => code
+    .split(RegExp(r'[-_\s]+'))
+    .where((part) => part.isNotEmpty)
+    .map(
+      (part) => part.length <= 4
+          ? part.toUpperCase()
+          : '${part[0].toUpperCase()}${part.substring(1).toLowerCase()}',
+    )
+    .join(' ');
+
 Map<String, Object?> _map(Object? value) {
   if (value is Map<String, Object?>) return value;
   if (value is Map) {
@@ -821,6 +1113,17 @@ List<String> _stringList(Map<String, Object?> data, String key) {
 
 int _number(Object? value) => value is num ? value.toInt() : 0;
 
+int _nonNegativeNumber(Object? value) {
+  final parsed = _number(value);
+  return parsed < 0 ? 0 : parsed;
+}
+
+int? _optionalNonNegativeNumber(Object? value) {
+  if (value is! num) return null;
+  final parsed = value.toInt();
+  return parsed < 0 ? null : parsed;
+}
+
 String _safeFunctionsMessage(String code, String? serverMessage) {
   final safeServerMessage = serverMessage?.trim();
   if (safeServerMessage != null &&
@@ -856,6 +1159,7 @@ Map<String, Object?> _gameToJson(
   'providerGameId': game.providerGameId,
   'sportCode': game.sportCode,
   'leagueCode': game.leagueCode,
+  'providerLeagueId': game.providerLeagueId,
   'leagueName': game.leagueName,
   'season': game.season,
   'weekOrRound': game.weekOrRound,
@@ -876,22 +1180,16 @@ Map<String, Object?> _gameToJson(
   'sourcePayloadHash': game.sourcePayloadHash,
 };
 
-Game _gameFromJson(
-  String id,
-  Map<String, Object?> data, {
-  required Map<String, String> wireResultVersions,
-}) {
+Game _gameFromJson(String id, Map<String, Object?> data) {
   final scheduled = _date(data['scheduledAtUtc']);
   final wireVersion = data['resultVersion'] as String? ?? '';
-  if (wireVersion.isNotEmpty) {
-    wireResultVersions[data['id'] as String? ?? id] = wireVersion;
-  }
   return Game(
     id: data['id'] as String? ?? id,
     provider: data['provider'] as String? ?? 'unknown',
     providerGameId: data['providerGameId'] as String? ?? id,
     sportCode: data['sportCode'] as String? ?? 'unknown',
     leagueCode: data['leagueCode'] as String? ?? 'unknown',
+    providerLeagueId: data['providerLeagueId'] as String?,
     leagueName: data['leagueName'] as String? ?? 'Sports',
     season: '${data['season'] ?? ''}',
     weekOrRound: data['weekOrRound'] as String?,
@@ -918,6 +1216,7 @@ Game _gameFromJson(
     manualOverrideReason: data['manualOverrideReason'] as String?,
     manualOverrideBy: data['manualOverrideBy'] as String?,
     resultVersion: _versionNumber(wireVersion),
+    resultVersionToken: wireVersion,
     sourcePayloadHash: data['sourcePayloadHash'] as String? ?? '',
     pickRevealCompletedAt: _dateOrNull(data['pickRevealCompletedAt']),
   );
@@ -928,7 +1227,10 @@ Team _team(Map<String, Object?> data) => Team(
   name: data['name'] as String? ?? 'Unknown team',
   shortName: data['shortName'] as String? ?? data['name'] as String? ?? 'Team',
   abbreviation: data['abbreviation'] as String? ?? '—',
-  logoUrl: Uri.tryParse(data['logoUrl'] as String? ?? ''),
+  logoUrl: switch (_nonEmptyString(data['logoUrl'])) {
+    final value? => Uri.tryParse(value),
+    null => null,
+  },
 );
 
 LeagueMember _memberFromJson(String uid, Map<String, Object?> data) =>
@@ -954,7 +1256,7 @@ LeagueMember _memberFromJson(String uid, Map<String, Object?> data) =>
       eligibleFromWeekId: data['eligibleFromWeekId'] as String?,
     );
 
-Standing _standingFromJson(String uid, Map<String, Object?> data) => Standing(
+Standing parseStanding(String uid, Map<String, Object?> data) => Standing(
   uid: uid,
   displayName: data['displayName'] as String? ?? 'Member',
   totalPoints: _number(data['totalPoints']),
@@ -967,31 +1269,76 @@ Standing _standingFromJson(String uid, Map<String, Object?> data) => Standing(
   weeklyTitles: _number(data['weeklyTitles']),
   bestWeekPoints: _number(data['bestWeekPoints']),
   currentRank: _number(data['currentRank']),
+  standingsEpoch: _nonNegativeNumber(data['standingsEpoch']),
 );
 
-WeekSummary _weekFromJson(String id, Map<String, Object?> data) => WeekSummary(
-  id: id,
-  sequentialNumber: _number(data['sequentialNumber']),
-  label: data['label'] as String? ?? 'Week',
-  pickerUid: data['pickerUid'] as String? ?? '',
-  status: data['status'] as String? ?? 'draft',
-  startAt: _dateOrNull(data['startAt']),
-  endAt: _dateOrNull(data['endAt']),
-  finalizedAt: _dateOrNull(data['finalizedAt']),
-  winnerUids: data['winnerUids'] is List
-      ? (data['winnerUids'] as List).whereType<String>().toList(growable: false)
-      : const [],
-  highScore: data['highScore'] is num
-      ? (data['highScore'] as num).toInt()
-      : null,
-  pickerParticipatesInPicks:
-      data['pickerParticipatesSnapshot'] as bool? ?? false,
-  lockPolicy: data['lockPolicySnapshot'] == 'firstGame'
-      ? PickLockPolicy.firstGame
-      : PickLockPolicy.perGame,
-  selectedGameCount: _number(data['selectedGameCount']),
-  eligibleMemberCount: _number(data['eligibleMemberCount']),
-);
+/// Parses the member-readable league contract.
+///
+/// Leagues created before standings generation fencing do not contain either
+/// epoch. Treating both as zero preserves their existing standings while a
+/// mismatch on newer leagues safely hides a partial rebuild.
+LeagueSummary parseLeagueSummary(String id, Map<String, Object?> data) {
+  final settings = data['settings'] is Map
+      ? _map(data['settings'])
+      : const <String, Object?>{};
+  return LeagueSummary(
+    id: id,
+    name: data['name'] as String? ?? 'Luke’s Picks Arena',
+    timezone: data['timezone'] as String? ?? 'America/Chicago',
+    currentWeekId: data['currentWeekId'] as String?,
+    currentPickerUid: data['currentPickerUid'] as String?,
+    pickerParticipatesInPicks:
+        settings['pickerParticipatesInPicks'] as bool? ?? false,
+    pickLockPolicy: settings['pickLockPolicy'] == 'firstGame'
+        ? PickLockPolicy.firstGame
+        : PickLockPolicy.perGame,
+    standingsEpoch: _nonNegativeNumber(data['standingsEpoch']),
+    standingsBuiltEpoch: _nonNegativeNumber(data['standingsBuiltEpoch']),
+    standingsBuiltMemberCount: _optionalNonNegativeNumber(
+      data['standingsBuiltMemberCount'],
+    ),
+  );
+}
+
+/// Parses the server-owned, member-readable week contract.
+///
+/// Published presentation metadata is deliberately fail-closed: the policy's
+/// provider must match the separate provider snapshot written by the server.
+/// Missing metadata on legacy weeks therefore preserves neutral team badges.
+WeekSummary parseWeekSummary(String id, Map<String, Object?> data) {
+  final catalogProvider = _nonEmptyString(data['catalogProviderSnapshot']);
+  return WeekSummary(
+    id: id,
+    sequentialNumber: _number(data['sequentialNumber']),
+    label: data['label'] as String? ?? 'Week',
+    pickerUid: data['pickerUid'] as String? ?? '',
+    status: data['status'] as String? ?? 'draft',
+    startAt: _dateOrNull(data['startAt']),
+    endAt: _dateOrNull(data['endAt']),
+    finalizedAt: _dateOrNull(data['finalizedAt']),
+    winnerUids: data['winnerUids'] is List
+        ? (data['winnerUids'] as List).whereType<String>().toList(
+            growable: false,
+          )
+        : const [],
+    highScore: data['highScore'] is num
+        ? (data['highScore'] as num).toInt()
+        : null,
+    pickerParticipatesInPicks:
+        data['pickerParticipatesSnapshot'] as bool? ?? false,
+    lockPolicy: data['lockPolicySnapshot'] == 'firstGame'
+        ? PickLockPolicy.firstGame
+        : PickLockPolicy.perGame,
+    selectedGameCount: _number(data['selectedGameCount']),
+    eligibleMemberCount: _number(data['eligibleMemberCount']),
+    nextPickerUid: _nonEmptyString(data['nextPickerUid']),
+    catalogPresentation: _catalogPresentation(
+      data['catalogPresentationSnapshot'],
+      attribution: null,
+      fallbackProvider: catalogProvider ?? 'unknown',
+    ),
+  );
+}
 
 Pick _pickFromJson(String gameId, Map<String, Object?> data) {
   final selectedAt = _dateOrNull(data['selectedAt']) ?? DateTime.now().toUtc();

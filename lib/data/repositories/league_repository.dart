@@ -1,7 +1,10 @@
 import '../models/game.dart';
 import '../models/member.dart';
 import '../models/pick.dart';
+import '../models/sports_catalog.dart';
 import '../models/standing.dart';
+
+export '../models/sports_catalog.dart';
 
 abstract interface class LeagueRepository {
   Future<String> ensureUserProfile({String? displayName, Uri? photoUrl});
@@ -60,7 +63,11 @@ abstract interface class LeagueRepository {
   Future<SportsCatalogResult> listSportsCatalog({
     required String leagueId,
     required String weekId,
-    required CatalogQuery query,
+    CatalogQuery? query,
+    String? timezone,
+    DateTime? weekStartAt,
+    DateTime? weekEndAt,
+    bool forceRefresh = false,
   });
 
   Future<int> saveDraftSlate({
@@ -193,44 +200,6 @@ final class CreatedWeek {
   final String pickerUid;
 }
 
-final class CatalogQuery {
-  const CatalogQuery({
-    required this.sportCode,
-    required this.leagueCode,
-    required this.providerLeagueId,
-    required this.season,
-    required this.from,
-    required this.to,
-    this.forceRefresh = false,
-  });
-
-  final String sportCode;
-  final String leagueCode;
-  final String providerLeagueId;
-  final String season;
-  final DateTime from;
-  final DateTime to;
-  final bool forceRefresh;
-}
-
-final class SportsCatalogResult {
-  const SportsCatalogResult({
-    required this.provider,
-    required this.games,
-    required this.cacheHit,
-    required this.stale,
-    required this.delayed,
-    required this.cachedAt,
-  });
-
-  final String provider;
-  final List<Game> games;
-  final bool cacheHit;
-  final bool stale;
-  final bool delayed;
-  final DateTime? cachedAt;
-}
-
 final class PublishSlateResult {
   const PublishSlateResult({
     required this.eligibleMemberCount,
@@ -281,6 +250,9 @@ final class LeagueSummary {
     required this.currentPickerUid,
     required this.pickerParticipatesInPicks,
     required this.pickLockPolicy,
+    this.standingsEpoch = 0,
+    this.standingsBuiltEpoch = 0,
+    this.standingsBuiltMemberCount,
   });
 
   final String id;
@@ -290,6 +262,9 @@ final class LeagueSummary {
   final String? currentPickerUid;
   final bool pickerParticipatesInPicks;
   final PickLockPolicy pickLockPolicy;
+  final int standingsEpoch;
+  final int standingsBuiltEpoch;
+  final int? standingsBuiltMemberCount;
 }
 
 final class WeekSummary {
@@ -308,6 +283,8 @@ final class WeekSummary {
     required this.lockPolicy,
     required this.selectedGameCount,
     required this.eligibleMemberCount,
+    this.nextPickerUid,
+    this.catalogPresentation = const CatalogPresentation.disabled(),
   });
 
   final String id;
@@ -324,6 +301,8 @@ final class WeekSummary {
   final PickLockPolicy lockPolicy;
   final int selectedGameCount;
   final int eligibleMemberCount;
+  final String? nextPickerUid;
+  final CatalogPresentation catalogPresentation;
 
   bool get isFinalized => status == 'finalized';
 }

@@ -29,6 +29,20 @@ overall standings.
 > `c38136070082a0895c6cca0f118841bb0972520e`.
 > This web release is not an app-store or full production-readiness claim.
 
+> Current source candidate: `codex/live-sports-catalog-and-slate` implements a
+> server-discovered, typed sports-catalog contract and a hardened API-Sports
+> path, but it has not been deployed. There is currently no approved
+> `API_SPORTS_KEY` Secret Manager value for `lukes-picks`, so the new Functions
+> manifest, a provider-backed preview, and live promotion are blocked. The
+> deployed site remains the previously recorded manual-provider release.
+> `ALLOW_API_SPORTS_PROVIDER` defaults to `false`, and remote team marks remain
+> disabled unless a separate rights review supplies the required server policy.
+> The settled local candidate passed 91/91 Flutter tests, 54/54 Functions
+> unit/contract tests, 10/10 rules tests, 8/8 emulator integration tests, all 13
+> connected browser checkpoints, and web/Android/iOS builds. The production npm
+> dependency audit is clean; three moderate Firebase CLI dependency-chain
+> findings remain in the full development audit.
+
 ## Product contract
 
 - One designated picker per explicit week.
@@ -44,6 +58,9 @@ overall standings.
 - Co-winners are supported.
 - Finalization, standings rebuild, and picker rotation are idempotent.
 - Inactive members retain history and are skipped by future rotation.
+- Interrupted finalization follow-ups repair only finalized weeks and coordinate
+  safely with audited reopen; an inactive recorded next picker advances to the
+  next active member before Week creation.
 - No odds, spreads, wagering, payments, or advanced scoring.
 
 The complete intended sequence is documented in
@@ -58,8 +75,17 @@ member-readable only after lock.
 
 The backend includes the weekly lifecycle, scoring, correction, standings,
 rotation, manual-game fallback, provider cache, quota controls, and scheduled
-result/reveal processing. A passing browser-to-emulator release test exercises
-the connected Flutter client and backend together with three isolated users.
+result/reveal processing. The previously deployed manual-provider release has
+dated browser-to-emulator evidence for the connected Flutter client and backend
+together with three isolated users.
+
+The catalog callable now discovers its supported sports and leagues from the
+configured server provider. Its typed response includes sports, leagues,
+canonical provider league/season metadata, games, cache and availability
+state, presentation policy, the server-effective query, and active-week bounds.
+Flutter keeps the current query result, its cross-query game cache, the desired
+draft selection, and the authoritative week-game stream as separate state, so
+changing sport, league, or date does not discard already selected games.
 
 See:
 
@@ -103,6 +129,15 @@ immediately before the write. Prerequisite mutations that the wrapper does not
 perform—such as enabling a reviewed API or setting `INVITE_CODE_PEPPER`—must run
 `./scripts/assert_firebase_project.sh lukes-picks` immediately before their own
 explicitly targeted write. Never record a secret value.
+
+Current source declares `API_SPORTS_KEY`, selectively bound only to
+`listSportsCatalog`, `refreshSelectedGames`, `syncSelectedGameResults`, and
+`scheduledResultSync`. Binding the secret does not enable API-Sports:
+`ALLOW_API_SPORTS_PROVIDER` is a separate deploy-time boolean that defaults to
+`false`, the runtime must be the authorized production project, and the
+server-owned `systemConfig/apiSportsCatalog` document must contain validated
+league/season configuration. The secret does not currently exist, so do not
+attempt the candidate Functions release.
 
 ## Toolchain
 
@@ -188,7 +223,7 @@ Firebase JavaScript initialization.
 | `mock` | Emulator and automated tests only |
 | `manual` | Valid production fallback and required production mode today |
 | `theSportsDbTest` | Internal/emulator only; requires an explicit flag and hard production rejection |
-| `apiSports` | Disabled until a pre-existing key, coverage, quota, contract shapes, terms, and publication rights are verified |
+| `apiSports` | Adapter and sanitized contract tests exist; production remains disabled until an approved secret, server catalog, authenticated validation, deploy parameter, and rights gates all pass |
 
 No provider credential is exposed to Flutter or Hosting. Do not create,
 purchase, or register a provider account from this workflow. Do not scrape or
@@ -199,6 +234,19 @@ Provider access alone is not a logo license. Production uses neutral initials
 badges until rights are confirmed. See
 [sports-provider-validation.md](docs/sports-provider-validation.md) and
 [asset-sources.md](docs/asset-sources.md).
+
+At publication, Functions copy only the provider name and reviewed,
+non-secret presentation policy onto the member-readable week snapshot. This
+lets ordinary members apply the same fail-closed logo policy without granting
+them picker-only catalog access. Legacy weeks without that snapshot continue
+to show neutral initials.
+
+Catalog dates are arena-local calendar dates. The server treats the arena's
+stored IANA timezone as authoritative, requires `from` and `to` together,
+limits an inclusive query to seven days, and confines it to the active week.
+An initial discovery call derives a deterministic remaining-week range of at
+most seven days and returns the canonical query used by later filters and
+refreshes.
 
 ## Validation commands
 
@@ -240,9 +288,21 @@ does not deploy.
 
 ## Deployment
 
-The connected implementation has passed its three-user browser-to-emulator
-release gate, its guarded Firebase preview release, and the authorized clone of
-that exact preview artifact to live. The preview record is:
+The live-catalog source candidate is not deployable in the current no-key
+state. Before any Functions, preview, or live release of that candidate, the
+authorized user must complete this handoff without exposing the value:
+
+`MATT_ACTION_REQUIRED: Add an approved API-Sports key to the API_SPORTS_KEY Firebase secret for project lukes-picks.`
+
+After that separate action, keep `ALLOW_API_SPORTS_PROVIDER=false` until the
+credential, current MLB league/season contract, quota behavior, server-owned
+catalog document, and production terms have been validated. Logo rights are an
+independent gate: absent an approved review date and exact host/query policy,
+the server and Flutter both fall back to neutral initials.
+
+The previously deployed manual-provider implementation passed its three-user
+browser-to-emulator release gate, guarded Firebase preview release, and the
+authorized clone of that exact preview artifact to live. Its preview record is:
 
 - URL:
   <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app>
@@ -278,12 +338,20 @@ writes still require explicit authorization and the project guard.
 
 ## Known limitations
 
-- API-Sports has no authorized key or authenticated coverage/quota validation.
+- The live-catalog source candidate declares and selectively binds
+  `API_SPORTS_KEY`, but no approved secret currently exists; authenticated
+  coverage/quota validation and candidate deployment are blocked.
+- `systemConfig/apiSportsCatalog` is a server-only contract for validated
+  leagues and presentation policy; no production entry should be inferred from
+  source code or sanitized fixtures.
+- `ALLOW_API_SPORTS_PROVIDER` defaults to `false` and must not be enabled until
+  every credential, contract, quota, configuration, and terms gate passes.
 - Production must remain manual-provider mode with neutral team badges.
 - TheSportsDB is proven only for the explicitly gated emulator/internal test
   path and must remain disabled in `lukes-picks`.
-- Manual result handling is browser-proven; manual-game creation remains a
-  separate end-to-end validation item.
+- Manual result handling is browser-proven. The connected emulator integration
+  suite also creates and publishes a manual MLB game while another connected
+  provider is configured, proving the authorized fallback remains usable.
 - Authenticated preview Google popup sign-in, reload/session/membership
   restoration, explicit sign-out, and repeat sign-in passed. The automated
   repeat popup was slow to settle, but a clean reload restored the

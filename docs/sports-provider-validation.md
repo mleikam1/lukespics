@@ -1,12 +1,39 @@
 # Sports provider validation
 
-API-Sports research date: 2026-07-27.
+API-Sports research dates: 2026-07-27 and 2026-07-31.
 
 TheSportsDB internal-path validation date: 2026-07-30.
 
 Status: official documentation validation is complete. Authenticated live
 coverage validation is blocked because no existing provider key was available.
 No current league ID, live entitlement, fixture, or observed quota is asserted.
+
+## Production-gate recheck — 2026-07-31
+
+The `lukes-picks` project guard passed immediately before inspecting Secret
+Manager metadata. An `API_SPORTS_KEY` secret did not exist, and no ignored local
+developer credential was present. No secret value was requested or displayed.
+The authenticated `/status`, `/leagues`, or `/games` checks therefore were not
+attempted, and the production provider remains disabled.
+
+The current official API-BASEBALL coverage page still lists MLB schedule and
+historical coverage and documents a 100-request/day free plan. This is public
+catalog information only; it is not proof of this project's entitlement, the
+current MLB provider league ID or season, response shape, or usable quota.
+Those values must still be discovered from authenticated official endpoints and
+must not be guessed.
+
+The official API-Sports terms were also rechecked. They state that the provider
+does not grant a publication license for its data and does not own the logos,
+images, or trademarks returned by the API; third-party authorization may be
+required. No MLB or club mark authorization was available in this review.
+Consequently:
+
+- production remote logos remain disabled;
+- the production allowed-logo-host set is empty;
+- neutral initials badges remain the required production fallback; and
+- no API-Sports catalog or production arena may be enabled until both the
+  authenticated provider gate and the applicable data/mark rights gate pass.
 
 ## Release policy update — 2026-07-30
 
@@ -146,8 +173,9 @@ configuration, is required to:
 If API-Sports fails NCAA football coverage, a separate CFBD bearer key is then
 required. Until then, manual mode is the production fallback and mock mode is
 the emulator/automated-test fallback. The connected browser scenario passed
-manual result handling, but did not exercise manual game creation; manual-game
-entry remains a separate validation item.
+manual result handling. The emulator integration suite separately creates and
+publishes a manual MLB game under a configured connected provider, proving the
+authorized fallback without making a production-provider claim.
 
 ## Fallback behavior
 

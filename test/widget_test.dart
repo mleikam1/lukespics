@@ -101,6 +101,12 @@ void main() {
         matching: find.byType(Scrollable),
       ),
     );
+    await Scrollable.ensureVisible(
+      tester.element(checkbox),
+      alignment: 0.2,
+      duration: Duration.zero,
+    );
+    await tester.pumpAndSettle();
     expect(checkbox, findsOneWidget);
     final semantics = tester.getSemantics(checkbox);
     expect(semantics.label, contains('Include'));
@@ -113,6 +119,87 @@ void main() {
           .onPressed,
       isNotNull,
     );
+  });
+
+  testWidgets('catalog metadata drives filters without mobile overflow', (
+    tester,
+  ) async {
+    final controller = AppController.demo(signedIn: true, hasLeague: true)
+      ..assumeDemoPersona('luke');
+    await pumpApp(
+      tester,
+      controller: controller,
+      initialLocation: '/catalog',
+      size: const Size(390, 844),
+    );
+
+    expect(find.byKey(const Key('sport-filter-Baseball')), findsOneWidget);
+    expect(find.byKey(const Key('league-filter-pro-football')), findsOneWidget);
+    expect(find.byKey(const Key('date-filter-today')), findsOneWidget);
+    expect(find.byKey(const Key('sport-filter-Soccer')), findsNothing);
+    expect(find.text('All'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('review shows cross-query games and removes the final game', (
+    tester,
+  ) async {
+    final controller = AppController.demo(signedIn: true, hasLeague: true)
+      ..assumeDemoPersona('luke');
+    for (final id in controller.selectedGameIds.toList()) {
+      controller.toggleSlateGame(id);
+    }
+    controller.toggleSlateGame('football-1');
+    controller.toggleSlateGame('baseball-1');
+    expect(controller.selectedGameIds, {'football-1', 'baseball-1'});
+
+    await pumpApp(
+      tester,
+      controller: controller,
+      initialLocation: '/slate/review',
+      size: const Size(390, 844),
+    );
+
+    expect(find.text('Comets at Hawks'), findsOneWidget);
+    expect(find.textContaining('Harbor Field'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Pines at Capitals'),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('Pines at Capitals'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Publish 2-game slate'),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('Publish 2-game slate'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.scrollUntilVisible(
+      find.byTooltip('Remove Cedar Comets at Harbor Hawks'),
+      -200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.byTooltip('Remove Cedar Comets at Harbor Hawks'));
+    await tester.pump();
+    expect(controller.selectedGameIds, {'baseball-1'});
+    await tester.scrollUntilVisible(
+      find.text('Publish 1-game slate'),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('Publish 1-game slate'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.byTooltip('Remove North Pines at River Capitals'),
+      -200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.byTooltip('Remove North Pines at River Capitals'));
+    await tester.pump();
+    expect(controller.selectedGameIds, isEmpty);
+    expect(find.text('Select at least one game'), findsOneWidget);
   });
 
   testWidgets('winner choices are exclusive and become server-confirmed', (

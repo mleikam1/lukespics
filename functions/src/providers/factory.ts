@@ -1,6 +1,6 @@
 import {db} from "../config.js";
 import type {ProviderName, SportsDataProvider} from "../types.js";
-import {ApiSportsProvider, parseApiSportsConfigs} from "./apiSports.js";
+import {ApiSportsProvider, parseApiSportsCatalog} from "./apiSports.js";
 import {ManualSportsProvider} from "./manual.js";
 import {MockSportsProvider} from "./mock.js";
 import {assertProviderAllowedForRuntime} from "./policy.js";
@@ -30,6 +30,6 @@ export async function getProvider(
     .collection("systemConfig")
     .doc("apiSportsCatalog")
     .get();
-  const configs = parseApiSportsConfigs(catalog.data()?.leagues ?? []);
-  return new ApiSportsProvider(configs);
+  const parsed = parseApiSportsCatalog(catalog.data() ?? {leagues: []});
+  return new ApiSportsProvider(parsed.leagues, parsed.presentation);
 }

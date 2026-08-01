@@ -26,21 +26,62 @@ historical week.
 
 The catalog and the week slate are different datasets:
 
-- `catalogGames` are normalized, cached provider candidates returned for the
-  active picker’s sport, league, and date query.
-- `selectedWeekGames` are immutable snapshots under the active week after
-  publication.
-- Local selection state is a desired draft set. Saving must add missing games
-  and remove deselected draft games until the server set exactly matches that
-  desired set.
+- `currentCatalogResultsById` contains only the normalized candidates returned
+  for the active sport, league, and date query. Each successful query replaces
+  this map.
+- `catalogGameCacheById` keeps the newest canonical game objects seen across
+  queries, allowing a later response or week stream to refresh known data.
+- `selectedDraftGamesById` is the local desired draft set and retains complete
+  game objects while the picker changes filters.
+- `serverDraftGameIds` is the last authoritative saved set used to compute
+  exact additions and removals.
+- `selectedWeekGames` is the authoritative Firestore stream of week-owned game
+  snapshots. It drives published picks/results and restores a clean saved draft
+  after reload.
 
 A week subscription must never replace the catalog. Entering or refreshing the
 catalog must issue a catalog query for the restored arena and current picker;
-catalog loading cannot depend on arena creation.
+catalog loading cannot depend on arena creation. A catalog response may refresh
+a selected game's canonical fields, but replacing the current result map must
+not remove a selection made under another query.
 
 Only an upcoming, canonical game can be added. There must be at least one game
 and there is no product maximum. Publishing freezes the reviewed set and
 creates participant entry snapshots.
+
+### Server-discovered catalog contract
+
+The first `listSportsCatalog` request for a draft week may omit sport, league,
+season, provider league ID, and dates. The server discovers the enabled choices
+from the arena's configured provider and returns:
+
+- `sports`: stable code and display name;
+- `leagues`: code, display name, sport code, canonical provider league ID, and
+  validated season;
+- normalized `games` with selection eligibility;
+- cache freshness/delay metadata and availability state;
+- provider presentation and attribution policy;
+- the server-effective canonical query; and
+- active-week start/end bounds.
+
+The client renders only the sports and leagues returned by this contract. A
+sport, league, season, or provider league ID supplied on a later query must
+resolve to the server's enabled catalog; the client cannot invent support by
+sending arbitrary metadata.
+
+When publication succeeds, the backend atomically stores the provider name and
+reviewed presentation policy on the week. The week contract is already
+readable by active members, so Picks and Results can enforce approved logo
+policy without exposing the picker-only catalog callable. Legacy, missing, or
+provider-mismatched snapshots deliberately render neutral initials.
+
+All date filters use calendar dates in the arena's stored IANA timezone. The
+client offers Today, Tomorrow, Later, All dates, and a custom range, clamps the
+window to the active week, and caps it at seven inclusive days. The callable
+independently requires `from` and `to` together, enforces the seven-day maximum
+and week bounds, and uses the arena timezone rather than trusting a client
+timezone. Discovery derives a deterministic remaining-week range of at most
+seven days.
 
 ## Participants and picker settings
 
@@ -122,9 +163,33 @@ double-scoring or rotating again. A correction requires an audited reopen,
 result override or void reason, recalculation, standings rebuild, and
 refinalization.
 
+Follow-up repair has its own short-lived, heartbeat-backed claim and accepts
+only a freshly read `finalized` week. Reopen rejects while that claim is active;
+after reopen, the repair path fails closed and cannot move the week back to
+`finalized`. Claim IDs are unique per invocation, so an expired-worker cleanup
+cannot release a newer repair owner.
+
+Every finalized/reopened status transition also increments the arena's
+`standingsEpoch`. A rebuild reads that epoch before it reads any week entries,
+checks it in every transactional write chunk, and restarts from a fresh snapshot
+if another week changes. The completion epoch is recorded only after all chunks
+settle, preventing one week's delayed repair from restoring another reopened
+week's stale points. Rank movement is recomputed from the same authoritative
+snapshot with the latest finalized week excluded; it never reads a partially
+written standings generation as its prior-rank source. Clients hide standings
+while `standingsBuiltEpoch` trails `standingsEpoch`. A standalone commissioner
+rebuild reserves a new epoch before reading so it uses the same publication
+fence even when no week status changes. A legacy or interrupted follow-up
+repair likewise reserves an epoch only when no dirty generation is already
+outstanding, so retrying a failed repair cannot repeatedly advance the epoch.
+
 After finalization, an authorized administrator creates the next sequential
-week and assigns the proposed rotated picker. Neither finalization nor refresh
-may silently create duplicate weeks.
+week only after the server-owned rotation marker and next-picker value are
+present. The backend derives that picker from the finalized week and rejects a
+stale client override. If that recorded member becomes inactive before the next
+week is created, the server transaction advances to the next active rotation
+member and updates the authoritative marker before creating the draft. Neither
+finalization nor refresh may silently create duplicate weeks.
 
 ## Provider modes
 
@@ -133,14 +198,28 @@ may silently create duplicate weeks.
 | `mock` | Automated tests and Firebase emulators only | Must be rejected in `lukes-picks` |
 | `manual` | Emulator and production fallback | Required production mode until a provider is approved |
 | `theSportsDbTest` | Emulator/internal test only | Requires `ALLOW_THESPORTSDB_TEST_PROVIDER=true`, documented API use, fixtures, and a hard rejection in `lukes-picks` |
-| `apiSports` | Potential production adapter | Disabled until an existing key, coverage, quota, result shapes, terms, and publication/logo rights are verified |
+| `apiSports` | Production adapter in source | Disabled until an approved secret, validated server catalog, authenticated contract/quota checks, explicit deploy parameter, and terms gate all pass |
 
-The connected release candidate contains mock, manual, API-Sports, and
-TheSportsDB test adapters. Sanitized fixtures and provider-policy tests verify
-normalization, retries, caching, rate limits, host restrictions, attribution,
-the exact emulator/flag gate, and rejection in `lukes-picks`. The passing
-three-user browser lifecycle exercises the internal TheSportsDB schedule through
-the actual Flutter UI. Production remains `manual`.
+The previously deployed connected release contains mock, manual, API-Sports,
+and TheSportsDB test adapters. Its dated fixture, policy, and three-user browser
+evidence verifies the internal TheSportsDB path through the actual Flutter UI.
+The current source adds API-Sports baseball fixtures and focused catalog,
+binding, query, and logo-policy tests; their final pass results must be recorded
+separately. Production remains `manual`.
+
+The current source defines `API_SPORTS_KEY` as a Firebase secret and binds it
+only to `listSportsCatalog`, `refreshSelectedGames`,
+`syncSelectedGameResults`, and `scheduledResultSync`. A separate deploy-time
+boolean, `ALLOW_API_SPORTS_PROVIDER`, defaults to `false`; API-Sports is allowed
+only when that value is explicitly true, the runtime is not an emulator, and
+the project is exactly `lukes-picks`. Provider discovery reads the server-only
+`systemConfig/apiSportsCatalog` document rather than accepting base URLs,
+league IDs, seasons, final statuses, or logo policy from Flutter.
+
+No approved `API_SPORTS_KEY` currently exists. The source candidate must not be
+deployed or described as a working production schedule until the key handoff,
+authenticated provider validation, server configuration, full test matrix,
+guarded preview, and smoke test are complete.
 
 No client calls a sports provider directly. No ESPN website, internal API,
 fantasy endpoint, logo host, or undocumented JSON endpoint may be scraped,
@@ -155,10 +234,14 @@ The display order is:
 3. a neutral initials badge.
 
 Provider access does not establish logo rights. Production uses neutral badges
-until rights are confirmed. Remote images require HTTPS, an allowlisted host,
-fixed dimensions, preserved aspect ratio, a loading placeholder, an error
-fallback, and an accessible team-name label. TheSportsDB image URLs are
-internal-test-only and require attribution.
+until rights are confirmed. API-Sports presentation defaults to
+`allowRemoteLogos=false`. Enabling remote marks requires a server-reviewed date
+and exact host/query-parameter allowlists; provider normalization strips URLs
+that do not match, and Flutter independently requires a matching provider,
+HTTPS, the exact host, permitted query keys, and the permanent ESPN denylist.
+Remote images also require fixed dimensions, preserved aspect ratio, a loading
+placeholder, an error fallback, and an accessible team-name label.
+TheSportsDB image URLs are internal-test-only and require attribution.
 
 ## Required connected validation
 
@@ -172,3 +255,9 @@ disabled and enabled.
 
 The emulator proof does not authorize a public test provider or replace a
 Hosting preview smoke test.
+
+The live-catalog changes are a new candidate, not part of the previously dated
+release evidence. Sanitized API-Sports fixtures, typed response parsing, query
+bounds, separate draft/catalog state, selective secret binding, provider
+policy, logo fallback, Functions integration, and the browser lifecycle must
+all pass on the final reviewed tree before a release claim is made.

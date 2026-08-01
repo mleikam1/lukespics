@@ -52,6 +52,16 @@ function assertLocalTarget() {
     "The internal schedule adapter must be explicitly enabled.",
   );
   assert.equal(
+    process.env.USE_SANITIZED_MLB_FIXTURE,
+    "true",
+    "The sanitized MLB fixture must be explicitly enabled.",
+  );
+  assert.equal(
+    process.env.ALLOW_API_SPORTS_PROVIDER,
+    "false",
+    "The browser fixture must keep the production provider disabled.",
+  );
+  assert.equal(
     new URL(BASE_URL).hostname,
     "127.0.0.1",
     "The browser target must remain on loopback.",
@@ -565,44 +575,146 @@ async function rawCallable(name, token, data) {
   return {status: response.status, body};
 }
 
-async function saveThreeRemoveOneAndPublish(owner, adminDb, leagueId, weekId) {
+function catalogFilter(page, label) {
+  return page
+    .getByRole("checkbox", {name: label, exact: true})
+    .or(page.getByRole("radio", {name: label, exact: true}))
+    .or(page.getByRole("button", {name: label, exact: true}))
+    .or(page.getByText(label, {exact: true}))
+    .first();
+}
+
+async function selectCatalogFilter(page, label) {
+  const filter = catalogFilter(page, label);
+  await filter.waitFor({state: "attached", timeout: PROVIDER_TIMEOUT_MS});
+  const responsePromise = callableResponse(
+    page,
+    "listSportsCatalog",
+    PROVIDER_TIMEOUT_MS,
+  );
+  await filter.click({force: true});
+  const result = await parseCallable(await responsePromise);
+  await expectText(page, label, PROVIDER_TIMEOUT_MS);
+  return result;
+}
+
+function catalogGameToggle(page, action, game) {
+  return page.getByLabel(
+    `${action} ${game.awayTeam.name} at ${game.homeTeam.name}`,
+    {exact: true},
+  ).first();
+}
+
+async function buildCrossQueryDraftAndPublishOne(
+  owner,
+  adminDb,
+  leagueId,
+  weekId,
+) {
   await navigate(owner.page, "Draft slate", "Build the Week 1 slate");
-  await expectText(owner.page, "Internal test · TheSportsDB", PROVIDER_TIMEOUT_MS);
-  const providerConfiguration = await adminDb
-    .doc("systemConfig/theSportsDbTestCatalog")
-    .get();
-  assert.equal(
-    providerConfiguration.data()?.attribution?.text,
-    "Sports data and artwork from TheSportsDB",
-  );
-  assert.equal(
-    providerConfiguration.data()?.attribution?.url,
-    "https://www.thesportsdb.com",
-  );
-  const include = owner.page.getByRole("checkbox", {name: /^Include /});
-  await waitUntil(
-    "at least three selectable catalog games",
-    async () => (await include.count()) >= 3,
+  await expectText(
+    owner.page,
+    "Emulator fixture schedule",
     PROVIDER_TIMEOUT_MS,
   );
 
-  for (let index = 0; index < 3; index += 1) {
-    await include.first().click();
-    const selectedCount = index + 1;
-    await expectText(
-      owner.page,
-      new RegExp(`${selectedCount} games? selected`),
-    );
-  }
-  await expectText(owner.page, /3 games selected/);
-  await button(owner.page, "Save draft").click();
-  await expectText(owner.page, /3 games selected · Draft saved/);
+  const configuredLeague = await adminDb.doc(`leagues/${leagueId}`).get();
+  assert.equal(configuredLeague.data()?.settings?.providerName, "mock");
+  assert.deepEqual(configuredLeague.data()?.settings?.enabledSports, [
+    "baseball",
+  ]);
+  assert.deepEqual(configuredLeague.data()?.settings?.enabledLeagues, ["mlb"]);
 
-  const remove = owner.page.getByRole("checkbox", {name: /^Remove /});
-  await remove.first().click();
-  await expectText(owner.page, /2 games selected · Not saved/);
+  const baseball = await selectCatalogFilter(owner.page, "Baseball");
+  assert.equal(baseball.effectiveQuery?.sportCode, "baseball");
+  assert.ok(
+    baseball.sports?.some(
+      (sport) => sport.code === "baseball" && sport.displayName === "Baseball",
+    ),
+    "The catalog did not advertise the configured Baseball sport.",
+  );
+
+  const mlb = await selectCatalogFilter(owner.page, "MLB");
+  assert.equal(mlb.effectiveQuery?.sportCode, "baseball");
+  assert.equal(mlb.effectiveQuery?.leagueCode, "mlb");
+  assert.equal(mlb.effectiveQuery?.providerLeagueId, "synthetic-mlb-fixture");
+  assert.ok(
+    mlb.leagues?.some(
+      (league) =>
+        league.code === "mlb" &&
+        league.displayName === "MLB" &&
+        league.sportCode === "baseball",
+    ),
+    "The catalog did not advertise the configured MLB league.",
+  );
+
+  const tomorrow = await selectCatalogFilter(owner.page, "Tomorrow");
+  assert.equal(tomorrow.effectiveQuery?.sportCode, "baseball");
+  assert.equal(tomorrow.effectiveQuery?.leagueCode, "mlb");
+  assert.equal(tomorrow.effectiveQuery?.dateMode, "tomorrow");
+  assert.ok(
+    tomorrow.games?.length >= 2,
+    "The sanitized Tomorrow fixture did not return two MLB games.",
+  );
+  const tomorrowSelections = tomorrow.games.slice(0, 2);
+
+  for (const game of tomorrowSelections) {
+    const include = catalogGameToggle(owner.page, "Include", game);
+    await include.waitFor({state: "attached", timeout: PROVIDER_TIMEOUT_MS});
+    await include.click({force: true});
+  }
+  await expectText(
+    owner.page,
+    /2 games selected.*2 unsaved changes/,
+  );
+
+  const later = await selectCatalogFilter(owner.page, "Later");
+  assert.equal(later.effectiveQuery?.sportCode, "baseball");
+  assert.equal(later.effectiveQuery?.leagueCode, "mlb");
+  assert.equal(later.effectiveQuery?.dateMode, "later");
+  assert.ok(
+    later.games?.length >= 1,
+    "The sanitized Later fixture did not return an MLB game.",
+  );
+  const laterSelection = later.games[0];
+  const includeLater = catalogGameToggle(
+    owner.page,
+    "Include",
+    laterSelection,
+  );
+  await includeLater.waitFor({state: "attached", timeout: PROVIDER_TIMEOUT_MS});
+  await includeLater.click({force: true});
+  await expectText(
+    owner.page,
+    /3 games selected.*3 unsaved changes/,
+  );
+
+  const tomorrowAgain = await selectCatalogFilter(owner.page, "Tomorrow");
+  assert.equal(tomorrowAgain.effectiveQuery?.dateMode, "tomorrow");
+  const retainedTomorrowToggles = tomorrowSelections.map((game) =>
+    catalogGameToggle(owner.page, "Remove", game),
+  );
+  for (const retained of retainedTomorrowToggles) {
+    await retained.waitFor({state: "attached", timeout: PROVIDER_TIMEOUT_MS});
+  }
+  assert.match(
+    await owner.page.locator("flt-semantics-host").innerText(),
+    /3 games selected.*3 unsaved changes/s,
+    "Cross-query selections were not retained after returning to Tomorrow.",
+  );
+  await retainedTomorrowToggles[0].click({force: true});
+  await expectText(
+    owner.page,
+    /2 games selected.*2 unsaved changes/,
+  );
+  const saveDraftResponsePromise = callableResponse(
+    owner.page,
+    "saveDraftSlate",
+  );
   await button(owner.page, "Save draft").click();
-  await expectText(owner.page, /2 games selected · Draft saved/);
+  const savedDraft = await parseCallable(await saveDraftResponsePromise);
+  assert.equal(savedDraft.selectedGameCount, 2);
+  await expectText(owner.page, /2 games selected.*Draft saved/);
 
   await waitUntil("exact two-game server draft", async () => {
     const snapshot = await adminDb
@@ -611,29 +723,67 @@ async function saveThreeRemoveOneAndPublish(owner, adminDb, leagueId, weekId) {
     return snapshot.size === 2;
   });
 
+  await owner.page.reload({waitUntil: "domcontentloaded"});
+  await enableFlutterSemantics(owner.page);
+  await expectDashboard(owner.page, PROVIDER_TIMEOUT_MS);
+  await navigate(owner.page, "Draft slate", "Build the Week 1 slate");
+  await expectText(
+    owner.page,
+    "Emulator fixture schedule",
+    PROVIDER_TIMEOUT_MS,
+  );
+  await expectText(owner.page, /2 games selected.*Draft saved/);
+
   await button(owner.page, "Review slate").click();
   await expectText(owner.page, "Review and publish");
+  const reviewRemovals = owner.page.getByRole("button", {name: /^Remove /});
+  await waitUntil(
+    "two removable review games",
+    async () => (await reviewRemovals.count()) === 2,
+  );
+  await reviewRemovals.first().click();
+  await expectText(owner.page, "1 selected");
+
   const publishResponsePromise = callableResponse(
     owner.page,
     "publishWeeklySlate",
   );
-  await button(owner.page, "Publish 2-game slate").click();
+  await button(owner.page, "Publish 1-game slate").click();
   await expectText(owner.page, "Publish Week 1?");
   await button(owner.page, "Publish slate").click();
   const published = await parseCallable(await publishResponsePromise);
-  assert.equal(published.selectedGameCount, 2);
+  assert.equal(published.selectedGameCount, 1);
   assert.equal(published.eligibleMemberCount, 2);
   await expectDashboard(owner.page);
+
+  const publishedWeek = await adminDb
+    .doc(`leagues/${leagueId}/weeks/${weekId}`)
+    .get();
+  assert.equal(publishedWeek.data()?.catalogProviderSnapshot, "mock");
+  assert.deepEqual(publishedWeek.data()?.catalogPresentationSnapshot, {
+    provider: "mock",
+    attributionText: null,
+    allowRemoteLogos: false,
+    allowedLogoHosts: [],
+    allowedLogoQueryParameters: [],
+    logoRightsReviewDate: null,
+  });
 
   const snapshot = await adminDb
     .collection(`leagues/${leagueId}/weeks/${weekId}/games`)
     .orderBy("scheduledAtUtc")
     .get();
-  assert.equal(snapshot.size, 2);
-  return snapshot.docs.map((document) => ({
-    id: document.id,
-    ...document.data(),
-  }));
+  assert.equal(snapshot.size, 1);
+  const publishedGame = {
+    id: snapshot.docs[0].id,
+    ...snapshot.docs[0].data(),
+  };
+  assert.equal(publishedGame.provider, "mock");
+  assert.equal(publishedGame.sportCode, "baseball");
+  assert.equal(publishedGame.leagueCode, "mlb");
+  assert.equal(publishedGame.providerLeagueId, "synthetic-mlb-fixture");
+  assert.match(publishedGame.venueName, /^Sanitized Ballpark /);
+  return publishedGame;
 }
 
 async function assertPrivatePickRules({
@@ -735,6 +885,37 @@ async function run() {
       ]);
       await expectDashboard(owner.page, PROVIDER_TIMEOUT_MS);
       assert.equal(week.pickerUid, owner.uid);
+
+      const leagueReference = adminDb.doc(`leagues/${league.leagueId}`);
+      const beforeFixtureConfiguration = await leagueReference.get();
+      const beforeSettings = beforeFixtureConfiguration.data()?.settings ?? {};
+      // Only the three catalog fields are merged into the emulator arena;
+      // ownership, picker, lock, scoring, and finalization settings stay as
+      // created by the real callable lifecycle.
+      await leagueReference.update({
+        "settings.providerName": "mock",
+        "settings.enabledSports": ["baseball"],
+        "settings.enabledLeagues": ["mlb"],
+      });
+      const afterFixtureConfiguration = await leagueReference.get();
+      const afterSettings = afterFixtureConfiguration.data()?.settings ?? {};
+      for (const [key, value] of Object.entries(beforeSettings)) {
+        if (["providerName", "enabledSports", "enabledLeagues"].includes(key)) {
+          continue;
+        }
+        assert.deepEqual(
+          afterSettings[key],
+          value,
+          `Fixture configuration unexpectedly changed settings.${key}.`,
+        );
+      }
+      assert.equal(afterSettings.providerName, "mock");
+      assert.deepEqual(afterSettings.enabledSports, ["baseball"]);
+      assert.deepEqual(afterSettings.enabledLeagues, ["mlb"]);
+
+      await owner.page.reload({waitUntil: "domcontentloaded"});
+      await enableFlutterSemantics(owner.page);
+      await expectDashboard(owner.page, PROVIDER_TIMEOUT_MS);
       return {...league, ...week};
     });
 
@@ -749,18 +930,17 @@ async function run() {
       await expectDashboard(memberB.page);
     });
 
-    const games = await step(
-      "catalog select/save/remove/save/review/publish",
+    const game = await step(
+      "cross-query MLB draft retention, reload, review removal, and publish",
       () =>
-        saveThreeRemoveOneAndPublish(
+        buildCrossQueryDraftAndPublishOne(
           owner,
           adminDb,
           arena.leagueId,
           arena.weekId,
         ),
     );
-    const [firstGame, secondGame] = games;
-    assert.ok(firstGame && secondGame);
+    assert.ok(game);
 
     await step("default picker exclusion and pre-lock privacy UI", async () => {
       await navigate(owner.page, "Make picks", "You’re this week’s picker.");
@@ -771,16 +951,26 @@ async function run() {
       );
     });
 
-    await step("members make and change browser picks", async () => {
+    await step("eligible members see exactly one game and make picks", async () => {
       await navigate(memberA.page, "Make picks", "Make your picks");
-      await clickPick(memberA.page, firstGame.awayTeam.name);
-      await clickPick(memberA.page, firstGame.homeTeam.name);
-      await clickPick(memberA.page, secondGame.awayTeam.name);
+      await expectText(memberA.page, /0 of 1 picks confirmed/);
+      assert.equal(
+        await memberA.page.getByRole("button", {name: /^Pick /}).count(),
+        2,
+        "Member A did not see exactly one two-team game.",
+      );
+      await clickPick(memberA.page, game.awayTeam.name);
+      await clickPick(memberA.page, game.homeTeam.name);
       await expectText(memberA.page, "Your entry is complete");
 
       await navigate(memberB.page, "Make picks", "Make your picks");
-      await clickPick(memberB.page, firstGame.awayTeam.name);
-      await clickPick(memberB.page, secondGame.homeTeam.name);
+      await expectText(memberB.page, /0 of 1 picks confirmed/);
+      assert.equal(
+        await memberB.page.getByRole("button", {name: /^Pick /}).count(),
+        2,
+        "Member B did not see exactly one two-team game.",
+      );
+      await clickPick(memberB.page, game.awayTeam.name);
       await expectText(memberB.page, "Your entry is complete");
     });
 
@@ -791,19 +981,16 @@ async function run() {
         memberB,
         leagueId: arena.leagueId,
         weekId: arena.weekId,
-        gameId: firstGame.id,
+        gameId: game.id,
       }),
     );
 
-    const firstGameReference = adminDb.doc(
-      `leagues/${arena.leagueId}/weeks/${arena.weekId}/games/${firstGame.id}`,
-    );
-    const secondGameReference = adminDb.doc(
-      `leagues/${arena.leagueId}/weeks/${arena.weekId}/games/${secondGame.id}`,
+    const gameReference = adminDb.doc(
+      `leagues/${arena.leagueId}/weeks/${arena.weekId}/games/${game.id}`,
     );
 
-    await step("server lock rejects late pick while later game stays open", async () => {
-      await firstGameReference.update({
+    await step("server lock rejects a late pick and preserves the accepted choice", async () => {
+      await gameReference.update({
         effectiveLockAtUtc: Timestamp.fromMillis(Date.now() - 60_000),
       });
       const late = await rawCallable(
@@ -815,8 +1002,8 @@ async function run() {
           weekId: arena.weekId,
           picks: [
             {
-              gameId: firstGame.id,
-              selectedTeamId: firstGame.awayTeam.id,
+              gameId: game.id,
+              selectedTeamId: game.awayTeam.id,
             },
           ],
         },
@@ -829,20 +1016,16 @@ async function run() {
       await enableFlutterSemantics(memberA.page);
       await expectDashboard(memberA.page);
       await navigate(memberA.page, "Make picks", "Make your picks");
-      await expectLockedPick(memberA.page, firstGame.awayTeam.name);
-      await clickPick(memberA.page, secondGame.homeTeam.name);
+      await expectLockedPick(memberA.page, game.awayTeam.name);
       await expectText(memberA.page, "Your entry is complete");
-      const persisted = await firstGameReference.parent.parent
+      const persisted = await gameReference.parent.parent
         .collection(`entries/${memberA.uid}/picks`)
-        .doc(firstGame.id)
+        .doc(game.id)
         .get();
-      assert.equal(persisted.data()?.selectedTeamId, firstGame.homeTeam.id);
+      assert.equal(persisted.data()?.selectedTeamId, game.homeTeam.id);
     });
 
-    await step("lock all games and reveal picks through commissioner UI", async () => {
-      await secondGameReference.update({
-        effectiveLockAtUtc: Timestamp.fromMillis(Date.now() - 60_000),
-      });
+    await step("reveal the locked picks through commissioner UI", async () => {
       await navigate(owner.page, "Admin review", "Review and finalize Week 1");
       const revealResponsePromise = callableResponse(
         owner.page,
@@ -850,13 +1033,12 @@ async function run() {
       );
       await button(owner.page, "Process locked pick reveals").click();
       const revealed = await parseCallable(await revealResponsePromise);
-      assert.equal(revealed.revealedGameCount, 2);
-      assert.equal(revealed.revealsByGame[firstGame.id].length, 2);
-      assert.equal(revealed.revealsByGame[secondGame.id].length, 2);
+      assert.equal(revealed.revealedGameCount, 1);
+      assert.equal(revealed.revealsByGame[game.id].length, 2);
 
       const revealPath =
         `leagues/${arena.leagueId}/weeks/${arena.weekId}/reveals/` +
-        `${firstGame.id}/picks/${memberA.uid}`;
+        `${game.id}/picks/${memberA.uid}`;
       const publicReveal = await firestoreGet(revealPath, owner.token);
       assert.equal(
         publicReveal.status,
@@ -881,11 +1063,6 @@ async function run() {
         owner,
         0,
         "Browser E2E verified this game as void.",
-      );
-      await overrideAsVoid(
-        owner,
-        1,
-        "Browser E2E verified the second game as void.",
       );
       await expectText(owner.page, "Ready to finalize");
 
@@ -964,7 +1141,7 @@ async function run() {
       await navigate(memberA.page, "Draft slate", "Build the Week 2 slate");
       await expectText(
         memberA.page,
-        "Internal test · TheSportsDB",
+        "Emulator fixture schedule",
         PROVIDER_TIMEOUT_MS,
       );
       const include = memberA.page.getByRole("checkbox", {name: /^Include /});
@@ -974,9 +1151,15 @@ async function run() {
         PROVIDER_TIMEOUT_MS,
       );
       await include.first().click();
-      await expectText(memberA.page, /1 game selected · Not saved/);
+      await expectText(memberA.page, /1 game selected.*1 unsaved change/);
+      const saveDraftResponsePromise = callableResponse(
+        memberA.page,
+        "saveDraftSlate",
+      );
       await button(memberA.page, "Save draft").click();
-      await expectText(memberA.page, /1 game selected · Draft saved/);
+      const savedDraft = await parseCallable(await saveDraftResponsePromise);
+      assert.equal(savedDraft.selectedGameCount, 1);
+      await expectText(memberA.page, /1 game selected.*Draft saved/);
       await button(memberA.page, "Review slate").click();
       await expectText(memberA.page, "Review and publish");
 
@@ -1030,9 +1213,10 @@ async function run() {
 
     console.log(
       "\n[E2E] PASS connected browser lifecycle: 3 isolated users, " +
-        "create/join/catalog/draft removal/publish/picks/privacy/lock/" +
-        "late rejection/reveal/manual result/finalize/standings/rotation/" +
-        "next week/picker participation.",
+        "create/join/MLB filters/cross-query draft retention/reload/review " +
+        "removal/single-game publish/picks/privacy/lock/late rejection/" +
+        "reveal/manual result/finalize/standings/rotation/next week/" +
+        "picker participation.",
     );
   } catch (error) {
     const pages = [owner, memberA, memberB].filter(Boolean);

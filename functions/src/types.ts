@@ -38,6 +38,7 @@ export type NormalizedGame = {
   id: string;
   provider: string;
   providerGameId: string;
+  providerLeagueId: string;
   sportCode: string;
   leagueCode: string;
   leagueName: string;
@@ -89,11 +90,41 @@ export type ProviderLeague = {
 export type ProviderQuery = {
   sportCode: string;
   leagueCode: string;
-  leagueId: string;
+  providerLeagueId: string;
   season: string;
   from: string;
   to: string;
+  timezone: string;
   forceRefresh?: boolean;
+};
+
+export type CatalogQueryRequest = Omit<
+  ProviderQuery,
+  | "sportCode"
+  | "leagueCode"
+  | "providerLeagueId"
+  | "season"
+  | "from"
+  | "to"
+  | "timezone"
+> & {
+  sportCode?: string;
+  leagueCode?: string;
+  providerLeagueId?: string;
+  season?: string;
+  from?: string;
+  to?: string;
+  timezone?: string;
+  dateMode?: "today" | "tomorrow" | "later" | "allDates" | "custom";
+};
+
+export type CatalogPresentation = {
+  provider: string;
+  attributionText: string | null;
+  allowRemoteLogos: boolean;
+  allowedLogoHosts: string[];
+  allowedLogoQueryParameters: string[];
+  logoRightsReviewDate: string | null;
 };
 
 export type ProviderHealth = {
@@ -106,6 +137,7 @@ export type ProviderHealth = {
 
 export type SportsDataProvider = {
   readonly name: string;
+  readonly presentation: CatalogPresentation;
   listSupportedSports(): Promise<string[]>;
   listLeagues(sportCode?: string): Promise<ProviderLeague[]>;
   listGames(query: ProviderQuery): Promise<NormalizedGame[]>;

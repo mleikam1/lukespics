@@ -1,3 +1,4 @@
+import {randomUUID} from "node:crypto";
 import {
   FieldValue,
   Timestamp,
@@ -5,7 +6,7 @@ import {
   type QueryDocumentSnapshot,
 } from "firebase-admin/firestore";
 import {HttpsError} from "firebase-functions/v2/https";
-import {writeAudit} from "../audit.js";
+import {writeAuditInTransaction} from "../audit.js";
 import {db} from "../config.js";
 import type {EntryScore, StandingAggregate} from "../types.js";
 import {commitWritesInChunks} from "../utils.js";
@@ -377,169 +378,492 @@ function standingsRank(
   return ranks;
 }
 
-export async function rebuildLeagueStandings(
+type StandingsFinalizationGuard = {
+  reference: FirebaseFirestore.DocumentReference;
+  claimId: string;
+  resultVersion: number;
+};
+
+type StandingsRebuildTestHooks = {
+  beforeCommit?: () => Promise<void>;
+};
+
+export async function rebuildLeagueStandingsAsNewGeneration(
   leagueId: string,
 ): Promise<StandingAggregate[]> {
+  await db.collection("leagues").doc(leagueId).update({
+    standingsEpoch: FieldValue.increment(1),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  return rebuildLeagueStandings(leagueId);
+}
+
+export async function rebuildLeagueStandings(
+  leagueId: string,
+  finalizationGuard?: StandingsFinalizationGuard,
+  hooks: StandingsRebuildTestHooks = {},
+): Promise<StandingAggregate[]> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const rebuilt = await rebuildLeagueStandingsAtCurrentEpoch(
+      leagueId,
+      finalizationGuard,
+      hooks,
+    );
+    if (rebuilt !== null) return rebuilt;
+  }
+  throw new HttpsError(
+    "aborted",
+    "Standings changed repeatedly while they were rebuilding. Try again.",
+  );
+}
+
+async function rebuildLeagueStandingsAtCurrentEpoch(
+  leagueId: string,
+  finalizationGuard: StandingsFinalizationGuard | undefined,
+  hooks: StandingsRebuildTestHooks,
+): Promise<StandingAggregate[] | null> {
   const leagueReference = db.collection("leagues").doc(leagueId);
+  // Read the epoch before any aggregate input. Finalize and reopen update the
+  // week status and increment this epoch in the same transaction. Every write
+  // below rechecks it, so a cross-week change forces a clean restart.
+  const leagueSnapshot = await leagueReference.get();
+  if (!leagueSnapshot.exists) {
+    throw new HttpsError("not-found", "Arena not found.");
+  }
+  const standingsEpoch = Number(leagueSnapshot.data()?.standingsEpoch ?? 0);
   const [weeksSnapshot, membersSnapshot, existingSnapshot] = await Promise.all([
     leagueReference.collection("weeks").where("status", "==", "finalized").get(),
     leagueReference.collection("members").get(),
     leagueReference.collection("standings").get(),
   ]);
-  const aggregates = new Map<string, StandingAggregate>();
-  for (const member of membersSnapshot.docs) {
-    aggregates.set(member.id, emptyAggregate(member.id));
-  }
-
-  let latestWeekId: string | null = null;
-  let latestFinalizedAt = 0;
+  const finalizedWeeks: Array<{
+    id: string;
+    data: DocumentData;
+    finalizedAtMillis: number;
+    sequentialNumber: number;
+    entries: Array<{uid: string; data: DocumentData}>;
+  }> = [];
   for (const week of weeksSnapshot.docs) {
     const entries = await week.ref.collection("entries").get();
-    for (const entry of entries.docs) {
-      const aggregate =
-        aggregates.get(entry.id) ?? emptyAggregate(entry.id);
-      aggregateEntry(aggregate, entry.data(), week.data());
-      aggregates.set(entry.id, aggregate);
-    }
-    const finalizedAt = week.data().finalizedAt;
-    const millis =
+    const data = week.data();
+    const finalizedAt = data.finalizedAt;
+    const finalizedAtMillis =
       finalizedAt instanceof Timestamp ? finalizedAt.toMillis() : 0;
-    if (millis >= latestFinalizedAt) {
-      latestFinalizedAt = millis;
-      latestWeekId = week.id;
+    finalizedWeeks.push({
+      id: week.id,
+      data,
+      finalizedAtMillis,
+      sequentialNumber: Number(data.sequentialNumber ?? 0),
+      entries: entries.docs.map((entry) => ({
+        uid: entry.id,
+        data: entry.data(),
+      })),
+    });
+  }
+  const orderedFinalizedWeeks = [...finalizedWeeks].sort((left, right) =>
+    left.finalizedAtMillis !== right.finalizedAtMillis
+      ? left.finalizedAtMillis - right.finalizedAtMillis
+      : left.sequentialNumber !== right.sequentialNumber
+        ? left.sequentialNumber - right.sequentialNumber
+        : left.id.localeCompare(right.id),
+  );
+  const latestWeekId = orderedFinalizedWeeks.at(-1)?.id ?? null;
+  const aggregateWeeks = (
+    weeks: typeof finalizedWeeks,
+  ): Map<string, StandingAggregate> => {
+    const aggregates = new Map<string, StandingAggregate>();
+    for (const member of membersSnapshot.docs) {
+      aggregates.set(member.id, emptyAggregate(member.id));
     }
-  }
-
-  for (const aggregate of aggregates.values()) {
-    aggregate.overallAccuracy =
-      aggregate.totalGraded === 0
-        ? null
-        : aggregate.totalCorrect / aggregate.totalGraded;
-  }
+    for (const week of weeks) {
+      for (const entry of week.entries) {
+        const aggregate =
+          aggregates.get(entry.uid) ?? emptyAggregate(entry.uid);
+        aggregateEntry(aggregate, entry.data, week.data);
+        aggregates.set(entry.uid, aggregate);
+      }
+    }
+    for (const aggregate of aggregates.values()) {
+      aggregate.overallAccuracy =
+        aggregate.totalGraded === 0
+          ? null
+          : aggregate.totalCorrect / aggregate.totalGraded;
+    }
+    return aggregates;
+  };
+  const aggregates = aggregateWeeks(finalizedWeeks);
   const values = [...aggregates.values()];
   const ranks = standingsRank(values);
-  const oldRanks = new Map(
-    existingSnapshot.docs.map((standing) => [
-      standing.id,
-      {
-        currentRank:
-          typeof standing.data().currentRank === "number"
-            ? standing.data().currentRank as number
-            : null,
-        previousRank:
-          typeof standing.data().previousRank === "number"
-            ? standing.data().previousRank as number
-            : null,
-        lastFinalizedWeekId:
-          typeof standing.data().lastFinalizedWeekId === "string"
-            ? standing.data().lastFinalizedWeekId as string
-            : null,
-      },
-    ]),
-  );
-  await commitWritesInChunks(db, values, (batch, aggregate) => {
-    const previous = oldRanks.get(aggregate.uid);
-    batch.set(
-      leagueReference.collection("standings").doc(aggregate.uid),
-      {
+  const previousWeeks = latestWeekId === null
+    ? []
+    : finalizedWeeks.filter((week) => week.id !== latestWeekId);
+  const previousRanks = previousWeeks.length === 0
+    ? null
+    : standingsRank([...aggregateWeeks(previousWeeks).values()]);
+  const standingWrites = values.map((aggregate) => {
+    return {
+      reference: leagueReference.collection("standings").doc(aggregate.uid),
+      data: {
         ...aggregate,
         currentRank: ranks.get(aggregate.uid) ?? null,
-        previousRank:
-          previous?.lastFinalizedWeekId === latestWeekId
-            ? previous.previousRank
-            : previous?.currentRank ?? null,
+        previousRank: previousRanks?.get(aggregate.uid) ?? null,
         lastFinalizedWeekId: latestWeekId,
+        standingsEpoch,
         updatedAt: FieldValue.serverTimestamp(),
         calculationVersion: 1,
       },
-      {merge: false},
-    );
+    };
   });
+  const currentStandingUids = new Set(values.map((aggregate) => aggregate.uid));
+  const standingOperations: Array<
+    | {
+      kind: "set";
+      reference: FirebaseFirestore.DocumentReference;
+      data: DocumentData;
+    }
+    | {
+      kind: "delete";
+      reference: FirebaseFirestore.DocumentReference;
+    }
+  > = [
+    ...standingWrites.map((standing) => ({
+      kind: "set" as const,
+      reference: standing.reference,
+      data: standing.data,
+    })),
+    ...existingSnapshot.docs
+      .filter((standing) => !currentStandingUids.has(standing.id))
+      .map((standing) => ({
+        kind: "delete" as const,
+        reference: standing.ref,
+      })),
+  ];
+  await hooks.beforeCommit?.();
+  for (let index = 0; index < standingOperations.length; index += 350) {
+    const chunk = standingOperations.slice(index, index + 350);
+    const committed = await db.runTransaction(async (transaction) => {
+      const [currentLeague, guardedWeek] = await Promise.all([
+        transaction.get(leagueReference),
+        finalizationGuard === undefined
+          ? Promise.resolve(null)
+          : transaction.get(finalizationGuard.reference),
+      ]);
+      if (finalizationGuard !== undefined) {
+        assertFinalizationFollowUpClaim(
+          guardedWeek?.data(),
+          finalizationGuard.claimId,
+          finalizationGuard.resultVersion,
+        );
+      }
+      if (
+        Number(currentLeague.data()?.standingsEpoch ?? 0) !== standingsEpoch
+      ) {
+        return false;
+      }
+      for (const standing of chunk) {
+        if (standing.kind === "set") {
+          transaction.set(standing.reference, standing.data, {merge: false});
+        } else {
+          transaction.delete(standing.reference);
+        }
+      }
+      if (finalizationGuard !== undefined) {
+        transaction.update(finalizationGuard.reference, {
+          finalizationFollowUpsHeartbeatAt: FieldValue.serverTimestamp(),
+        });
+      }
+      return true;
+    });
+    if (!committed) return null;
+  }
+
+  const completed = await db.runTransaction(async (transaction) => {
+    const [currentLeague, guardedWeek] = await Promise.all([
+      transaction.get(leagueReference),
+      finalizationGuard === undefined
+        ? Promise.resolve(null)
+        : transaction.get(finalizationGuard.reference),
+    ]);
+    if (finalizationGuard !== undefined) {
+      assertFinalizationFollowUpClaim(
+        guardedWeek?.data(),
+        finalizationGuard.claimId,
+        finalizationGuard.resultVersion,
+      );
+    }
+    if (
+      Number(currentLeague.data()?.standingsEpoch ?? 0) !== standingsEpoch
+    ) {
+      return false;
+    }
+    transaction.update(leagueReference, {
+      standingsBuiltEpoch: standingsEpoch,
+      standingsBuiltMemberCount: standingWrites.length,
+      standingsBuiltAt: FieldValue.serverTimestamp(),
+    });
+    if (finalizationGuard !== undefined) {
+      transaction.update(finalizationGuard.reference, {
+        finalizationFollowUpsHeartbeatAt: FieldValue.serverTimestamp(),
+      });
+    }
+    return true;
+  });
+  if (!completed) return null;
   return values;
 }
 
-async function completeFinalizationFollowUps(input: {
+const FINALIZATION_FOLLOW_UP_CLAIM_TTL_MS = 5 * 60_000;
+
+export function finalizationFollowUpClaimIsActive(
+  data: DocumentData,
+  now = Date.now(),
+): boolean {
+  const heartbeat =
+    data.finalizationFollowUpsHeartbeatAt instanceof Timestamp
+      ? data.finalizationFollowUpsHeartbeatAt
+      : data.finalizationFollowUpsStartedAt;
+  return (
+    typeof data.finalizationFollowUpsClaimId === "string" &&
+    heartbeat instanceof Timestamp &&
+    heartbeat.toMillis() > now - FINALIZATION_FOLLOW_UP_CLAIM_TTL_MS
+  );
+}
+
+function assertFinalizationFollowUpClaim(
+  data: DocumentData | undefined,
+  claimId: string,
+  resultVersion: number,
+): asserts data is DocumentData {
+  if (
+    data?.status !== "finalized" ||
+    data.finalizationFollowUpsClaimId !== claimId ||
+    Number(data.resultVersion ?? 0) !== resultVersion
+  ) {
+    throw new HttpsError(
+      "aborted",
+      "Week state changed while finalization follow-ups completed.",
+    );
+  }
+}
+
+async function heartbeatFinalizationFollowUpClaim(
+  reference: FirebaseFirestore.DocumentReference,
+  claimId: string,
+  resultVersion: number,
+): Promise<void> {
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    assertFinalizationFollowUpClaim(
+      snapshot.data(),
+      claimId,
+      resultVersion,
+    );
+    transaction.update(reference, {
+      finalizationFollowUpsHeartbeatAt: FieldValue.serverTimestamp(),
+    });
+  });
+}
+
+async function releaseFinalizationFollowUpClaim(
+  reference: FirebaseFirestore.DocumentReference,
+  claimId: string,
+): Promise<void> {
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    if (snapshot.data()?.finalizationFollowUpsClaimId !== claimId) return;
+    transaction.update(reference, {
+      finalizationFollowUpsRequestId: FieldValue.delete(),
+      finalizationFollowUpsClaimId: FieldValue.delete(),
+      finalizationFollowUpsStartedAt: FieldValue.delete(),
+      finalizationFollowUpsHeartbeatAt: FieldValue.delete(),
+    });
+  });
+}
+
+type FinalizedWeekResponse = {
+  winnerUids: string[];
+  highScore: number | null;
+  nextPickerUid: string | null;
+};
+
+function finalizedWeekResponse(
+  data: DocumentData,
+  nextPickerUid: string | null,
+): FinalizedWeekResponse {
+  return {
+    winnerUids: Array.isArray(data.winnerUids)
+      ? data.winnerUids.filter(
+          (uid: unknown): uid is string => typeof uid === "string",
+        )
+      : [],
+    highScore:
+      typeof data.highScore === "number" ? data.highScore : null,
+    nextPickerUid,
+  };
+}
+
+type FinalizationFollowUpTestHooks = {
+  afterClaim?: (claimId: string) => Promise<void>;
+  beforeStandingsCommit?: (claimId: string) => Promise<void>;
+};
+
+export async function repairFinalizedWeekFollowUps(input: {
   leagueId: string;
   weekId: string;
   requestId: string;
   actorUid: string;
-  data: DocumentData;
-}): Promise<string | null> {
-  if (input.data.status !== "finalized") {
-    throw new HttpsError(
-      "aborted",
-      "Week state changed before finalization completed.",
-    );
-  }
-  const resultVersion =
-    typeof input.data.resultVersion === "number"
-      ? input.data.resultVersion
-      : 0;
-  if (
-    input.data.finalizationFollowUpsCompletedAt instanceof Timestamp &&
-    input.data.finalizationFollowUpsResultVersion === resultVersion
-  ) {
-    return typeof input.data.nextPickerUid === "string"
-      ? input.data.nextPickerUid
-      : null;
-  }
-
-  const winnerUids = Array.isArray(input.data.winnerUids)
-    ? input.data.winnerUids.filter(
-        (uid: unknown): uid is string => typeof uid === "string",
-      )
-    : [];
-  const highScore =
-    typeof input.data.highScore === "number" ? input.data.highScore : null;
-  const finalizedRequestId =
-    typeof input.data.finalizedRequestId === "string"
-      ? input.data.finalizedRequestId
-      : input.requestId;
-  const finalizedBy =
-    typeof input.data.finalizedBy === "string"
-      ? input.data.finalizedBy
-      : input.actorUid;
-
-  // These operations are deliberately ordered and individually idempotent.
-  // The completion marker is written last, so retrying a finalized week repairs
-  // any audit, standings, or rotation side effect interrupted by a prior run.
-  await writeAudit({
-    leagueId: input.leagueId,
-    eventType: "week_finalized",
-    actorUid: finalizedBy,
-    target: `weeks/${input.weekId}`,
-    requestId: finalizedRequestId,
-    after: {winnerUids, highScore},
-  });
-  await rebuildLeagueStandings(input.leagueId);
-  const nextPickerUid = await advanceRotationOnce(
-    input.leagueId,
-    input.weekId,
-  );
-  const weekReference = db
-    .collection("leagues")
-    .doc(input.leagueId)
+}, hooks: FinalizationFollowUpTestHooks = {}): Promise<FinalizedWeekResponse> {
+  const leagueReference = db.collection("leagues").doc(input.leagueId);
+  const weekReference = leagueReference
     .collection("weeks")
     .doc(input.weekId);
-  await db.runTransaction(async (transaction) => {
-    const current = await transaction.get(weekReference);
-    const data = current.data();
+  const claimId = randomUUID();
+  const claim = await db.runTransaction(async (transaction) => {
+    const [snapshot, leagueSnapshot] = await Promise.all([
+      transaction.get(weekReference),
+      transaction.get(leagueReference),
+    ]);
+    const data = snapshot.data();
+    if (data === undefined) {
+      throw new HttpsError("not-found", "Week not found.");
+    }
+    const league = leagueSnapshot.data();
+    if (league === undefined) {
+      throw new HttpsError("not-found", "Arena not found.");
+    }
+    if (data.status !== "finalized") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Finalization follow-ups can only repair a finalized week.",
+      );
+    }
+    const resultVersion = Number(data.resultVersion ?? 0);
     if (
-      data?.status !== "finalized" ||
-      data.resultVersion !== resultVersion
+      data.finalizationFollowUpsCompletedAt instanceof Timestamp &&
+      data.finalizationFollowUpsResultVersion === resultVersion
     ) {
+      return {claimed: false as const, data, resultVersion};
+    }
+    if (finalizationFollowUpClaimIsActive(data)) {
       throw new HttpsError(
         "aborted",
-        "Week state changed while finalization follow-ups completed.",
+        "Finalization follow-ups are already running.",
       );
     }
     transaction.update(weekReference, {
-      finalizationFollowUpsCompletedAt: FieldValue.serverTimestamp(),
-      finalizationFollowUpsResultVersion: resultVersion,
-      updatedAt: FieldValue.serverTimestamp(),
+      finalizationFollowUpsRequestId: input.requestId,
+      finalizationFollowUpsClaimId: claimId,
+      finalizationFollowUpsStartedAt: FieldValue.serverTimestamp(),
+      finalizationFollowUpsHeartbeatAt: FieldValue.serverTimestamp(),
     });
+    // A freshly finalized week already dirtied the standings generation in
+    // its status transaction. Legacy/incomplete repairs can arrive with the
+    // published and current epochs still equal, so reserve a new generation
+    // atomically with the repair claim only in that case. A failed retry then
+    // inherits the outstanding generation instead of incrementing it again.
+    if (
+      Number(league.standingsBuiltEpoch ?? 0) ===
+      Number(league.standingsEpoch ?? 0)
+    ) {
+      transaction.update(leagueReference, {
+        standingsEpoch: FieldValue.increment(1),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+    return {claimed: true as const, data, resultVersion};
   });
-  return nextPickerUid;
+
+  if (!claim.claimed) {
+    const nextPickerUid = await advanceRotationOnce(
+      input.leagueId,
+      input.weekId,
+    );
+    return finalizedWeekResponse(claim.data, nextPickerUid);
+  }
+
+  const finalizedOutcome = finalizedWeekResponse(claim.data, null);
+  const {winnerUids, highScore} = finalizedOutcome;
+  const finalizedRequestId =
+    typeof claim.data.finalizedRequestId === "string"
+      ? claim.data.finalizedRequestId
+      : input.requestId;
+  const finalizedBy =
+    typeof claim.data.finalizedBy === "string"
+      ? claim.data.finalizedBy
+      : input.actorUid;
+
+  try {
+    await hooks.afterClaim?.(claimId);
+    // These operations are deliberately ordered and individually idempotent.
+    // The completion marker is written last, so retrying repairs an interrupted
+    // audit, standings rebuild, or rotation without ever re-finalizing a reopen.
+    await db.runTransaction(async (transaction) => {
+      const current = await transaction.get(weekReference);
+      assertFinalizationFollowUpClaim(
+        current.data(),
+        claimId,
+        claim.resultVersion,
+      );
+      transaction.update(weekReference, {
+        finalizationFollowUpsHeartbeatAt: FieldValue.serverTimestamp(),
+      });
+      writeAuditInTransaction(transaction, {
+        leagueId: input.leagueId,
+        eventType: "week_finalized",
+        actorUid: finalizedBy,
+        target: `weeks/${input.weekId}`,
+        requestId: finalizedRequestId,
+        after: {winnerUids, highScore},
+      });
+    });
+    await heartbeatFinalizationFollowUpClaim(
+      weekReference,
+      claimId,
+      claim.resultVersion,
+    );
+    await rebuildLeagueStandings(
+      input.leagueId,
+      {
+        reference: weekReference,
+        claimId,
+        resultVersion: claim.resultVersion,
+      },
+      {
+        beforeCommit: async () => {
+          await hooks.beforeStandingsCommit?.(claimId);
+        },
+      },
+    );
+    await heartbeatFinalizationFollowUpClaim(
+      weekReference,
+      claimId,
+      claim.resultVersion,
+    );
+    const nextPickerUid = await advanceRotationOnce(
+      input.leagueId,
+      input.weekId,
+    );
+    await db.runTransaction(async (transaction) => {
+      const current = await transaction.get(weekReference);
+      assertFinalizationFollowUpClaim(
+        current.data(),
+        claimId,
+        claim.resultVersion,
+      );
+      transaction.update(weekReference, {
+        finalizationFollowUpsCompletedAt: FieldValue.serverTimestamp(),
+        finalizationFollowUpsResultVersion: claim.resultVersion,
+        finalizationFollowUpsRequestId: FieldValue.delete(),
+        finalizationFollowUpsClaimId: FieldValue.delete(),
+        finalizationFollowUpsStartedAt: FieldValue.delete(),
+        finalizationFollowUpsHeartbeatAt: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+    return {winnerUids, highScore, nextPickerUid};
+  } finally {
+    await releaseFinalizationFollowUpClaim(weekReference, claimId);
+  }
 }
 
 export async function finalizeWeekAuthoritatively(input: {
@@ -552,42 +876,17 @@ export async function finalizeWeekAuthoritatively(input: {
   highScore: number | null;
   nextPickerUid: string | null;
 }> {
-  const weekReference = db
-    .collection("leagues")
-    .doc(input.leagueId)
+  const leagueReference = db.collection("leagues").doc(input.leagueId);
+  const weekReference = leagueReference
     .collection("weeks")
     .doc(input.weekId);
-  const finalizedResponse = async (
-    data: DocumentData,
-  ): Promise<{
-    winnerUids: string[];
-    highScore: number | null;
-    nextPickerUid: string | null;
-  }> => {
-    const nextPickerUid = await completeFinalizationFollowUps({
-      ...input,
-      data,
-    });
-    return {
-      winnerUids: Array.isArray(data.winnerUids)
-        ? data.winnerUids.filter(
-            (uid: unknown): uid is string => typeof uid === "string",
-          )
-        : [],
-      highScore:
-        typeof data.highScore === "number"
-          ? data.highScore
-          : null,
-      nextPickerUid,
-    };
-  };
   const initialWeek = await weekReference.get();
   const initialData = initialWeek.data();
   if (initialData === undefined) {
     throw new HttpsError("not-found", "Week not found.");
   }
   if (initialData.status === "finalized") {
-    return finalizedResponse(initialData);
+    return repairFinalizedWeekFollowUps(input);
   }
 
   const claim = await db.runTransaction(async (transaction) => {
@@ -656,8 +955,7 @@ export async function finalizeWeekAuthoritatively(input: {
   });
 
   if (!claim.claimed) {
-    const finalizedWeek = await weekReference.get();
-    return finalizedResponse(finalizedWeek.data() ?? {});
+    return repairFinalizedWeekFollowUps(input);
   }
 
   let result: Awaited<ReturnType<typeof gradeWeek>>;
@@ -752,9 +1050,17 @@ export async function finalizeWeekAuthoritatively(input: {
         finalizationStartedAt: FieldValue.delete(),
         finalizationFollowUpsCompletedAt: FieldValue.delete(),
         finalizationFollowUpsResultVersion: FieldValue.delete(),
+        finalizationFollowUpsRequestId: FieldValue.delete(),
+        finalizationFollowUpsClaimId: FieldValue.delete(),
+        finalizationFollowUpsStartedAt: FieldValue.delete(),
+        finalizationFollowUpsHeartbeatAt: FieldValue.delete(),
         winnerUids: result.winnerUids,
         highScore: result.highScore,
         resultVersion: FieldValue.increment(1),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      transaction.update(leagueReference, {
+        standingsEpoch: FieldValue.increment(1),
         updatedAt: FieldValue.serverTimestamp(),
       });
     });
@@ -771,8 +1077,7 @@ export async function finalizeWeekAuthoritatively(input: {
     throw error;
   }
 
-  const finalizedWeek = await weekReference.get();
-  return finalizedResponse(finalizedWeek.data() ?? {});
+  return repairFinalizedWeekFollowUps(input);
 }
 
 export async function advanceRotationOnce(
@@ -793,13 +1098,6 @@ export async function advanceRotationOnce(
       transaction.get(finalizedWeekReference),
       transaction.get(activeMembersQuery),
     ]);
-    const ordered = members.docs
-      .map((member) => ({
-        uid: member.id,
-        rotationOrder: Number(member.data().rotationOrder ?? 0),
-      }))
-      .sort((left, right) => left.rotationOrder - right.rotationOrder);
-    if (ordered.length === 0) return null;
     const league = leagueSnapshot.data();
     if (league === undefined) {
       throw new HttpsError("not-found", "Arena not found.");
@@ -808,34 +1106,77 @@ export async function advanceRotationOnce(
     if (finalizedWeekData === undefined) {
       throw new HttpsError("not-found", "Finalized week not found.");
     }
-    if (finalizedWeekData.rotationAdvancedAt instanceof Timestamp) {
-      return typeof finalizedWeekData.nextPickerUid === "string"
+    if (finalizedWeekData.status !== "finalized") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Rotation can only advance from a finalized week.",
+      );
+    }
+    const ordered = members.docs
+      .map((member) => {
+        const rawOrder = Number(member.data().rotationOrder ?? 0);
+        return {
+          uid: member.id,
+          rotationOrder: Number.isFinite(rawOrder) ? rawOrder : 0,
+        };
+      })
+      .sort((left, right) =>
+        left.rotationOrder === right.rotationOrder
+          ? left.uid.localeCompare(right.uid)
+          : left.rotationOrder - right.rotationOrder,
+      );
+    if (ordered.length === 0) return null;
+
+    const rotationAlreadyAdvanced =
+      finalizedWeekData.rotationAdvancedAt instanceof Timestamp;
+    const storedNextPickerUid =
+      typeof finalizedWeekData.nextPickerUid === "string"
         ? finalizedWeekData.nextPickerUid
         : null;
+    const isCurrentFinalizedWeek = league.currentWeekId === finalizedWeekId;
+    if (
+      rotationAlreadyAdvanced &&
+      (
+        !isCurrentFinalizedWeek ||
+        (
+          storedNextPickerUid !== null &&
+          ordered.some((member) => member.uid === storedNextPickerUid)
+        )
+      )
+    ) {
+      return storedNextPickerUid;
     }
+    // Once a later week exists, this finalized week's next-picker value is a
+    // historical snapshot. A retry may repair its standings/audit marker, but
+    // must never rewrite the current week's picker context.
+    if (!isCurrentFinalizedWeek) return storedNextPickerUid;
+
+    const weekPickerUid =
+      typeof finalizedWeekData.pickerUid === "string"
+        ? finalizedWeekData.pickerUid
+        : ordered[0]?.uid;
+    const currentIndex = ordered.findIndex(
+      (item) => item.uid === weekPickerUid,
+    );
+    let nextIndex = currentIndex < 0
+      ? 0
+      : (currentIndex + 1) % ordered.length;
 
     // Backfill the per-week idempotency marker for a week advanced by an older
     // deployment that only recorded the latest week on the league document.
-    if (league.rotationAdvancedForWeekId === finalizedWeekId) {
-      const existingNextPickerUid =
+    if (
+      !rotationAlreadyAdvanced &&
+      league.rotationAdvancedForWeekId === finalizedWeekId
+    ) {
+      const legacyNextPickerUid =
         typeof league.currentPickerUid === "string"
-        ? league.currentPickerUid
-        : null;
-      transaction.set(
-        finalizedWeekReference,
-        {
-          rotationAdvancedAt: FieldValue.serverTimestamp(),
-          nextPickerUid: existingNextPickerUid,
-        },
-        {merge: true},
+          ? league.currentPickerUid
+          : null;
+      const legacyNextIndex = ordered.findIndex(
+        (member) => member.uid === legacyNextPickerUid,
       );
-      return existingNextPickerUid;
+      if (legacyNextIndex >= 0) nextIndex = legacyNextIndex;
     }
-    const weekPickerUid = finalizedWeekData.pickerUid;
-    const currentUid =
-      typeof weekPickerUid === "string" ? weekPickerUid : ordered[0]?.uid;
-    const currentIndex = ordered.findIndex((item) => item.uid === currentUid);
-    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % ordered.length;
     const nextPickerUid = ordered[nextIndex]?.uid ?? null;
     transaction.update(leagueReference, {
       currentPickerUid: nextPickerUid,
@@ -846,7 +1187,9 @@ export async function advanceRotationOnce(
     transaction.set(
       finalizedWeekReference,
       {
-        rotationAdvancedAt: FieldValue.serverTimestamp(),
+        ...(rotationAlreadyAdvanced
+          ? {rotationRepairedAt: FieldValue.serverTimestamp()}
+          : {rotationAdvancedAt: FieldValue.serverTimestamp()}),
         nextPickerUid,
       },
       {merge: true},

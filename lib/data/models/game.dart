@@ -43,6 +43,7 @@ final class Game {
     required this.providerGameId,
     required this.sportCode,
     required this.leagueCode,
+    String? providerLeagueId,
     required this.leagueName,
     required this.season,
     required this.scheduledAtUtc,
@@ -55,6 +56,7 @@ final class Game {
     required this.lastSyncedAt,
     required this.resultVersion,
     required this.sourcePayloadHash,
+    this.resultVersionToken = '',
     this.weekOrRound,
     this.venueName,
     this.neutralSite = false,
@@ -65,13 +67,14 @@ final class Game {
     this.manualOverrideReason,
     this.manualOverrideBy,
     this.pickRevealCompletedAt,
-  });
+  }) : providerLeagueId = providerLeagueId ?? leagueCode;
 
   final String id;
   final String provider;
   final String providerGameId;
   final String sportCode;
   final String leagueCode;
+  final String providerLeagueId;
   final String leagueName;
   final String season;
   final String? weekOrRound;
@@ -92,6 +95,13 @@ final class Game {
   final String? manualOverrideReason;
   final String? manualOverrideBy;
   final int resultVersion;
+
+  /// The exact server-issued result version used by catalog trust checks.
+  ///
+  /// [resultVersion] remains the compact numeric value used by local scoring
+  /// comparisons; this token must travel with its own immutable game snapshot
+  /// so concurrent repository streams cannot pair versions from two snapshots.
+  final String resultVersionToken;
   final String sourcePayloadHash;
   final DateTime? pickRevealCompletedAt;
 
@@ -129,6 +139,7 @@ final class Game {
   }
 
   Game copyWith({
+    String? providerLeagueId,
     DateTime? scheduledAtUtc,
     DateTime? effectiveLockAtUtc,
     GameStatus? status,
@@ -141,6 +152,7 @@ final class Game {
     String? manualOverrideReason,
     String? manualOverrideBy,
     int? resultVersion,
+    String? resultVersionToken,
     String? sourcePayloadHash,
     DateTime? pickRevealCompletedAt,
   }) => Game(
@@ -149,6 +161,7 @@ final class Game {
     providerGameId: providerGameId,
     sportCode: sportCode,
     leagueCode: leagueCode,
+    providerLeagueId: providerLeagueId ?? this.providerLeagueId,
     leagueName: leagueName,
     season: season,
     weekOrRound: weekOrRound,
@@ -169,6 +182,7 @@ final class Game {
     manualOverrideReason: manualOverrideReason ?? this.manualOverrideReason,
     manualOverrideBy: manualOverrideBy ?? this.manualOverrideBy,
     resultVersion: resultVersion ?? this.resultVersion,
+    resultVersionToken: resultVersionToken ?? this.resultVersionToken,
     sourcePayloadHash: sourcePayloadHash ?? this.sourcePayloadHash,
     pickRevealCompletedAt: pickRevealCompletedAt ?? this.pickRevealCompletedAt,
   );

@@ -12,6 +12,7 @@ final class Standing {
     required this.weeklyTitles,
     required this.bestWeekPoints,
     required this.currentRank,
+    this.standingsEpoch = 0,
   });
 
   final String uid;
@@ -26,6 +27,7 @@ final class Standing {
   final int weeklyTitles;
   final int bestWeekPoints;
   final int currentRank;
+  final int standingsEpoch;
 
   double? get overallAccuracy =>
       totalGraded == 0 ? null : totalCorrect / totalGraded;

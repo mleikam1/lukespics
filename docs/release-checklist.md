@@ -3,7 +3,65 @@
 Checked items are verified preview/live release facts as of 2026-07-31.
 Unchecked handoff or production/store items remain pending or deferred and do
 not erase the passing connected-flow, authenticated-preview, and live
-unauthenticated-smoke evidence.
+unauthenticated-smoke evidence. Those checked facts describe the prior
+manual-provider artifact; they do not verify or deploy the current
+`codex/live-sports-catalog-and-slate` source candidate.
+
+## Live sports catalog candidate
+
+Implemented and directly testable in the current source:
+
+- [x] `listSportsCatalog` returns server-discovered sports and leagues,
+      canonical provider league/season metadata, games, cache/availability,
+      presentation policy, effective query, and active-week bounds
+- [x] Flutter keeps current query results, cross-query game cache, desired
+      draft selections, persisted draft IDs, and authoritative week games as
+      separate state
+- [x] Sport, league, and date changes issue a new catalog request without
+      dropping previously selected game objects
+- [x] Today, Tomorrow, Later, All dates, and custom windows use the arena
+      timezone, stay inside the active week, and cap at seven inclusive days
+- [x] `systemConfig/apiSportsCatalog` is parsed only on the server and owns
+      validated provider hosts, paths, league IDs, seasons, final statuses, and
+      presentation policy
+- [x] `API_SPORTS_KEY` is declared and bound only to
+      `listSportsCatalog`, `refreshSelectedGames`,
+      `syncSelectedGameResults`, and `scheduledResultSync`
+- [x] `ALLOW_API_SPORTS_PROVIDER` is a deploy-time boolean defaulting to false;
+      production also requires the exact `lukes-picks` runtime
+- [x] Remote logos default off and require reviewed server metadata plus
+      independent Flutter provider/HTTPS/host/query checks; neutral initials
+      remain the fallback
+
+Local release evidence:
+
+- [x] Final Flutter, Functions, rules, emulator, browser, native-build,
+      production-dependency-audit, source-scan, and fresh-public-build matrix
+      recorded in `docs/testing.md`
+- [ ] Full development dependency audit exits cleanly. It currently reports
+      three moderate Firebase CLI dependency-chain findings and offers only a
+      forced breaking CLI downgrade; production dependencies report zero
+      vulnerabilities
+
+External release evidence still required:
+
+- [ ] `API_SPORTS_KEY` approved secret exists without its value appearing in
+      source, Firestore, local plaintext, commands, logs, screenshots, or notes
+- [ ] Authenticated provider status/quota, current MLB league ID and season,
+      schedule, completed result, and response contract validated
+- [ ] Reviewed `systemConfig/apiSportsCatalog` production document matches the
+      authenticated evidence
+- [ ] Keep `ALLOW_API_SPORTS_PROVIDER=false` until every credential, contract,
+      quota, configuration, terms, and project gate passes
+- [ ] Production sports-data terms approved
+- [ ] Production logo publication rights approved, or retain neutral initials
+- [ ] Candidate Functions deployed through the restricted wrapper
+- [ ] Candidate preview deployed and authenticated smoke-tested
+- [ ] Exact tested candidate artifact separately authorized for live promotion
+
+Current blocker:
+
+`MATT_ACTION_REQUIRED: Add an approved API-Sports key to the API_SPORTS_KEY Firebase secret for project lukes-picks.`
 
 ## Project isolation
 
@@ -48,7 +106,7 @@ unauthenticated-smoke evidence.
 - [x] `ALLOW_THESPORTSDB_TEST_PROVIDER=true` plus emulator/internal condition is
       required
 - [x] TheSportsDB test mode is rejected in `lukes-picks`
-- [x] API-Sports remains disabled without an authorized Secret Manager key
+- [x] Previously deployed release remains manual; API-Sports is not enabled
 - [x] No ESPN host, endpoint, image, or hotlink appears in runtime source or the
       public build; denylist documentation/tests are expected
 - [x] TheSportsDB documentation and terms reviewed for internal testing
@@ -80,7 +138,8 @@ unauthenticated-smoke evidence.
 - [x] Functions, Secret Manager, Run, Build, Artifact Registry, Eventarc,
       Pub/Sub, and Scheduler state verified
 - [x] `INVITE_CODE_PEPPER` version 1 stored without printing its value
-- [x] No unavailable API-Sports secret is required by the deployment
+- [x] Prior deployed manual-provider manifest did not require the unavailable
+      API-Sports secret; the current candidate now does and is blocked above
 - [x] Local Firestore rules/index diff reviewed
 - [x] Cloud rules/index compatibility and deployment reviewed; active ruleset
       `projects/lukes-picks/rulesets/93614c6a-add3-47ad-88df-b9d9e18a00fb`

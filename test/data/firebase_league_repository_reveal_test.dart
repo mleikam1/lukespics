@@ -138,4 +138,145 @@ void main() {
       throwsA(isA<RepositoryException>()),
     );
   });
+
+  test(
+    'saves the exact result version carried by the chosen snapshot',
+    () async {
+      final catalogCallable = _MockHttpsCallable();
+      final saveCallable = _MockHttpsCallable();
+      final newerResponse = _MockHttpsCallableResult();
+      final olderResponse = _MockHttpsCallableResult();
+      final saveResponse = _MockHttpsCallableResult();
+      final newerVersion = List<String>.filled(64, 'b').join();
+      final olderVersion = List<String>.filled(64, 'a').join();
+      final newerHash = List<String>.filled(64, '2').join();
+      final olderHash = List<String>.filled(64, '1').join();
+      Map<String, Object?>? savedPayload;
+
+      Map<String, Object?> game({
+        required String resultVersion,
+        required String sourcePayloadHash,
+        required String observedAt,
+      }) => {
+        'id': 'apiSports:baseball:42',
+        'provider': 'apiSports',
+        'providerGameId': '42',
+        'providerLeagueId': '4424',
+        'sportCode': 'baseball',
+        'leagueCode': 'mlb',
+        'leagueName': 'MLB',
+        'season': '2030',
+        'scheduledAtUtc': '2030-07-01T18:00:00.000Z',
+        'publishedScheduledAtUtc': '2030-07-01T18:00:00.000Z',
+        'effectiveLockAtUtc': '2030-07-01T18:00:00.000Z',
+        'venueName': 'Version Park',
+        'neutralSite': false,
+        'homeTeam': {
+          'id': 'home',
+          'name': 'Home Club',
+          'shortName': 'Home',
+          'abbreviation': 'HOM',
+          'logoUrl': null,
+        },
+        'awayTeam': {
+          'id': 'away',
+          'name': 'Away Club',
+          'shortName': 'Away',
+          'abbreviation': 'AWY',
+          'logoUrl': null,
+        },
+        'status': 'scheduled',
+        'homeScore': null,
+        'awayScore': null,
+        'winnerTeamId': null,
+        'providerLastUpdatedAt': observedAt,
+        'lastSyncedAt': observedAt,
+        'resultVersion': resultVersion,
+        'sourcePayloadHash': sourcePayloadHash,
+      };
+
+      Map<String, Object?> catalogEnvelope(Map<String, Object?> value) => {
+        'ok': true,
+        'result': {
+          'provider': 'apiSports',
+          'games': [value],
+          'cache': {
+            'hit': false,
+            'stale': false,
+            'delayed': false,
+            'cachedAt': '2030-06-01T00:00:00.000Z',
+            'expiresAt': '2030-06-01T01:00:00.000Z',
+          },
+          'availability': {'state': 'available'},
+        },
+      };
+
+      when(
+        () => functions.httpsCallable('listSportsCatalog'),
+      ).thenReturn(catalogCallable);
+      when(
+        () => functions.httpsCallable('saveDraftSlate'),
+      ).thenReturn(saveCallable);
+      when(() => newerResponse.data).thenReturn(
+        catalogEnvelope(
+          game(
+            resultVersion: newerVersion,
+            sourcePayloadHash: newerHash,
+            observedAt: '2030-06-01T00:02:00.000Z',
+          ),
+        ),
+      );
+      when(() => olderResponse.data).thenReturn(
+        catalogEnvelope(
+          game(
+            resultVersion: olderVersion,
+            sourcePayloadHash: olderHash,
+            observedAt: '2030-06-01T00:01:00.000Z',
+          ),
+        ),
+      );
+      when(() => saveResponse.data).thenReturn({
+        'ok': true,
+        'result': {'selectedGameCount': 1},
+      });
+      var catalogCallCount = 0;
+      when(() => catalogCallable.call<Object?>(any())).thenAnswer((_) async {
+        catalogCallCount += 1;
+        return catalogCallCount == 1 ? newerResponse : olderResponse;
+      });
+      when(() => saveCallable.call<Object?>(any())).thenAnswer((
+        invocation,
+      ) async {
+        savedPayload = Map<String, Object?>.from(
+          invocation.positionalArguments.single as Map,
+        );
+        return saveResponse;
+      });
+
+      final newer = await repository.listSportsCatalog(
+        leagueId: 'league-1',
+        weekId: 'week-0001',
+      );
+      await repository.listSportsCatalog(
+        leagueId: 'league-1',
+        weekId: 'week-0001',
+      );
+      await repository.saveDraftSlate(
+        leagueId: 'league-1',
+        weekId: 'week-0001',
+        chunkKey: 'version-race-chunk',
+        games: [newer.games.single],
+      );
+
+      final serializedGames = savedPayload?['games'] as List<Object?>;
+      final serialized = Map<String, Object?>.from(
+        serializedGames.single as Map,
+      );
+      expect(newer.games.single.resultVersionToken, newerVersion);
+      expect(newer.games.single.providerLeagueId, '4424');
+      expect(serialized['providerLeagueId'], '4424');
+      expect(serialized['resultVersion'], newerVersion);
+      expect(serialized['sourcePayloadHash'], newerHash);
+    },
+  );
 }

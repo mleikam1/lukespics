@@ -49,5 +49,6 @@ guarantee.
 The backend is designed to continue with cached or manual data when quota is
 unavailable and surface “Sports data refresh is temporarily delayed.”
 Commissioners can enter games and results through callable operations. The
-connected browser scenario passed manual result handling, but did not exercise
-manual game creation; manual-game entry remains a separate validation item.
+connected browser scenario passed manual result handling, and the emulator
+integration suite separately creates and publishes a manual MLB game while a
+connected provider is configured.

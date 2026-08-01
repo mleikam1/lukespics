@@ -34,6 +34,10 @@ export const normalizedGameSchema = z
     id: idSchema,
     provider: z.enum(PROVIDER_NAMES),
     providerGameId: idSchema,
+    // Older stored manual/test games predate this field. Normalize those reads
+    // to leagueCode while all newly fetched provider games persist the
+    // canonical provider league identifier.
+    providerLeagueId: idSchema.optional(),
     sportCode: idSchema,
     leagueCode: idSchema,
     leagueName: z.string().trim().min(1).max(120),
@@ -58,6 +62,10 @@ export const normalizedGameSchema = z
     resultVersion: z.string().trim().min(8).max(128),
     sourcePayloadHash: z.string().regex(/^[a-f0-9]{64}$/),
   })
+  .transform((game) => ({
+    ...game,
+    providerLeagueId: game.providerLeagueId ?? game.leagueCode,
+  }))
   .superRefine((game, context) => {
     if (game.homeTeam.id === game.awayTeam.id) {
       context.addIssue({
@@ -217,12 +225,29 @@ export const submitEntrySchema = weekMutationSchema.extend({
 });
 
 export const providerQuerySchema = leagueMutationSchema.extend({
-  sportCode: idSchema,
-  leagueCode: idSchema,
-  leagueIdForProvider: idSchema,
-  season: z.string().trim().min(1).max(32),
-  from: z.iso.date(),
-  to: z.iso.date(),
+  sportCode: idSchema.optional(),
+  leagueCode: idSchema.optional(),
+  leagueIdForProvider: idSchema.optional(),
+  season: z.string().trim().min(1).max(32).optional(),
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  timezone: z
+    .string()
+    .trim()
+    .min(1)
+    .max(80)
+    .refine((value) => {
+      try {
+        new Intl.DateTimeFormat("en-US", {timeZone: value}).format();
+        return true;
+      } catch {
+        return false;
+      }
+    }, "A valid IANA timezone is required.")
+    .optional(),
+  dateMode: z
+    .enum(["today", "tomorrow", "later", "allDates", "custom"])
+    .optional(),
   forceRefresh: z.boolean().default(false),
 });
 
@@ -233,6 +258,15 @@ export const sportsCatalogSchema = providerQuerySchema
     weekId: idSchema,
   })
   .superRefine((value, context) => {
+    if ((value.from === undefined) !== (value.to === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: value.from === undefined ? ["from"] : ["to"],
+        message: "Catalog start and end dates must be supplied together.",
+      });
+      return;
+    }
+    if (value.from === undefined || value.to === undefined) return;
     const from = new Date(`${value.from}T00:00:00.000Z`);
     const to = new Date(`${value.to}T00:00:00.000Z`);
     const rangeDays =
