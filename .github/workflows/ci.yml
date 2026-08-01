@@ -72,8 +72,14 @@ jobs:
         working-directory: functions
       - run: npm run test:rules
         working-directory: functions
-      - name: Seed disabled emulator-only secrets
+      - name: Seed disabled emulator-only provider configuration
         run: |
+          printf '%s\n' \
+            'ALLOW_API_SPORTS_PROVIDER=false' \
+            'ALLOW_SPORTSDATAIO_PROVIDER=false' \
+            'SPORTSDATAIO_ACCESS_MODE=fixture' \
+            'SPORTSDATAIO_ENTITLEMENT_VERIFIED=false' \
+            > .env.local
           printf '%s\n' \
             'INVITE_CODE_PEPPER=ci-only-emulator-pepper' \
             'SPORTSDATAIO_API_KEY=" "' \
