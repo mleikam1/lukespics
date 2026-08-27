@@ -13,7 +13,16 @@ const CBS_LOGO_HOSTS = new Set([
 const MIN_SEASON = 2000;
 const MAX_SEASON = 2100;
 const MAX_WEEK = 25;
+const MAX_PRELOADED_STATE_BASE64_LENGTH = 4 * 1024 * 1024;
+const MAX_PRELOADED_STATE_DECODED_BYTES = 3 * 1024 * 1024;
+const MAX_PRELOADED_STATE_GAMES = 250;
 const GAME_CARD_SELECTOR = ".single-score-card";
+const CBS_GAME_ABBREVIATION_PATTERN =
+  /^NCAAF_(\d{4})(\d{2})(\d{2})_([A-Za-z0-9.-]{1,24})@([A-Za-z0-9.-]{1,24})$/;
+const CBS_PRELOADED_STATE_SCRIPT_CANDIDATE_PATTERN =
+  /^\s*define\(\s*(["'])reduxPreloadedState\1\s*,/;
+const CBS_PRELOADED_STATE_SCRIPT_PATTERN =
+  /^\s*define\(\s*(["'])reduxPreloadedState\1\s*,\s*\[\s*\]\s*,\s*function\s*\(\s*\)\s*\{\s*return\s+JSON\.parse\(\s*atob\(\s*(["'])([A-Za-z0-9+/]+={0,2})\2\s*\)\s*\|\|\s*(["'])\{\}\4\s*\)\s*;?\s*\}\s*\)\s*;?\s*$/;
 const TEAM_ROW_SELECTOR = [
   ".team",
   ".team-row",
@@ -34,7 +43,7 @@ const DATE_HEADING_SELECTOR = [
 ].join(", ");
 const CBS_PROVIDER = "cbsSports" as NormalizedGame["provider"];
 
-export const CBS_COLLEGE_FOOTBALL_PARSER_VERSION = "1.1.0";
+export const CBS_COLLEGE_FOOTBALL_PARSER_VERSION = "1.2.0";
 export const CBS_COLLEGE_FOOTBALL_LOGO_HOSTS = [...CBS_LOGO_HOSTS] as const;
 
 export type CbsCollegeFootballSeasonType = "regular" | "postseason";
@@ -92,6 +101,7 @@ type GameCandidate = {
   scheduledDayEastern: string | null;
   kickoffDisplayText: string | null;
   dateHeading: string | null;
+  kickoffConflict: boolean;
   status: GameStatus;
   statusDetail: string | null;
   awayTeam: TeamCandidate;
@@ -104,6 +114,14 @@ type GameCandidate = {
 };
 
 type JsonRecord = Record<string, unknown>;
+
+type CbsPreloadedKickoff = {
+  startTimeUtc: Date;
+  scheduledDayEastern: string;
+  displayText: string;
+};
+
+type CbsPreloadedKickoffLookup = ReadonlyMap<string, CbsPreloadedKickoff>;
 
 function cleanText(value: unknown, maximumLength = 240): string | null {
   if (typeof value !== "string" && typeof value !== "number") return null;
@@ -783,6 +801,231 @@ function parseAbsoluteOrEasternTimestamp(
   );
 }
 
+function preloadedKickoffLookupKey(
+  gameId: string,
+  gameAbbreviation: string,
+): string {
+  return `${gameId}:${gameAbbreviation}`;
+}
+
+function parsePreloadedScheduledDateTime(value: unknown): string | null {
+  const text = cleanText(value, 40);
+  const match =
+    /^(20\d{2}|2100)-(\d{2})-(\d{2}) (\d{2}):(\d{2}) (EST|EDT)$/.exec(
+      text ?? "",
+    );
+  if (match === null) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const dayOfMonth = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  if (
+    !validDateParts(year, month, dayOfMonth) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+  const day = isoDay(year, month, dayOfMonth);
+  if (day === null) return null;
+  // CBS currently emits the literal suffix "EDT" even for winter dates. Keep
+  // requiring the known EST/EDT shape, but treat the suffix as a display label:
+  // scheduled_epoch remains authoritative only after its actual New York wall
+  // clock agrees with these independently published local date/time fields.
+  return `${day} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function easternWallTime(date: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const fields = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return `${fields.year ?? "0000"}-${fields.month ?? "00"}-${fields.day ?? "00"} ${fields.hour ?? "00"}:${fields.minute ?? "00"}`;
+}
+
+function decodedPreloadedState(source: string): JsonRecord | null {
+  if (source.length > MAX_PRELOADED_STATE_BASE64_LENGTH + 1_024) return null;
+  const match = CBS_PRELOADED_STATE_SCRIPT_PATTERN.exec(source);
+  const encoded = match?.[3];
+  if (
+    encoded === undefined ||
+    encoded.length === 0 ||
+    encoded.length > MAX_PRELOADED_STATE_BASE64_LENGTH ||
+    encoded.length % 4 !== 0
+  ) {
+    return null;
+  }
+  try {
+    const decoded = Buffer.from(encoded, "base64");
+    if (
+      decoded.length === 0 ||
+      decoded.length > MAX_PRELOADED_STATE_DECODED_BYTES ||
+      decoded.toString("base64") !== encoded
+    ) {
+      return null;
+    }
+    const value: unknown = JSON.parse(decoded.toString("utf8"));
+    return isRecord(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function preloadedStateIdentityMatches(
+  value: JsonRecord,
+  context: Required<CbsCollegeFootballScoreboardInput>,
+): boolean {
+  const config = isRecord(value.config) ? value.config : null;
+  if (config === null) return false;
+  return (
+    config.arenaAbbr === "ncaaf" &&
+    config.league === "ncaaf" &&
+    config.year === String(context.season) &&
+    config.season === context.seasonType &&
+    config.week === String(context.week)
+  );
+}
+
+function preloadedGameKickoff(
+  value: unknown,
+  context: Required<CbsCollegeFootballScoreboardInput>,
+): {key: string; kickoff: CbsPreloadedKickoff} | null {
+  if (!isRecord(value)) return null;
+  const id = value.id;
+  if (!Number.isSafeInteger(id) || Number(id) <= 0) return null;
+  const gameId = String(id);
+  const abbreviation = cleanText(value.abbr, 160);
+  const abbreviationMatch = CBS_GAME_ABBREVIATION_PATTERN.exec(
+    abbreviation ?? "",
+  );
+  if (
+    abbreviation === null ||
+    abbreviationMatch === null ||
+    value.gameAbbr !== abbreviation ||
+    value.seasonYear !== context.season ||
+    value.seasonType !==
+      (context.seasonType === "postseason" ? "post" : "regular")
+  ) {
+    return null;
+  }
+  const abbreviationYear = Number(abbreviationMatch[1]);
+  const expectedAbbreviationYear =
+    abbreviationYear === context.season ||
+    (context.seasonType === "postseason" &&
+      abbreviationYear === context.season + 1);
+  const abbreviationDay = isoDay(
+    abbreviationYear,
+    Number(abbreviationMatch[2]),
+    Number(abbreviationMatch[3]),
+  );
+  if (!expectedAbbreviationYear || abbreviationDay === null) return null;
+
+  const meta = isRecord(value.meta) ? value.meta : null;
+  const cbsWeekNumber = meta?.cbsWeekNumber;
+  const cbsWeekMatches = context.seasonType === "regular"
+    ? cbsWeekNumber === context.week
+    : Number.isSafeInteger(cbsWeekNumber) &&
+      Number(cbsWeekNumber) >= 0 &&
+      Number(cbsWeekNumber) <= context.week;
+  if (
+    meta === null ||
+    meta.weekNumber !== context.week ||
+    !cbsWeekMatches
+  ) {
+    return null;
+  }
+  const epoch = value.scheduled_epoch;
+  const displayText = cleanText(value.scheduled_date_time, 40);
+  if (
+    !Number.isSafeInteger(epoch) ||
+    Number(epoch) <= 0 ||
+    displayText === null
+  ) {
+    return null;
+  }
+  const epochDate = new Date(Number(epoch) * 1_000);
+  const displayWallTime = parsePreloadedScheduledDateTime(displayText);
+  if (
+    Number.isNaN(epochDate.valueOf()) ||
+    displayWallTime === null ||
+    displayWallTime !== easternWallTime(epochDate) ||
+    easternDay(epochDate) !== abbreviationDay
+  ) {
+    return null;
+  }
+  return {
+    key: preloadedKickoffLookupKey(gameId, abbreviation),
+    kickoff: {
+      startTimeUtc: epochDate,
+      scheduledDayEastern: abbreviationDay,
+      displayText,
+    },
+  };
+}
+
+/**
+ * Extracts only kickoff facts from CBS's inert, base64-encoded preloaded state.
+ * The script is never evaluated, and every fact must agree with the requested
+ * page identity, card identity, Eastern display time, and UTC epoch.
+ */
+function preloadedKickoffs(
+  $: CheerioAPI,
+  context: Required<CbsCollegeFootballScoreboardInput>,
+): {
+  identityConfirmed: boolean;
+  kickoffs: CbsPreloadedKickoffLookup;
+} {
+  const sources: string[] = [];
+  $("script:not([src])").each((_index, script) => {
+    const source = $(script).text();
+    if (CBS_PRELOADED_STATE_SCRIPT_CANDIDATE_PATTERN.test(source)) {
+      sources.push(source);
+    }
+  });
+  if (sources.length !== 1) {
+    return {identityConfirmed: false, kickoffs: new Map()};
+  }
+  const source = sources[0];
+  const state = source === undefined ? null : decodedPreloadedState(source);
+  if (state === null || !preloadedStateIdentityMatches(state, context)) {
+    return {identityConfirmed: false, kickoffs: new Map()};
+  }
+  const games = state.games;
+  if (
+    !Array.isArray(games) ||
+    games.length === 0 ||
+    games.length > MAX_PRELOADED_STATE_GAMES
+  ) {
+    return {identityConfirmed: true, kickoffs: new Map()};
+  }
+  const result = new Map<string, CbsPreloadedKickoff>();
+  const conflicts = new Set<string>();
+  for (const game of games) {
+    const parsed = preloadedGameKickoff(game, context);
+    if (parsed === null || conflicts.has(parsed.key)) continue;
+    if (result.has(parsed.key)) {
+      result.delete(parsed.key);
+      conflicts.add(parsed.key);
+      continue;
+    }
+    result.set(parsed.key, parsed.kickoff);
+  }
+  return {identityConfirmed: true, kickoffs: result};
+}
+
 function cardDateHeadings(
   $: CheerioAPI,
   season: number,
@@ -840,6 +1083,7 @@ function gameIdFromUrl(value: string | null): string | null {
 type CardGameAbbrev = {
   identifier: string;
   scheduledDay: string;
+  sourceValue: string;
 };
 
 function cardGameAbbrev(
@@ -848,9 +1092,7 @@ function cardGameAbbrev(
 ): CardGameAbbrev | null {
   const value = cleanText(card.attr("data-abbrev"), 160);
   if (value === null) return null;
-  const match = /^NCAAF_(\d{4})(\d{2})(\d{2})_([A-Za-z0-9.-]{1,24})@([A-Za-z0-9.-]{1,24})$/.exec(
-    value,
-  );
+  const match = CBS_GAME_ABBREVIATION_PATTERN.exec(value);
   if (match === null) return null;
   const year = Number(match[1]);
   const isExpectedSeasonYear =
@@ -860,7 +1102,7 @@ function cardGameAbbrev(
   const scheduledDay = isoDay(year, Number(match[2]), Number(match[3]));
   const identifier = safeIdentifier(value);
   if (scheduledDay === null || identifier === null) return null;
-  return {identifier, scheduledDay};
+  return {identifier, scheduledDay, sourceValue: value};
 }
 
 function gameIdFromCardAttributes(
@@ -927,14 +1169,24 @@ function cardCandidate(
   element: AnyNode,
   context: Required<CbsCollegeFootballScoreboardInput>,
   heading: string | null,
+  preloadedKickoffLookup: CbsPreloadedKickoffLookup,
 ): GameCandidate | null {
   const card = $(element);
   const teams = teamsFromCard(card);
   if (teams === null || teams.awayTeam.slug === teams.homeTeam.slug) return null;
   const gameAbbrev = cardGameAbbrev(card, context);
+  const sourceGameUrl = gameUrlFromCard(card);
+  const explicitGameId =
+    gameIdFromCardAttributes(card, gameAbbrev) ?? gameIdFromUrl(sourceGameUrl);
+  const preloadedKickoff =
+    explicitGameId === null || gameAbbrev === null
+      ? undefined
+      : preloadedKickoffLookup.get(
+        preloadedKickoffLookupKey(explicitGameId, gameAbbrev.sourceValue),
+      );
   const headingValue =
     firstAttribute(card, ["data-game-date", "data-date"]) ?? heading;
-  const kickoffDisplayText =
+  const cardKickoffDisplayText =
     firstDescendantText(card, [
       "time",
       ".pregame-date",
@@ -953,15 +1205,68 @@ function cardCandidate(
       "time[datetime]",
       "[itemprop='startDate']",
     ], ["datetime", "content"]);
-  const day =
-    parseDateHeading(semanticStart, context.season, context.seasonType) ??
-    parseDateHeading(headingValue, context.season, context.seasonType) ??
-    parseDateHeading(kickoffDisplayText, context.season, context.seasonType) ??
+  const semanticDay = parseDateHeading(
+    semanticStart,
+    context.season,
+    context.seasonType,
+  );
+  const headingDay = parseDateHeading(
+    headingValue,
+    context.season,
+    context.seasonType,
+  );
+  const displayDay = parseDateHeading(
+    cardKickoffDisplayText,
+    context.season,
+    context.seasonType,
+  );
+  const fallbackDay =
+    semanticDay ??
+    headingDay ??
+    displayDay ??
+    preloadedKickoff?.scheduledDayEastern ??
     gameAbbrev?.scheduledDay ??
     null;
-  const start =
-    parseAbsoluteOrEasternTimestamp(semanticStart, day) ??
-    parseAbsoluteOrEasternTimestamp(kickoffDisplayText, day);
+  const semanticKickoff = parseAbsoluteOrEasternTimestamp(
+    semanticStart,
+    semanticDay ?? headingDay ?? displayDay ?? fallbackDay,
+  );
+  const displayKickoff = parseAbsoluteOrEasternTimestamp(
+    cardKickoffDisplayText,
+    displayDay ?? headingDay ?? semanticDay ?? fallbackDay,
+  );
+  const cardSourceDays = [
+    headingDay,
+    semanticKickoff === null ? semanticDay : easternDay(semanticKickoff),
+    displayKickoff === null ? displayDay : easternDay(displayKickoff),
+  ].filter((value): value is string => value !== null);
+  const cardKickoffs = [semanticKickoff, displayKickoff].filter(
+    (value): value is Date => value !== null,
+  );
+  const kickoffConflict =
+    new Set(cardSourceDays).size > 1 ||
+    new Set(cardKickoffs.map((value) => value.valueOf())).size > 1 ||
+    (preloadedKickoff !== undefined &&
+      (cardSourceDays.some(
+        (day) => day !== preloadedKickoff.scheduledDayEastern,
+      ) ||
+        cardKickoffs.some(
+          (kickoff) =>
+            kickoff.valueOf() !== preloadedKickoff.startTimeUtc.valueOf(),
+        )));
+  const cardStart = semanticKickoff ?? displayKickoff;
+  const resolvedStart = cardStart ?? preloadedKickoff?.startTimeUtc ?? null;
+  const start = kickoffConflict ? null : resolvedStart;
+  const day = kickoffConflict
+    ? null
+    : start === null
+      ? fallbackDay
+      : easternDay(start);
+  const kickoffDisplayText = kickoffConflict
+    ? null
+    : cardStart === null && preloadedKickoff !== undefined
+      ? preloadedKickoff.displayText
+      : cardKickoffDisplayText;
   const statusDetail =
     firstAttribute(card, ["data-game-status", "data-status"]) ??
     firstDescendantText(card, [
@@ -977,9 +1282,6 @@ function cardCandidate(
     ordered.find((row) => teamFromRow(row)?.slug === teams.awayTeam.slug) ?? null;
   const homeRow =
     ordered.find((row) => teamFromRow(row)?.slug === teams.homeTeam.slug) ?? null;
-  const sourceGameUrl = gameUrlFromCard(card);
-  const explicitGameId =
-    gameIdFromCardAttributes(card, gameAbbrev) ?? gameIdFromUrl(sourceGameUrl);
   const neutralText = firstDescendantText(
     card,
     [".neutral-site", "[data-neutral-site]"],
@@ -990,9 +1292,10 @@ function cardCandidate(
     explicitGameId,
     sourceGameUrl,
     startTimeUtc: start,
-    scheduledDayEastern: start === null ? day : easternDay(start),
+    scheduledDayEastern: day,
     kickoffDisplayText,
-    dateHeading: headingValue,
+    dateHeading: kickoffConflict ? null : headingValue,
+    kickoffConflict,
     status: statusFromText(
       statusDetail ?? (hasPregameMarker ? "pregame" : null),
       start !== null,
@@ -1175,6 +1478,7 @@ function structuredCandidate(
     scheduledDayEastern: start === null ? day : easternDay(start),
     kickoffDisplayText: semanticStart,
     dateHeading: day,
+    kickoffConflict: false,
     status: statusFromText(statusDetail, start !== null),
     statusDetail,
     awayTeam,
@@ -1286,16 +1590,32 @@ function mergeCandidate(
   const status = strongerGameStatus(primary.status, fallback.status);
   const fallbackStatusWon =
     status === fallback.status && status !== primary.status;
+  const kickoffConflict =
+    primary.kickoffConflict ||
+    fallback.kickoffConflict ||
+    (primary.startTimeUtc !== null &&
+      fallback.startTimeUtc !== null &&
+      primary.startTimeUtc.valueOf() !== fallback.startTimeUtc.valueOf()) ||
+    (primary.scheduledDayEastern !== null &&
+      fallback.scheduledDayEastern !== null &&
+      primary.scheduledDayEastern !== fallback.scheduledDayEastern);
   return {
     ...primary,
     explicitGameId: primary.explicitGameId ?? fallback.explicitGameId,
     sourceGameUrl: primary.sourceGameUrl ?? fallback.sourceGameUrl,
-    startTimeUtc: primary.startTimeUtc ?? fallback.startTimeUtc,
-    scheduledDayEastern:
-      primary.scheduledDayEastern ?? fallback.scheduledDayEastern,
-    kickoffDisplayText:
-      primary.kickoffDisplayText ?? fallback.kickoffDisplayText,
-    dateHeading: primary.dateHeading ?? fallback.dateHeading,
+    startTimeUtc: kickoffConflict
+      ? null
+      : primary.startTimeUtc ?? fallback.startTimeUtc,
+    scheduledDayEastern: kickoffConflict
+      ? null
+      : primary.scheduledDayEastern ?? fallback.scheduledDayEastern,
+    kickoffDisplayText: kickoffConflict
+      ? null
+      : primary.kickoffDisplayText ?? fallback.kickoffDisplayText,
+    dateHeading: kickoffConflict
+      ? null
+      : primary.dateHeading ?? fallback.dateHeading,
+    kickoffConflict,
     status,
     statusDetail: fallbackStatusWon
       ? fallback.statusDetail ?? primary.statusDetail
@@ -1492,7 +1812,9 @@ export function parseCbsCollegeFootballScoreboardHtml(
   // The parser never returns Cheerio nodes or source strings, ensuring the
   // scoreboard document becomes unreachable as soon as this function exits.
   const $ = load(html);
-  const identityConfirmed = scoreboardPageIdentityConfirmed($, context);
+  const preloaded = preloadedKickoffs($, context);
+  const identityConfirmed =
+    scoreboardPageIdentityConfirmed($, context) || preloaded.identityConfirmed;
   const structured = structuredCandidates($, context);
   let rejectedGameCount = structured.rejectedGameCount;
   const headings = cardDateHeadings($, context.season, context.seasonType);
@@ -1503,6 +1825,7 @@ export function parseCbsCollegeFootballScoreboardHtml(
       element,
       context,
       headings.get(element) ?? null,
+      preloaded.kickoffs,
     );
     if (candidate === null) rejectedGameCount += 1;
     else cardCandidates.push(candidate);

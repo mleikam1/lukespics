@@ -11,7 +11,6 @@ import {HttpsError} from "firebase-functions/v2/https";
 import {writeAudit, writeAuditInTransaction} from "../audit.js";
 import {
   requireAdmin,
-  requireMembership,
   requirePickerOrAdmin,
 } from "../authz.js";
 import {db} from "../config.js";
@@ -1619,44 +1618,106 @@ export async function submitEntry(input: {
   totalRequiredPickCount: number;
   completionState: string;
 }> {
-  await requireMembership(input.leagueId, input.actorUid);
   const reference = weekReference(input.leagueId, input.weekId);
   const entryReference = reference.collection("entries").doc(input.actorUid);
+  const memberReference = db
+    .collection("leagues")
+    .doc(input.leagueId)
+    .collection("members")
+    .doc(input.actorUid);
   const uniqueGames = new Set(input.picks.map((pick) => pick.gameId));
   if (uniqueGames.size !== input.picks.length) {
     throw new HttpsError("invalid-argument", "Each game may be picked once.");
   }
-  for (const pick of input.picks) {
-    await db.runTransaction(async (transaction) => {
-      const gameReference = reference.collection("games").doc(pick.gameId);
-      const pickReference = entryReference.collection("picks").doc(pick.gameId);
-      const [currentWeek, currentEntry, game, previous] = await Promise.all([
-        transaction.get(reference),
-        transaction.get(entryReference),
-        transaction.get(gameReference),
-        transaction.get(pickReference),
-      ]);
-      if (
-        !["open", "inProgress"].includes(
-          String(currentWeek.data()?.status),
-        )
-      ) {
+  return db.runTransaction(async (transaction) => {
+    const pickReferences = input.picks.map((pick) =>
+      entryReference.collection("picks").doc(pick.gameId),
+    );
+    // Reject revoked or invalid memberships before doing slate-sized reads,
+    // while keeping the membership document in the transaction conflict set.
+    const currentMember = await transaction.get(memberReference);
+    if (
+      !currentMember.exists ||
+      currentMember.data()?.status !== "active" ||
+      !["owner", "commissioner", "member"].includes(
+        String(currentMember.data()?.role),
+      )
+    ) {
+      throw new HttpsError(
+        "permission-denied",
+        "You are not an active member of this arena.",
+      );
+    }
+    const [currentWeek, currentEntry, ...previousPicks] = await Promise.all([
+      transaction.get(reference),
+      transaction.get(entryReference),
+      ...pickReferences.map((pickReference) => transaction.get(pickReference)),
+    ]);
+    if (!currentWeek.exists) {
+      throw new HttpsError("not-found", "Week not found.");
+    }
+    if (!currentEntry.exists || currentEntry.data()?.eligible !== true) {
+      throw new HttpsError(
+        "permission-denied",
+        "You are not eligible to make picks this week.",
+      );
+    }
+
+    const entryData = currentEntry.data() ?? {};
+    const totalRequiredPickCount = Math.max(
+      0,
+      Number(entryData.totalRequiredPickCount ?? 0),
+    );
+    const currentSavedPickCount = Math.max(
+      0,
+      Number(entryData.savedPickCount ?? 0),
+    );
+    const entryIsSealed =
+      entryData.completionState === "complete" ||
+      entryData.submittedAt instanceof Timestamp;
+    if (entryIsSealed) {
+      const exactRetry = input.picks.every((pick, index) => {
+        const previous = previousPicks[index];
+        return (
+          previous !== undefined &&
+          previous.exists &&
+          previous.data()?.selectedTeamId === pick.selectedTeamId
+        );
+      });
+      if (!exactRetry) {
         throw new HttpsError(
           "failed-precondition",
-          "Picks are not open for this week.",
+          "This entry has already been submitted and cannot be changed.",
         );
       }
-      if (!currentEntry.exists || currentEntry.data()?.eligible !== true) {
-        throw new HttpsError(
-          "permission-denied",
-          "You are not eligible to make picks this week.",
-        );
-      }
+      return {
+        savedPickCount: currentSavedPickCount,
+        totalRequiredPickCount,
+        completionState: "complete",
+      };
+    }
+
+    if (
+      !["open", "inProgress"].includes(String(currentWeek.data()?.status))
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Picks are not open for this week.",
+      );
+    }
+
+    const gameReferences = input.picks.map((pick) =>
+      reference.collection("games").doc(pick.gameId),
+    );
+    const games = await Promise.all(
+      gameReferences.map((gameReference) => transaction.get(gameReference)),
+    );
+    const now = Timestamp.now();
+    const lockAts = games.map((game, index) => {
       const data = game.data();
       if (data === undefined) {
         throw new HttpsError("not-found", "Selected game not found.");
       }
-      const now = Timestamp.now();
       const lockAt = effectiveStoredGameLock(currentWeek.data(), data);
       if (lockAt === null || now.toMillis() >= lockAt.toMillis()) {
         throw new HttpsError(
@@ -1670,12 +1731,39 @@ export async function submitEntry(input: {
           "Picks for this game have already been revealed.",
         );
       }
+      const pick = input.picks[index];
       const validTeams = [data.homeTeam?.id, data.awayTeam?.id];
-      if (!validTeams.includes(pick.selectedTeamId)) {
+      if (pick === undefined || !validTeams.includes(pick.selectedTeamId)) {
         throw new HttpsError(
           "invalid-argument",
           "The selected team is not in this game.",
         );
+      }
+      return lockAt;
+    });
+
+    const newlySavedPickCount = previousPicks.filter(
+      (previous) => !previous.exists,
+    ).length;
+    const savedPickCount = Math.min(
+      totalRequiredPickCount,
+      currentSavedPickCount + newlySavedPickCount,
+    );
+    const completionState =
+      totalRequiredPickCount > 0 && savedPickCount >= totalRequiredPickCount
+        ? "complete"
+        : "inProgress";
+
+    input.picks.forEach((pick, index) => {
+      const previous = previousPicks[index];
+      const pickReference = pickReferences[index];
+      const lockAt = lockAts[index];
+      if (
+        previous === undefined ||
+        pickReference === undefined ||
+        lockAt === undefined
+      ) {
+        throw new HttpsError("internal", "The entry could not be saved.");
       }
       transaction.set(
         pickReference,
@@ -1694,52 +1782,27 @@ export async function submitEntry(input: {
         },
         {merge: true},
       );
-      const entryData = currentEntry.data() ?? {};
-      const totalRequiredPickCount = Math.max(
-        0,
-        Number(entryData.totalRequiredPickCount ?? 0),
-      );
-      const currentSavedPickCount = Math.max(
-        0,
-        Number(entryData.savedPickCount ?? 0),
-      );
-      const savedPickCount = previous.exists
-        ? currentSavedPickCount
-        : Math.min(
-            totalRequiredPickCount,
-            currentSavedPickCount + 1,
-          );
-      const completionState =
-        totalRequiredPickCount > 0 &&
-        savedPickCount >= totalRequiredPickCount
-          ? "complete"
-          : "inProgress";
-      transaction.set(
-        entryReference,
-        {
-          savedPickCount,
-          totalRequiredPickCount,
-          completionState,
-          submittedAt:
-            completionState === "complete"
-              ? entryData.submittedAt ?? FieldValue.serverTimestamp()
-              : entryData.submittedAt ?? null,
-          lastSyncedAt: FieldValue.serverTimestamp(),
-        },
-        {merge: true},
-      );
     });
-  }
-  const entry = await entryReference.get();
-  return {
-    savedPickCount: Number(entry.data()?.savedPickCount ?? 0),
-    totalRequiredPickCount: Number(
-      entry.data()?.totalRequiredPickCount ?? 0,
-    ),
-    completionState: String(
-      entry.data()?.completionState ?? "inProgress",
-    ),
-  };
+    transaction.set(
+      entryReference,
+      {
+        savedPickCount,
+        totalRequiredPickCount,
+        completionState,
+        submittedAt:
+          completionState === "complete"
+            ? entryData.submittedAt ?? FieldValue.serverTimestamp()
+            : entryData.submittedAt ?? null,
+        lastSyncedAt: FieldValue.serverTimestamp(),
+      },
+      {merge: true},
+    );
+    return {
+      savedPickCount,
+      totalRequiredPickCount,
+      completionState,
+    };
+  });
 }
 
 export async function listCatalog(input: {

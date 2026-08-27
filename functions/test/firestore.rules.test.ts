@@ -377,7 +377,7 @@ describe("Firestore security boundary", () => {
     await assertSucceeds(getDoc(doc(commissioner, draftGame)));
   });
 
-  it("accepts a valid own pick before lock", async () => {
+  it("routes all pick mutations through the callable", async () => {
     const firestore = environment.authenticatedContext("member").firestore();
     let lock = Timestamp.fromMillis(0);
     await environment.withSecurityRulesDisabled(async (context) => {
@@ -389,7 +389,7 @@ describe("Firestore security boundary", () => {
       );
       lock = snapshot.data()?.effectiveLockAtUtc as Timestamp;
     });
-    await assertSucceeds(
+    await assertFails(
       setDoc(
         doc(
           firestore,
@@ -404,9 +404,36 @@ describe("Firestore security boundary", () => {
         },
       ),
     );
+    await environment.withSecurityRulesDisabled(async (context) => {
+      await setDoc(
+        doc(
+          context.firestore(),
+          "leagues/alpha/weeks/week-0001/entries/member/picks/future",
+        ),
+        {
+          gameId: "future",
+          selectedTeamId: "home",
+          selectedAt: Timestamp.now(),
+          updatedAt: Timestamp.now(),
+          lockAtSnapshot: lock,
+        },
+      );
+    });
+    await assertFails(
+      updateDoc(
+        doc(
+          firestore,
+          "leagues/alpha/weeks/week-0001/entries/member/picks/future",
+        ),
+        {
+          selectedTeamId: "away",
+          updatedAt: serverTimestamp(),
+        },
+      ),
+    );
   });
 
-  it("rejects late picks and invalid teams", async () => {
+  it("denies direct pick writes regardless of lock or team payload", async () => {
     const firestore = environment.authenticatedContext("member").firestore();
     const pastLock = Timestamp.fromMillis(Date.now() - 60 * 60_000);
     const futureLock = Timestamp.fromMillis(Date.now() + 60 * 60_000);

@@ -99,8 +99,11 @@ The separate `cbsSports` adapter reads
 route from validated season, season type, and week fields; neither Flutter nor
 Firestore supplies an arbitrary URL. Redirects must resolve to that exact route,
 and the page canonical/`og:url` or title must confirm the same season, type, week,
-and FBS identity. Normalized week data, refresh lease, conditional-request
-metadata, and per-page safe failure state live in the private
+and FBS identity. The same response's inert base64 `reduxPreloadedState` may
+enrich a visible card only after its page identity, numeric game ID, game
+abbreviation, CBS week metadata, Eastern display time, and UTC epoch all agree;
+the script is decoded but never evaluated. Normalized week data, refresh lease,
+conditional-request metadata, and per-page safe failure state live in the private
 `sportsProviderCache` document. The provider-global rolling-24-hour attempt
 ledger, failure counter, and circuit deadline live at
 `providerUsage/cbsSports_rolling24h`. Raw HTML is parsed in memory and is not
@@ -160,13 +163,11 @@ Server publish retries treat every recognized post-publication week status as
 the same already-published slate, including final settlement of concurrent calls
 sharing one request ID.
 
-This branch declares these gates but is not deployed. No key or enabled
-production catalog is present locally, no live SportsDataIO smoke is claimed,
-and no live authenticated CBS picker workflow has been accepted. The bounded
-2026-08-25 CBS page observation lacked a trustworthy kickoff timestamp, so its
-matchups remain TBD and unselectable. Deterministic fixtures prove parser,
-normalization, transport, and workflow behavior only; they do not prove cloud
-activation or live end-to-end behavior.
+The bounded 2026-08-27 CBS Week 1 observation contained 99 mutually consistent
+preloaded kickoff epochs/display times, including all eight August 29 games.
+Deterministic fixtures still own routine parser, normalization, transport, and
+workflow validation; local tests never contact CBS, and source evidence alone
+does not prove a particular cloud deployment.
 
 Finalization reads the entire authoritative week, recomputes entries, writes
 ranked snapshots, rebuilds aggregate standings, records an audit event, and

@@ -34,7 +34,8 @@ overall standings.
 - At least one selected game and no artificial maximum.
 - Picker participation is configurable and defaults to disabled.
 - Per-game lock is the default; server time is authoritative.
-- A member can change an open pick but never a locked pick.
+- A member can change an open pick only until every weekly pick is saved. The
+  completed entry is then permanently locked, including before kickoff.
 - Pre-lock choices are private even from owners and commissioners.
 - One correct pick is one point; missing or incorrect is zero.
 - Void and canceled games are excluded from the denominator.

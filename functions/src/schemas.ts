@@ -291,7 +291,10 @@ export const pickInputSchema = z.object({
 });
 
 export const submitEntrySchema = weekMutationSchema.extend({
-  picks: z.array(pickInputSchema).min(1),
+  // The service validates and writes the full request in one transaction.
+  // Bound the batch well below Firestore's transaction limits; the connected
+  // client normally submits one changed game at a time.
+  picks: z.array(pickInputSchema).min(1).max(100),
 });
 
 export const providerQuerySchema = leagueMutationSchema.extend({

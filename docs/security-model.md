@@ -47,7 +47,8 @@ picker and an active owner/commissioner; ordinary members can read them only
 after the trusted backend moves the week out of draft. All week-game writes
 remain server-only.
 
-An eligible member may create/update only their own pick when:
+Clients cannot write pick documents directly. An eligible member submits a pick
+through the callable, which writes only their own entry when:
 
 1. membership is active;
 2. the entry is eligible;
@@ -55,7 +56,12 @@ An eligible member may create/update only their own pick when:
 4. the game is selected;
 5. `request.time` is before the effective per-game or first-game lock;
 6. the selected ID equals one canonical team ID; and
-7. only client-owned selection/timestamp fields change.
+7. the weekly entry has not already been completed and sealed.
+
+Saving the last required pick sets the entry completion marker and permanently
+seals every selection in the same transaction. An exact same-selection retry is
+an idempotent no-op; a post-completion change is rejected. Firestore rules deny
+all direct pick mutations so a client cannot bypass the counter or seal.
 
 Commissioner status does not grant pre-lock access to another user’s private
 pick. Reveal documents are backend-written and member-readable after reveal.

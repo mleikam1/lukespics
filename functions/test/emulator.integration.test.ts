@@ -47,6 +47,7 @@ import {
   publishSlate,
   reopenWeekRecord,
   revealLockedPicks,
+  submitEntry,
 } from "../src/services/weeks.js";
 
 const projectId = "demo-lukes-picks-local";
@@ -2201,12 +2202,15 @@ describe("emulator pick'em lifecycle", () => {
   );
 
   it(
-    "keeps entry completion monotonic across concurrent game submissions",
+    "atomically saves and permanently seals completed entries",
     async () => {
       const owner = await createSignedInApp("concurrent-submit-owner");
       const member = await createSignedInApp("concurrent-submit-member");
       const memberUid = getAuth(member).currentUser?.uid;
       expect(memberUid).toBeTruthy();
+      if (memberUid === undefined) {
+        throw new Error("The concurrent entry member did not authenticate.");
+      }
       const adminApp = initializeAdminApp(
         {projectId},
         "concurrent-submit-admin",
@@ -2275,11 +2279,65 @@ describe("emulator pick'em lifecycle", () => {
       const firstGame = selectedGames[0] as {
         id: string;
         homeTeam: {id: string};
+        awayTeam: {id: string};
       };
       const secondGame = selectedGames[1] as {
         id: string;
         awayTeam: {id: string};
       };
+
+      const entryReference = adminDb.doc(
+        `leagues/${created.leagueId}/weeks/${week.weekId}/entries/${memberUid}`,
+      );
+      await expect(
+        submitEntry({
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          actorUid: memberUid,
+          picks: [
+            {
+              gameId: firstGame.id,
+              selectedTeamId: firstGame.homeTeam.id,
+            },
+            {
+              gameId: secondGame.id,
+              selectedTeamId: "not-a-team",
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({code: "invalid-argument"});
+      const [entryAfterAtomicRejection, picksAfterAtomicRejection] =
+        await Promise.all([
+          entryReference.get(),
+          entryReference.collection("picks").get(),
+        ]);
+      expect(entryAfterAtomicRejection.data()).toMatchObject({
+        savedPickCount: 0,
+        completionState: "notStarted",
+        submittedAt: null,
+      });
+      expect(picksAfterAtomicRejection.empty).toBe(true);
+
+      const memberReference = adminDb.doc(
+        `leagues/${created.leagueId}/members/${memberUid}`,
+      );
+      await memberReference.update({status: "removed"});
+      await expect(
+        submitEntry({
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          actorUid: memberUid,
+          picks: [
+            {
+              gameId: firstGame.id,
+              selectedTeamId: firstGame.homeTeam.id,
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({code: "permission-denied"});
+      expect((await entryReference.collection("picks").get()).empty).toBe(true);
+      await memberReference.update({status: "active"});
+
       await Promise.all([
         call(member, "submitOrConfirmEntry", {
           requestId: requestId("concurrent-pick-a"),
@@ -2305,9 +2363,6 @@ describe("emulator pick'em lifecycle", () => {
         }),
       ]);
 
-      const entryReference = adminDb.doc(
-        `leagues/${created.leagueId}/weeks/${week.weekId}/entries/${memberUid}`,
-      );
       const [entry, picks] = await Promise.all([
         entryReference.get(),
         entryReference.collection("picks").get(),
@@ -2320,7 +2375,21 @@ describe("emulator pick'em lifecycle", () => {
       });
       expect(entry.data()?.submittedAt).toBeInstanceOf(Timestamp);
 
-      await Promise.all([
+      const firstPickReference = entryReference
+        .collection("picks")
+        .doc(firstGame.id);
+      const sealedFirstPick = await firstPickReference.get();
+      const sealedEntryTimestamps = {
+        submittedAt: entry.data()?.submittedAt,
+        lastSyncedAt: entry.data()?.lastSyncedAt,
+      };
+      const sealedPickTimestamps = {
+        selectedAt: sealedFirstPick.data()?.selectedAt,
+        updatedAt: sealedFirstPick.data()?.updatedAt,
+        serverConfirmedAt: sealedFirstPick.data()?.serverConfirmedAt,
+      };
+
+      const exactRetries = await Promise.all([
         call(member, "submitOrConfirmEntry", {
           requestId: requestId("duplicate-pick-a"),
           leagueId: created.leagueId,
@@ -2344,11 +2413,59 @@ describe("emulator pick'em lifecycle", () => {
           ],
         }),
       ]);
-      const afterDuplicates = await entryReference.get();
+      expect(exactRetries).toEqual([
+        {
+          savedPickCount: 2,
+          totalRequiredPickCount: 2,
+          completionState: "complete",
+        },
+        {
+          savedPickCount: 2,
+          totalRequiredPickCount: 2,
+          completionState: "complete",
+        },
+      ]);
+
+      await expect(
+        submitEntry({
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          actorUid: memberUid,
+          picks: [
+            {
+              gameId: firstGame.id,
+              selectedTeamId: firstGame.awayTeam.id,
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({code: "failed-precondition"});
+      await expect(
+        submitEntry({
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          actorUid: memberUid,
+          picks: [
+            {
+              gameId: "missing-stored-pick",
+              selectedTeamId: firstGame.homeTeam.id,
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({code: "failed-precondition"});
+
+      const [afterDuplicates, afterDuplicatePick] = await Promise.all([
+        entryReference.get(),
+        firstPickReference.get(),
+      ]);
       expect(afterDuplicates.data()).toMatchObject({
         savedPickCount: 2,
         totalRequiredPickCount: 2,
         completionState: "complete",
+        ...sealedEntryTimestamps,
+      });
+      expect(afterDuplicatePick.data()).toMatchObject({
+        selectedTeamId: firstGame.homeTeam.id,
+        ...sealedPickTimestamps,
       });
       await deleteAdminApp(adminApp);
     },

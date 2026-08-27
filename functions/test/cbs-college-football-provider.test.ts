@@ -1,6 +1,7 @@
 import {describe, expect, it} from "vitest";
 import {
   buildCbsCollegeFootballScoreboardUrl,
+  CBS_COLLEGE_FOOTBALL_PARSER_VERSION,
   parseCbsCollegeFootballScoreboardHtml,
   sanitizeCbsCollegeFootballLogoUrl,
 } from "../src/providers/cbsCollegeFootball.js";
@@ -60,6 +61,111 @@ function statusCard(input: {
         ...(input.homeScore === undefined ? {} : {score: input.homeScore}),
       })}
     </article>`;
+}
+
+const preloadedGameAbbreviation = "NCAAF_20300829_AWY@HOM";
+const preloadedGameEpoch = Date.parse("2030-08-29T16:00:00.000Z") / 1_000;
+const postseasonGameAbbreviation = "NCAAF_20260109_OREG@IND";
+const postseasonGameEpoch = Date.parse("2026-01-10T00:30:00.000Z") / 1_000;
+
+function preloadedState(input: {
+  config?: Record<string, unknown>;
+  game?: Record<string, unknown>;
+} = {}): Record<string, unknown> {
+  return {
+    config: {
+      arenaAbbr: "ncaaf",
+      league: "ncaaf",
+      year: "2030",
+      season: "regular",
+      week: "1",
+      ...input.config,
+    },
+    games: [
+      {
+        id: 50027398,
+        abbr: preloadedGameAbbreviation,
+        gameAbbr: preloadedGameAbbreviation,
+        status: "SCHEDULED",
+        scheduled_date_time: "2030-08-29 12:00 EDT",
+        scheduled_epoch: preloadedGameEpoch,
+        seasonType: "regular",
+        seasonYear: 2030,
+        meta: {weekNumber: 1, cbsWeekNumber: 1},
+        ...input.game,
+      },
+    ],
+  };
+}
+
+function postseasonPreloadedState(input: {
+  config?: Record<string, unknown>;
+  game?: Record<string, unknown>;
+} = {}): Record<string, unknown> {
+  return {
+    config: {
+      arenaAbbr: "ncaaf",
+      league: "ncaaf",
+      year: "2025",
+      season: "postseason",
+      week: "20",
+      ...input.config,
+    },
+    games: [
+      {
+        id: 50022911,
+        abbr: postseasonGameAbbreviation,
+        gameAbbr: postseasonGameAbbreviation,
+        status: "SCHEDULED",
+        // This is the current CBS winter shape: the wall clock is Eastern
+        // standard time even though CBS leaves the display suffix as "EDT".
+        scheduled_date_time: "2026-01-09 19:30 EDT",
+        scheduled_epoch: postseasonGameEpoch,
+        seasonType: "post",
+        seasonYear: 2025,
+        meta: {weekNumber: 20, cbsWeekNumber: 18},
+        ...input.game,
+      },
+    ],
+  };
+}
+
+function preloadedStateScript(value: unknown): string {
+  const encoded = Buffer.from(JSON.stringify(value), "utf8").toString(
+    "base64",
+  );
+  return `<script>
+    define('reduxPreloadedState', [], function() {
+      return JSON.parse( atob('${encoded}') || '{}' );
+    });
+  </script>`;
+}
+
+function currentLikePreloadedCard(input: {
+  id?: string;
+  abbreviation?: string;
+  startTime?: string;
+} = {}): string {
+  const startTime = input.startTime === undefined
+    ? ""
+    : ` data-start-time="${input.startTime}"`;
+  return `<article class="single-score-card"
+      id="game-${input.id ?? "50027398"}"
+      data-abbrev="${input.abbreviation ?? preloadedGameAbbreviation}"${startTime}>
+    <div class="game-status pregame"><span class="pregame-date"></span></div>
+    ${teamRow({name: "Fixture Away", slug: "AWY", side: "away"})}
+    ${teamRow({name: "Fixture Home", slug: "HOM", side: "home"})}
+    <span class="broadcaster">CBS</span>
+  </article>`;
+}
+
+function postseasonPreloadedCard(): string {
+  return `<article class="single-score-card"
+      id="game-50022911" data-abbrev="${postseasonGameAbbreviation}">
+    <div class="game-status pregame"><span class="pregame-date"></span></div>
+    ${teamRow({name: "Oregon", slug: "OREG", side: "away"})}
+    ${teamRow({name: "Indiana", slug: "IND", side: "home"})}
+  </article>`;
 }
 
 describe("CBS college-football scoreboard URL policy", () => {
@@ -402,6 +508,275 @@ describe("CBS college-football semantic parsing", () => {
     expect(result.games.map((game) => game.providerGameId)).toEqual([
       "scoreboard-event",
     ]);
+  });
+});
+
+describe("CBS inert preloaded-state kickoff enrichment", () => {
+  it("never creates a game that has no visible scoreboard card", () => {
+    const result = parseCbsCollegeFootballScoreboardHtml(
+      preloadedStateScript(preloadedState()),
+      context,
+    );
+
+    expect(result.games).toEqual([]);
+    expect(result).toMatchObject({
+      parserFailure: true,
+      failureCode: "CBS_PARSE_ZERO_GAMES",
+    });
+  });
+
+  it("cross-checks and applies the exact UTC kickoff to its matching card", () => {
+    const result = parseCbsCollegeFootballScoreboardHtml(
+      `${preloadedStateScript(preloadedState({
+        game: {
+          odds: {marker: "must-not-be-retained"},
+          ticketUrl: "https://tickets.example.test/must-not-be-retained",
+        },
+      }))}
+       ${currentLikePreloadedCard()}`,
+      context,
+    );
+
+    expect(CBS_COLLEGE_FOOTBALL_PARSER_VERSION).toBe("1.2.0");
+    expect(result).toMatchObject({
+      parserFailure: false,
+      rejectedGameCount: 0,
+    });
+    expect(result.games).toHaveLength(1);
+    expect(result.games[0]).toMatchObject({
+      providerGameId: "50027398",
+      scheduledDayEastern: "2030-08-29",
+      publishedScheduledAtUtc: new Date("2030-08-29T16:00:00.000Z"),
+      effectiveLockAtUtc: new Date("2030-08-29T16:00:00.000Z"),
+      timeTbd: false,
+      kickoffDisplayText: "2030-08-29 12:00 EDT",
+      status: "scheduled",
+      broadcast: "CBS",
+      awayTeam: {name: "Fixture Away"},
+      homeTeam: {name: "Fixture Home"},
+    });
+    expect(result.games[0]?.scheduledAtUtc?.toISOString()).toBe(
+      "2030-08-29T16:00:00.000Z",
+    );
+    expect(JSON.stringify(result.games)).not.toContain("must-not-be-retained");
+  });
+
+  it("validates CBS's year-round EDT label by its actual Eastern wall time", () => {
+    const abbreviation = "NCAAF_20301116_AWY@HOM";
+    const epoch = Date.parse("2030-11-16T17:00:00.000Z") / 1_000;
+    const result = parseCbsCollegeFootballScoreboardHtml(
+      `${preloadedStateScript(preloadedState({
+        config: {week: "12"},
+        game: {
+          abbr: abbreviation,
+          gameAbbr: abbreviation,
+          scheduled_date_time: "2030-11-16 12:00 EDT",
+          scheduled_epoch: epoch,
+          meta: {weekNumber: 12, cbsWeekNumber: 12},
+        },
+      }))}${currentLikePreloadedCard({abbreviation})}`,
+      {...context, week: 12},
+    );
+
+    expect(result.games[0]).toMatchObject({
+      scheduledAtUtc: new Date("2030-11-16T17:00:00.000Z"),
+      scheduledDayEastern: "2030-11-16",
+      kickoffDisplayText: "2030-11-16 12:00 EDT",
+      timeTbd: false,
+    });
+  });
+
+  it("supports CBS's live postseason tokens while keeping route week identity strict", () => {
+    const postseasonContext = {
+      ...context,
+      season: 2025,
+      seasonType: "postseason" as const,
+      week: 20,
+    };
+    const livePageIdentity = `
+      <title>2025 NCAA Football Scores - FBS - Semifinals - CBS Sports</title>
+      <link rel="canonical"
+        href="https://www.cbssports.com/college-football/scoreboard/">`;
+    const result = parseCbsCollegeFootballScoreboardHtml(
+      `${livePageIdentity}${preloadedStateScript(postseasonPreloadedState())}${postseasonPreloadedCard()}`,
+      postseasonContext,
+    );
+
+    expect(result.identityConfirmed).toBe(true);
+    expect(result.games[0]).toMatchObject({
+      providerGameId: "50022911",
+      season: "2025",
+      seasonType: "postseason",
+      weekOrRound: "20",
+      scheduledAtUtc: new Date("2026-01-10T00:30:00.000Z"),
+      scheduledDayEastern: "2026-01-09",
+      kickoffDisplayText: "2026-01-09 19:30 EDT",
+      timeTbd: false,
+    });
+
+    const wrongRouteWeek = parseCbsCollegeFootballScoreboardHtml(
+      `${preloadedStateScript(postseasonPreloadedState({game: {
+        meta: {weekNumber: 19, cbsWeekNumber: 18},
+      }}))}${postseasonPreloadedCard()}`,
+      postseasonContext,
+    );
+    expect(wrongRouteWeek.games[0]).toMatchObject({
+      scheduledAtUtc: null,
+      timeTbd: true,
+    });
+
+    const wrongRequestedWeek = parseCbsCollegeFootballScoreboardHtml(
+      `${livePageIdentity}${preloadedStateScript(postseasonPreloadedState({
+        config: {week: "19"},
+      }))}${postseasonPreloadedCard()}`,
+      postseasonContext,
+    );
+    expect(wrongRequestedWeek.identityConfirmed).toBe(false);
+  });
+
+  it("requires both the numeric card ID and abbreviation to match", () => {
+    for (const card of [
+      currentLikePreloadedCard({id: "50027399"}),
+      currentLikePreloadedCard({
+        id: "50027398",
+        abbreviation: "NCAAF_20300829_ALT@HOM",
+      }),
+    ]) {
+      const game = parseCbsCollegeFootballScoreboardHtml(
+        `${preloadedStateScript(preloadedState())}${card}`,
+        context,
+      ).games[0];
+      expect(game?.scheduledAtUtc).toBeNull();
+      expect(game?.timeTbd).toBe(true);
+    }
+  });
+
+  it("fails closed when the matched card kickoff conflicts with preloaded state", () => {
+    const game = parseCbsCollegeFootballScoreboardHtml(
+      `${preloadedStateScript(preloadedState())}${currentLikePreloadedCard({
+        startTime: "2030-08-29T17:00:00Z",
+      })}`,
+      context,
+    ).games[0];
+
+    expect(game).toMatchObject({
+      scheduledAtUtc: null,
+      publishedScheduledAtUtc: null,
+      effectiveLockAtUtc: null,
+      scheduledDayEastern: null,
+      kickoffDisplayText: null,
+      timeTbd: true,
+    });
+  });
+
+  it("fails closed when the visible date heading conflicts with preloaded state", () => {
+    const game = parseCbsCollegeFootballScoreboardHtml(
+      `${preloadedStateScript(preloadedState())}
+       <h2>Friday, August 30, 2030</h2>
+       ${currentLikePreloadedCard()}`,
+      context,
+    ).games[0];
+
+    expect(game).toMatchObject({
+      scheduledAtUtc: null,
+      publishedScheduledAtUtc: null,
+      effectiveLockAtUtc: null,
+      scheduledDayEastern: null,
+      kickoffDisplayText: null,
+      dateHeading: null,
+      timeTbd: true,
+    });
+  });
+
+  it("keeps a structured/card/preloaded kickoff disagreement TBD after merging", () => {
+    const game = parseCbsCollegeFootballScoreboardHtml(`
+      ${preloadedStateScript(preloadedState())}
+      <script type="application/ld+json">
+        {
+          "@type": "SportsEvent",
+          "identifier": "50027398",
+          "startDate": "2030-08-29T17:00:00Z",
+          "awayTeam": {"name": "Fixture Away"},
+          "homeTeam": {"name": "Fixture Home"}
+        }
+      </script>
+      ${currentLikePreloadedCard()}
+    `, context).games[0];
+
+    expect(game).toMatchObject({
+      providerGameId: "50027398",
+      scheduledAtUtc: null,
+      publishedScheduledAtUtc: null,
+      effectiveLockAtUtc: null,
+      scheduledDayEastern: null,
+      kickoffDisplayText: null,
+      timeTbd: true,
+    });
+  });
+
+  it.each([
+    ["page identity", preloadedState({config: {week: "2"}})],
+    [
+      "UTC/display disagreement",
+      preloadedState({game: {scheduled_epoch: preloadedGameEpoch + 60}}),
+    ],
+    [
+      "unsupported timezone suffix",
+      preloadedState({
+        game: {scheduled_date_time: "2030-08-29 12:00 PDT"},
+      }),
+    ],
+    [
+      "game abbreviation disagreement",
+      preloadedState({game: {gameAbbr: "NCAAF_20300829_OTHER@HOM"}}),
+    ],
+    [
+      "week metadata disagreement",
+      preloadedState({game: {meta: {weekNumber: 2, cbsWeekNumber: 1}}}),
+    ],
+  ])("keeps the card TBD on %s", (_label, state) => {
+    const result = parseCbsCollegeFootballScoreboardHtml(
+      `${preloadedStateScript(state)}${currentLikePreloadedCard()}`,
+      context,
+    );
+
+    expect(result.rejectedGameCount).toBe(0);
+    expect(result.games[0]).toMatchObject({
+      scheduledAtUtc: null,
+      publishedScheduledAtUtc: null,
+      effectiveLockAtUtc: null,
+      timeTbd: true,
+    });
+  });
+
+  it("does not execute or accept malformed, appended, or duplicate state", () => {
+    const validScript = preloadedStateScript(preloadedState());
+    const appended = validScript.replace(
+      "</script>",
+      "globalThis.preloadedStateWasExecuted = true;</script>",
+    );
+    const malformed = `<script>
+      define('reduxPreloadedState', [], function() {
+        return JSON.parse(atob('not_base64!') || '{}');
+      });
+    </script>`;
+    for (const stateSource of [
+      appended,
+      malformed,
+      `${validScript}${validScript}`,
+      `${validScript}${malformed}`,
+    ]) {
+      const game = parseCbsCollegeFootballScoreboardHtml(
+        `${stateSource}${currentLikePreloadedCard()}`,
+        context,
+      ).games[0];
+      expect(game?.scheduledAtUtc).toBeNull();
+      expect(game?.timeTbd).toBe(true);
+    }
+    expect(
+      (globalThis as {preloadedStateWasExecuted?: boolean})
+        .preloadedStateWasExecuted,
+    ).toBeUndefined();
   });
 });
 

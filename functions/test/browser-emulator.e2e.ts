@@ -863,8 +863,10 @@ async function overrideAsVoid(owner, gameIndex, reason) {
     .first();
   await gameState.click({force: true});
   // Flutter's popup route is not exposed as stable DOM text in headless
-  // Chrome. Move from Scheduled to the fifth item, allowing each semantics
-  // rebuild to settle so rapid keys are not dropped.
+  // Chrome. Normalize to the first item before moving to the fifth one so
+  // this remains deterministic even when the game's current state changes.
+  await owner.page.keyboard.press("Home");
+  await owner.page.waitForTimeout(150);
   for (let option = 0; option < 4; option += 1) {
     await owner.page.keyboard.press("ArrowDown");
     await owner.page.waitForTimeout(150);
@@ -1011,9 +1013,10 @@ async function run() {
         2,
         "Member A did not see exactly one two-team game.",
       );
-      await clickPick(memberA.page, game.awayTeam.name);
       await clickPick(memberA.page, game.homeTeam.name);
-      await expectText(memberA.page, "Your entry is complete");
+      await expectText(memberA.page, "Your picks are saved and locked");
+      await expectLockedPick(memberA.page, game.homeTeam.name);
+      await expectLockedPick(memberA.page, game.awayTeam.name);
       await captureProof(memberA.page, "player-picks");
 
       await navigate(memberB.page, "Make picks", "Make your picks");
@@ -1024,7 +1027,9 @@ async function run() {
         "Member B did not see exactly one two-team game.",
       );
       await clickPick(memberB.page, game.awayTeam.name);
-      await expectText(memberB.page, "Your entry is complete");
+      await expectText(memberB.page, "Your picks are saved and locked");
+      await expectLockedPick(memberB.page, game.awayTeam.name);
+      await expectLockedPick(memberB.page, game.homeTeam.name);
     });
 
     await step("Firestore rules deny pre-lock cross-user reads", () =>
@@ -1042,11 +1047,8 @@ async function run() {
       `leagues/${arena.leagueId}/weeks/${arena.weekId}/games/${game.id}`,
     );
 
-    await step("server lock rejects a late pick and preserves the accepted choice", async () => {
-      await gameReference.update({
-        effectiveLockAtUtc: Timestamp.fromMillis(Date.now() - 60_000),
-      });
-      const late = await rawCallable(
+    await step("completed entry rejects changes and survives reload", async () => {
+      const sealedChange = await rawCallable(
         "submitOrConfirmEntry",
         memberA.token,
         {
@@ -1061,16 +1063,26 @@ async function run() {
           ],
         },
       );
-      assert.notEqual(late.status, 200, JSON.stringify(late.body));
-      assert.equal(late.body?.error?.status, "FAILED_PRECONDITION");
-      assert.match(late.body?.error?.message ?? "", /already locked/i);
+      assert.notEqual(
+        sealedChange.status,
+        200,
+        JSON.stringify(sealedChange.body),
+      );
+      assert.equal(
+        sealedChange.body?.error?.status,
+        "FAILED_PRECONDITION",
+      );
+      assert.match(
+        sealedChange.body?.error?.message ?? "",
+        /already been submitted|cannot be changed/i,
+      );
 
       await memberA.page.reload({waitUntil: "domcontentloaded"});
       await enableFlutterSemantics(memberA.page);
       await expectDashboard(memberA.page);
       await navigate(memberA.page, "Make picks", "Make your picks");
-      await expectLockedPick(memberA.page, game.awayTeam.name);
-      await expectText(memberA.page, "Your entry is complete");
+      await expectLockedPick(memberA.page, game.homeTeam.name);
+      await expectText(memberA.page, "Your picks are saved and locked");
       await captureProof(memberA.page, "locked-pick");
       const persisted = await gameReference.parent.parent
         .collection(`entries/${memberA.uid}/picks`)
@@ -1080,6 +1092,9 @@ async function run() {
     });
 
     await step("reveal the locked picks through commissioner UI", async () => {
+      await gameReference.update({
+        effectiveLockAtUtc: Timestamp.fromMillis(Date.now() - 60_000),
+      });
       await navigate(owner.page, "Admin review", "Review and finalize Week 1");
       const revealResponsePromise = callableResponse(
         owner.page,
@@ -1243,7 +1258,7 @@ async function run() {
       const savedPick = await parseCallable(await pickResponsePromise);
       assert.equal(savedPick.savedPickCount, 1);
       assert.equal(savedPick.completionState, "complete");
-      await expectText(memberA.page, "Your entry is complete");
+      await expectText(memberA.page, "Your picks are saved and locked");
 
       const memberEntry = await adminDb
         .doc(

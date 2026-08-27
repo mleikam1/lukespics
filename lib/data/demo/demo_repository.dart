@@ -31,6 +31,7 @@ final class AppController extends ChangeNotifier {
     bool signedIn = false,
     bool hasLeague = false,
     bool offline = false,
+    bool entryLocked = false,
   }) : runtimeMode = AppRuntimeMode.demo,
        _signedIn = signedIn,
        _hasLeague = hasLeague,
@@ -42,6 +43,7 @@ final class AppController extends ChangeNotifier {
        _browserE2eAlias = null,
        _telemetry = AppTelemetry(enabled: false) {
     _seed();
+    _entryLockedForWeek = entryLocked;
     if (_hasLeague) _inviteCode = 'DEMO-7H3K';
   }
 
@@ -99,6 +101,7 @@ final class AppController extends ChangeNotifier {
   bool _slatePublished = false;
   bool _demoReviewReady = false;
   bool _weekFinalized = false;
+  bool _entryLockedForWeek = false;
   bool _restoringSession = false;
   bool _sessionRestoreQueued = false;
   bool _disposed = false;
@@ -377,6 +380,9 @@ final class AppController extends ChangeNotifier {
     final matches = _entries.where((entry) => entry.uid == _currentUserId);
     return matches.isEmpty ? null : matches.first;
   }
+
+  bool get entryLocked =>
+      _entryLockedForWeek || currentEntry?.completionState == 'complete';
 
   String get latestWeekRecord {
     if (isDemo) return '5 / 7';
@@ -812,6 +818,7 @@ final class AppController extends ChangeNotifier {
     _revealedPicks.clear();
     _eligibleMemberCount = 0;
     _weekFinalized = false;
+    _entryLockedForWeek = false;
     _lastNextPickerUid = null;
     _slatePublished = true;
     _weekStatus = 'loading';
@@ -1399,7 +1406,8 @@ final class AppController extends ChangeNotifier {
   }
 
   Future<void> chooseTeam(Game game, String teamId) async {
-    if (_isLocked(game) ||
+    if (entryLocked ||
+        _isLocked(game) ||
         !game.acceptsTeam(teamId) ||
         _pickRequestsInFlight.contains(game.id)) {
       return;
@@ -1414,6 +1422,7 @@ final class AppController extends ChangeNotifier {
     _pickRequestsInFlight.add(game.id);
     _pickSyncStates[game.id] = PickSyncState.saving;
     notifyListeners();
+    EntrySaveResult? saveResult;
     try {
       if (_repository == null) {
         await Future<void>.delayed(const Duration(milliseconds: 220));
@@ -1425,7 +1434,7 @@ final class AppController extends ChangeNotifier {
             'Open your arena before saving picks.',
           );
         }
-        await _repository.submitOrConfirmEntry(
+        saveResult = await _repository.submitOrConfirmEntry(
           leagueId: leagueId,
           weekId: _requireWeekId(),
           picks: {game.id: teamId},
@@ -1465,6 +1474,9 @@ final class AppController extends ChangeNotifier {
     _pickTeamIds[game.id] = teamId;
     _pickSyncStates[game.id] = PickSyncState.synced;
     _pickRequestsInFlight.remove(game.id);
+    if (saveResult?.completionState == 'complete') {
+      _entryLockedForWeek = true;
+    }
     _offline = false;
     unawaited(_telemetry.log('pick_saved'));
     notifyListeners();
@@ -1487,9 +1499,10 @@ final class AppController extends ChangeNotifier {
 
   Future<void> retryPick(Game game) async {
     final teamId = _pickTeamIds[game.id];
-    if (teamId == null || _isLocked(game)) {
-      _pickErrors[game.id] =
-          'This game is locked. The local draft was not accepted.';
+    if (teamId == null || entryLocked || _isLocked(game)) {
+      _pickErrors[game.id] = entryLocked
+          ? 'Your entry is saved and locked.'
+          : 'This game is locked. The local draft was not accepted.';
       _pickSyncStates[game.id] = PickSyncState.rejected;
       notifyListeners();
       return;
@@ -2387,6 +2400,13 @@ final class AppController extends ChangeNotifier {
             _entries
               ..clear()
               ..addAll(entries);
+            if (entries.any(
+              (entry) =>
+                  entry.uid == _currentUserId &&
+                  entry.completionState == 'complete',
+            )) {
+              _entryLockedForWeek = true;
+            }
             notifyListeners();
           },
           onError: (Object error, StackTrace stackTrace) {

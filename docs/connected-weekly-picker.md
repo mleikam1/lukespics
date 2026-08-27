@@ -116,14 +116,16 @@ published game.
 
 - Server time and the stored effective lock are authoritative.
 - The default policy locks each game independently.
-- A member may change an open game, including a later game after an earlier
-  game has locked.
+- A member may change an open game only while the weekly entry is incomplete.
+  Saving the final required pick permanently seals every selection, even when
+  one or more games have not kicked off.
 - Under the optional `firstGame` policy, the week snapshots one slate-wide
   deadline. If a selected game is later rescheduled earlier, that deadline may
   tighten but never widen; the callable, reveal worker, rules, and every sibling
   game all use the tightened value.
 - The client submits only the changed open selection, prevents duplicate taps,
-  and reconciles optimistic state with the server response.
+  and reconciles optimistic state with the server response. A completed
+  response immediately disables every winner choice.
 - A disconnected choice is a clearly labeled local draft, not an accepted
   pick. Retry remains subject to the server lock.
 - A late or otherwise rejected write rolls back or remains visibly rejected
@@ -255,7 +257,8 @@ TheSportsDB image URLs are internal-test-only and require attribution.
 The release gate is a browser-driven Flutter test against Auth, Firestore,
 Functions, and Hosting emulators under `demo-lukes-picks-local`. It uses at
 least three users and covers create/join, restored membership, catalog query,
-select/remove/publish, private picks, pre-lock change, late rejection, reveal,
+select/remove/publish, private picks, incomplete-entry changes, completion seal,
+late rejection, reveal,
 results, finalization, standings, rotation, next-week creation, refresh, and
 sign-out/sign-in. The relevant sequence must run with picker participation both
 disabled and enabled.

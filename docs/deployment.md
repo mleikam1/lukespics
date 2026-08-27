@@ -21,14 +21,17 @@ Production arenas must remain `manual`. Do not describe the current live site
 as SportsDataIO-backed until an authorized deployment and the complete
 activation process below have both passed.
 
-## Current CBS college-football addition — 2026-08-25
+## Current CBS college-football kickoff update — 2026-08-27
 
-The current branch also adds the server-only `cbsSports` NCAAF/FBS schedule
-adapter. It has not been deployed or enabled in production, and no authenticated
-picker-to-results CBS workflow has been accepted. One bounded read of the public
-2026 regular-season Week 1 scoreboard confirmed the exact route and matchup
-markup, but it exposed no trustworthy kickoff date/time; those observations are
-correctly TBD and unselectable.
+The server-only `cbsSports` NCAAF/FBS adapter is already part of the production
+surface. A bounded reread of the same public 2026 regular-season Week 1
+scoreboard found the exact kickoff epochs and Eastern display times inside the
+page's inert base64 `reduxPreloadedState`. Parser 1.2.0 decodes only that exact
+inline definition, never evaluates it, cross-checks both time representations
+against the visible card and requested week, and adds no endpoint or request.
+Rollout is not complete until Functions are deployed, the private CBS config's
+`parserVersion` is changed to `1.2.0`, and a forced refresh replaces the prior
+TBD cache.
 
 The deployment is additive: `getCollegeFootballSchedule` and
 `refreshCollegeFootballScheduleAdmin` are callable Functions, and

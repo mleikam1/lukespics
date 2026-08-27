@@ -55,8 +55,10 @@ Production must stay `manual` while any unchecked activation item remains.
 - [ ] A single arena was explicitly mapped to `cbsSports`, and a live CBS game
       with a confirmed UTC kickoff completed load, slate, pick, lock, result,
       scoring, and standings verification.
-- [ ] CBS was enabled or deployed. The bounded 2026-08-25 public-page check is
-      parser/source evidence only and exposed no trustworthy kickoff date/time.
+- [ ] CBS parser 1.2.0 was deployed, the private config parser version was
+      changed to `1.2.0`, and one forced active-week refresh confirmed that all
+      99 cached games have cross-validated UTC kickoffs without retaining raw
+      HTML or preloaded-state fields.
 - [x] The current Functions production dependency graph reports 0
       vulnerabilities.
 - [ ] The full Functions graph's 8 vulnerabilities (4 high, 4 moderate) and

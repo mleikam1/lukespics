@@ -11,6 +11,7 @@ import 'package:lukespics/data/models/pick.dart';
 import 'package:lukespics/data/models/standing.dart';
 import 'package:lukespics/data/repositories/league_repository.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:timezone/data/latest.dart' as timezone_data;
 
 class _MockLeagueRepository extends Mock implements LeagueRepository {}
 
@@ -24,6 +25,7 @@ void main() {
   late _MockUser user;
 
   setUpAll(() {
+    timezone_data.initializeTimeZones();
     registerFallbackValue(<Game>[]);
     registerFallbackValue(<String>[]);
     registerFallbackValue(
@@ -1951,6 +1953,88 @@ void main() {
 
       expect(controller.picks[game.id], game.awayTeam.id);
       expect(controller.syncStateFor(game.id), PickSyncState.synced);
+      expect(controller.entryLocked, isTrue);
+
+      await controller.chooseTeam(game, game.homeTeam.id);
+
+      expect(controller.picks[game.id], game.awayTeam.id);
+      verifyNever(
+        () => repository.submitOrConfirmEntry(
+          leagueId: any(named: 'leagueId'),
+          weekId: any(named: 'weekId'),
+          picks: {game.id: game.homeTeam.id},
+          requestId: any(named: 'requestId'),
+        ),
+      );
+    },
+  );
+
+  test(
+    'completed entry stream stays saved and locked across later snapshots',
+    () async {
+      when(() => user.uid).thenReturn('member-1');
+      when(() => user.displayName).thenReturn('Connected Member');
+      final game = _game('entry-lock', const Duration(days: 2));
+      final now = DateTime.now().toUtc();
+      _stubArena(
+        repository,
+        catalogGames: const [],
+        selectedGames: [game],
+        weekStatus: 'open',
+        memberUid: 'member-1',
+        memberRole: LeagueRole.member,
+        pickerUid: 'owner',
+        entriesStream: Stream.fromIterable([
+          [
+            _entrySummary(
+              uid: 'member-1',
+              completionState: 'complete',
+              savedPickCount: 1,
+              totalRequiredPickCount: 1,
+            ),
+          ],
+          [
+            _entrySummary(
+              uid: 'member-1',
+              completionState: 'inProgress',
+              savedPickCount: 1,
+              totalRequiredPickCount: 1,
+            ),
+          ],
+        ]),
+        ownPicks: [
+          Pick(
+            gameId: game.id,
+            selectedTeamId: game.awayTeam.id,
+            selectedAt: now,
+            updatedAt: now,
+            serverConfirmedAt: now,
+            lockAtSnapshot: game.effectiveLockAtUtc!,
+          ),
+        ],
+      );
+      final controller = AppController.connected(
+        runtimeMode: AppRuntimeMode.firebaseEmulator,
+        repository: repository,
+        auth: auth,
+      );
+      addTearDown(controller.dispose);
+      await _flush();
+      expect(await controller.joinArena('ABC12345'), isTrue);
+      await _flush();
+
+      expect(controller.entryLocked, isTrue);
+      expect(controller.currentEntry?.completionState, 'inProgress');
+      await controller.chooseTeam(game, game.homeTeam.id);
+      expect(controller.picks[game.id], game.awayTeam.id);
+      verifyNever(
+        () => repository.submitOrConfirmEntry(
+          leagueId: any(named: 'leagueId'),
+          weekId: any(named: 'weekId'),
+          picks: any(named: 'picks'),
+          requestId: any(named: 'requestId'),
+        ),
+      );
     },
   );
 
@@ -2466,6 +2550,8 @@ void _stubArena(
   List<Standing> standings = const <Standing>[],
   Stream<List<Standing>>? standingsStream,
   Stream<List<WeekSummary>>? historyStream,
+  List<EntrySummary> entries = const <EntrySummary>[],
+  Stream<List<EntrySummary>>? entriesStream,
   List<Pick> ownPicks = const <Pick>[],
 }) {
   final league = leagueSummary ?? _leagueSummary(pickerUid: pickerUid);
@@ -2518,7 +2604,7 @@ void _stubArena(
   ).thenAnswer((_) => Stream.value(selectedGames));
   when(
     () => repository.watchPublicEntries('league-1', 'week-0001'),
-  ).thenAnswer((_) => Stream.value(const <EntrySummary>[]));
+  ).thenAnswer((_) => entriesStream ?? Stream.value(entries));
   when(
     () => repository.watchOwnPrivatePicks('league-1', 'week-0001'),
   ).thenAnswer((_) => Stream.value(ownPicks));
@@ -2572,6 +2658,25 @@ void _stubArena(
     );
   });
 }
+
+EntrySummary _entrySummary({
+  required String uid,
+  required String completionState,
+  required int savedPickCount,
+  required int totalRequiredPickCount,
+}) => EntrySummary(
+  uid: uid,
+  eligible: true,
+  savedPickCount: savedPickCount,
+  totalRequiredPickCount: totalRequiredPickCount,
+  completionState: completionState,
+  points: 0,
+  correctCount: 0,
+  incorrectCount: 0,
+  voidCount: 0,
+  weeklyRank: null,
+  isWeeklyWinner: false,
+);
 
 CatalogQuery _query(String sportCode, String leagueCode, String providerId) {
   final today = DateTime.now().toUtc();

@@ -8,7 +8,7 @@ slate, picks, results, and standings pipeline.
 
 ## Verified public boundary
 
-The route verified on 2026-08-25 was:
+The route reverified on 2026-08-27 was:
 
 ```text
 https://www.cbssports.com/college-football/scoreboard/FBS/2026/regular/1/
@@ -21,13 +21,37 @@ scoreboard identity: scheme, host, empty port, path, and empty query/fragment
 must all match. At most two redirects are followed. A `200` page is accepted
 only when its canonical/`og:url` marker exactly matches that identity, or its
 title explicitly confirms the requested season, week, FBS division, and
-regular/postseason classification.
+regular/postseason classification, or the page's single strictly decoded inert
+state has exact FBS league, season, season-type, and route-week config fields.
+That final path is needed because CBS publishes generic canonical markers and
+named bowl-round titles on postseason pages.
 
 At verification time, CBS `robots.txt` did not disallow the scoreboard path
 for the wildcard user-agent group. It did disallow `/data/*`, `/component/*`,
 login/user paths, and other internal paths. This provider never uses those
 paths, alternate CBS hosts, a hidden API, a browser, authentication, cookies,
 proxies, or anti-bot workarounds.
+
+The same allowlisted scoreboard response contains an inert
+`reduxPreloadedState` definition used by CBS's page renderer. The server may
+decode its bounded base64 JSON argument while parsing that one response; it
+never evaluates the script and never makes a second request. State-level
+league, season, season type, and week fields must match the requested page.
+Each kickoff must then have a unique numeric ID and exact
+`NCAAF_YYYYMMDD_AWAY@HOME` abbreviation matching the visible card, matching
+CBS route-facing week metadata, and two independent time representations—
+`scheduled_epoch` and `scheduled_date_time`—whose actual New York wall-clock
+minute and Eastern calendar day agree. CBS currently publishes the literal
+`EDT` display suffix even on standard-time winter dates, so the parser requires
+the known `EST`/`EDT` syntax but does not use that suffix as an offset. Regular
+games must use the matching CBS week number; postseason games use CBS's `post`
+game token and may carry a different, bounded internal `cbsWeekNumber`, while
+the state config and `meta.weekNumber` must still exactly match the requested
+postseason route. Missing, malformed, duplicated, or inconsistent facts are
+ignored and the visible semantic markup/TBD behavior remains in force. If an
+otherwise valid visible/semantic kickoff or date heading
+disagrees with the matched preloaded kickoff, the merged game fails closed to
+TBD with no publication or lock instant; neither source is silently preferred.
 
 Only these facts are normalized when present:
 
@@ -59,7 +83,7 @@ invalid configuration fails closed. A reviewed starting document is:
   "minimumRefreshMinutes": 120,
   "defaultRefreshMinutes": 180,
   "maximumRefreshMinutes": 240,
-  "parserVersion": "1.0.0",
+  "parserVersion": "1.2.0",
   "globalDailyRequestLimit": 12
 }
 ```
@@ -157,12 +181,16 @@ A missing or timezone-ambiguous CBS time stays `null`/TBD, carries no lock
 instant, remains visible, and cannot be selected until a confirmed timestamp is
 available. No browser clock or invented Eastern time can open a pick window.
 
-On 2026-08-25 the verified Week 1 HTML exposed matchups, networks, venues, and
-some team logos but no trustworthy date/time. Those games therefore correctly
-appear as TBD and require either a later cached CBS observation with a confirmed
-time or the existing administrator-reviewed manual-game path before selection.
-No CBS deployment or authenticated production picker-to-results flow has been
-accepted; deterministic confirmed-time fixtures do not satisfy that gate.
+On 2026-08-27 the verified Week 1 response contained 99 unique games. All 99
+preloaded records had mutually consistent IDs, abbreviations, route-facing week
+fields, Eastern wall times, and UTC epochs. The first eight games on August 29
+were therefore normalized with confirmed kickoffs instead of requiring manual
+time entry. Archived standard-time and postseason pages also confirmed CBS's
+year-round `EDT` label, `post` game token, and distinct postseason
+`cbsWeekNumber`; deterministic tests retain only those minimum structural facts,
+not raw pages. If CBS later removes or changes this bounded structure, the
+parser fails closed to the existing TBD/manual-review path rather than inventing
+a time.
 
 ## Local validation
 

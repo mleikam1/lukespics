@@ -29,6 +29,7 @@ class PicksScreen extends ConsumerWidget {
               controller.syncStateFor(game.id) == PickSyncState.synced,
         )
         .length;
+    final entryLocked = controller.entryLocked;
     return Padding(
       padding: AppBreakpoints.pagePadding(context),
       child: Column(
@@ -37,12 +38,17 @@ class PicksScreen extends ConsumerWidget {
           PageHeader(
             eyebrow: '${controller.weekLabel} · Your entry',
             title: 'Make your picks',
-            description:
-                'Choose exactly one winner per game. You can edit any '
-                'selection until that game locks.',
-            action: _ProgressPill(done: confirmed, total: games.length),
+            description: entryLocked
+                ? 'All of your picks are saved and locked for this week.'
+                : 'Choose exactly one winner per game. Once every pick is '
+                      'saved, your entry is locked.',
+            action: _ProgressPill(
+              done: confirmed,
+              total: games.length,
+              entryLocked: entryLocked,
+            ),
           ),
-          if (controller.offline) ...[
+          if (controller.offline && !entryLocked) ...[
             const SizedBox(height: 16),
             const _SyncWarning(),
           ],
@@ -81,6 +87,7 @@ class PicksScreen extends ConsumerWidget {
                         authoritativePick: controller.pickFor(game.id),
                         syncState: controller.syncStateFor(game.id),
                         locked: controller.isGameLocked(game),
+                        entryLocked: entryLocked,
                         saving: controller.pickRequestInFlight(game.id),
                         errorMessage: controller.pickErrorFor(game.id),
                         timezone: controller.leagueTimezone,
@@ -100,6 +107,7 @@ class PicksScreen extends ConsumerWidget {
             _EntryBar(
               confirmed: confirmed,
               total: games.length,
+              entryLocked: entryLocked,
               hasUnsynced: games.any(
                 (game) =>
                     controller.picks.containsKey(game.id) &&
@@ -114,22 +122,33 @@ class PicksScreen extends ConsumerWidget {
 }
 
 class _ProgressPill extends StatelessWidget {
-  const _ProgressPill({required this.done, required this.total});
+  const _ProgressPill({
+    required this.done,
+    required this.total,
+    required this.entryLocked,
+  });
 
   final int done;
   final int total;
+  final bool entryLocked;
 
   @override
   Widget build(BuildContext context) {
     return Semantics(
-      label: '$done of $total picks confirmed',
+      label: entryLocked
+          ? 'All picks saved and locked'
+          : '$done of $total picks confirmed',
       liveRegion: true,
       child: StatusPill(
-        label: '$done of $total confirmed',
-        icon: done == total
+        label: entryLocked ? 'Saved and locked' : '$done of $total confirmed',
+        icon: entryLocked
+            ? Icons.lock_rounded
+            : done == total
             ? Icons.check_circle_rounded
             : Icons.pending_actions_rounded,
-        tone: done == total ? StatusTone.success : StatusTone.info,
+        tone: entryLocked || done == total
+            ? StatusTone.success
+            : StatusTone.info,
       ),
     );
   }
@@ -166,6 +185,7 @@ class _PickGameCard extends StatelessWidget {
     required this.authoritativePick,
     required this.syncState,
     required this.locked,
+    required this.entryLocked,
     required this.saving,
     required this.errorMessage,
     required this.timezone,
@@ -179,6 +199,7 @@ class _PickGameCard extends StatelessWidget {
   final Pick? authoritativePick;
   final PickSyncState syncState;
   final bool locked;
+  final bool entryLocked;
   final bool saving;
   final String? errorMessage;
   final String timezone;
@@ -188,7 +209,8 @@ class _PickGameCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final missing = locked && selection == null;
+    final selectionLocked = entryLocked || locked;
+    final missing = selectionLocked && selection == null;
     final detail = gameDetailSummary(game);
     return SectionCard(
       padding: const EdgeInsets.all(18),
@@ -224,9 +246,15 @@ class _PickGameCard extends StatelessWidget {
                 ],
               ),
               StatusPill(
-                label: locked ? 'Locked' : 'Open',
-                icon: locked ? Icons.lock_rounded : Icons.lock_open_rounded,
-                tone: locked ? StatusTone.neutral : StatusTone.success,
+                label: entryLocked
+                    ? 'Entry locked'
+                    : locked
+                    ? 'Locked'
+                    : 'Open',
+                icon: selectionLocked
+                    ? Icons.lock_rounded
+                    : Icons.lock_open_rounded,
+                tone: selectionLocked ? StatusTone.neutral : StatusTone.success,
               ),
             ],
           ),
@@ -278,7 +306,7 @@ class _PickGameCard extends StatelessWidget {
                 gameId: game.id,
                 team: game.awayTeam,
                 selected: selection == game.awayTeam.id,
-                enabled: !locked && !saving,
+                enabled: !selectionLocked && !saving,
                 logoPolicy: logoPolicy,
                 onTap: () => onChoose(game.awayTeam.id),
               );
@@ -286,7 +314,7 @@ class _PickGameCard extends StatelessWidget {
                 gameId: game.id,
                 team: game.homeTeam,
                 selected: selection == game.homeTeam.id,
-                enabled: !locked && !saving,
+                enabled: !selectionLocked && !saving,
                 logoPolicy: logoPolicy,
                 onTap: () => onChoose(game.homeTeam.id),
               );
@@ -339,9 +367,10 @@ class _PickGameCard extends StatelessWidget {
             _SyncLabel(
               state: syncState,
               hasSelection: selection != null,
+              entryLocked: entryLocked,
               errorMessage: errorMessage,
             ),
-          if (!locked &&
+          if (!selectionLocked &&
               selection != null &&
               (syncState == PickSyncState.offline ||
                   syncState == PickSyncState.rejected)) ...[
@@ -482,11 +511,13 @@ class _SyncLabel extends StatelessWidget {
   const _SyncLabel({
     required this.state,
     required this.hasSelection,
+    required this.entryLocked,
     required this.errorMessage,
   });
 
   final PickSyncState state;
   final bool hasSelection;
+  final bool entryLocked;
   final String? errorMessage;
 
   @override
@@ -495,6 +526,13 @@ class _SyncLabel extends StatelessWidget {
       return const StatusPill(
         label: 'Pick required',
         icon: Icons.circle_outlined,
+      );
+    }
+    if (entryLocked) {
+      return const StatusPill(
+        label: 'Saved and locked',
+        icon: Icons.lock_rounded,
+        tone: StatusTone.success,
       );
     }
     return switch (state) {
@@ -531,11 +569,13 @@ class _EntryBar extends StatelessWidget {
   const _EntryBar({
     required this.confirmed,
     required this.total,
+    required this.entryLocked,
     required this.hasUnsynced,
   });
 
   final int confirmed;
   final int total;
+  final bool entryLocked;
   final bool hasUnsynced;
 
   @override
@@ -546,7 +586,9 @@ class _EntryBar extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              confirmed == total
+              entryLocked
+                  ? 'Your picks are saved and locked'
+                  : confirmed == total
                   ? hasUnsynced
                         ? 'Selections made · not all confirmed'
                         : 'Your entry is complete'

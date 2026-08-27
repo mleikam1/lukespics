@@ -251,6 +251,47 @@ void main() {
     expect(controller.picks['football-1'], 'hawks');
   });
 
+  testWidgets('completed entry is shown as saved and locked', (tester) async {
+    final controller = AppController.demo(
+      signedIn: true,
+      hasLeague: true,
+      entryLocked: true,
+    );
+    await pumpApp(
+      tester,
+      controller: controller,
+      initialLocation: '/picks',
+      size: const Size(900, 1200),
+    );
+
+    expect(controller.entryLocked, isTrue);
+    expect(
+      find.text('All of your picks are saved and locked for this week.'),
+      findsOneWidget,
+    );
+    expect(find.text('Saved and locked'), findsWidgets);
+    expect(find.text('Entry locked'), findsWidgets);
+
+    final choice = find.byKey(const Key('team-choice-football-1-comets'));
+    await tester.scrollUntilVisible(
+      choice,
+      250,
+      scrollable: find.descendant(
+        of: find.byKey(const Key('pick-game-list')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<InkWell>(choice).onTap, isNull);
+    expect(tester.getSemantics(choice).label, contains('locked'));
+    await controller.chooseTeam(
+      controller.selectedGames.firstWhere((game) => game.id == 'football-1'),
+      'comets',
+    );
+    expect(controller.picks['football-1'], isNull);
+  });
+
   testWidgets('pick cards show game status, score, and graded outcome', (
     tester,
   ) async {

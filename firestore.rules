@@ -43,18 +43,6 @@ service cloud.firestore {
         );
     }
 
-    function entryPath(leagueId, weekId, uid) {
-      return /databases/$(database)/documents/leagues/$(leagueId)/weeks/$(weekId)/entries/$(uid);
-    }
-
-    function validPickTeam(leagueId, weekId, gameId) {
-      let game = get(gamePath(leagueId, weekId, gameId)).data;
-      return request.resource.data.selectedTeamId in [
-        game.homeTeam.id,
-        game.awayTeam.id
-      ];
-    }
-
     function effectivePickLock(leagueId, weekId, gameId) {
       let week = get(weekPath(leagueId, weekId)).data;
       let game = get(gamePath(leagueId, weekId, gameId)).data;
@@ -66,16 +54,6 @@ service cloud.firestore {
           && week.effectiveSlateLockAtUtc is timestamp
         ? week.effectiveSlateLockAtUtc
         : game.effectiveLockAtUtc;
-    }
-
-    function pickIsOpen(leagueId, weekId, gameId, uid) {
-      let week = get(weekPath(leagueId, weekId)).data;
-      let entry = get(entryPath(leagueId, weekId, uid)).data;
-      let lockAt = effectivePickLock(leagueId, weekId, gameId);
-      return week.status in ["open", "inProgress"]
-        && entry.eligible == true
-        && lockAt is timestamp
-        && request.time < lockAt;
     }
 
     match /users/{uid} {
@@ -145,33 +123,10 @@ service cloud.firestore {
               && request.auth.uid == uid;
             allow list: if isActiveMember(leagueId)
               && request.auth.uid == uid;
-            allow create: if isActiveMember(leagueId)
-              && request.auth.uid == uid
-              && pickIsOpen(leagueId, weekId, gameId, uid)
-              && validPickTeam(leagueId, weekId, gameId)
-              && request.resource.data.keys().hasOnly([
-                "gameId",
-                "selectedTeamId",
-                "selectedAt",
-                "updatedAt",
-                "lockAtSnapshot"
-              ])
-              && request.resource.data.gameId == gameId
-              && request.resource.data.selectedAt == request.time
-              && request.resource.data.updatedAt == request.time
-              && request.resource.data.lockAtSnapshot
-                == effectivePickLock(leagueId, weekId, gameId);
-            allow update: if isActiveMember(leagueId)
-              && request.auth.uid == uid
-              && pickIsOpen(leagueId, weekId, gameId, uid)
-              && validPickTeam(leagueId, weekId, gameId)
-              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                "selectedTeamId",
-                "updatedAt"
-              ])
-              && request.resource.data.gameId == resource.data.gameId
-              && request.resource.data.updatedAt == request.time;
-            allow delete: if false;
+            // The callable is the only mutation boundary. It validates the
+            // authoritative clock and seals the whole entry after completion.
+            // Direct writes would bypass the entry counter and permanent seal.
+            allow create, update, delete: if false;
           }
         }
 

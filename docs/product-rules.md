@@ -22,6 +22,8 @@ This document is authoritative for the MVP.
   or picks were revealed.
 - Picks are private before each game lock. Completion state is visible, choices
   are not. A server-generated reveal is readable by members after lock.
+- Saving the final required pick permanently seals the whole weekly entry.
+  Exact retries are harmless, but no selection can be changed after completion.
 - An offline choice is an unconfirmed local draft. Arrival after lock is
   rejected.
 

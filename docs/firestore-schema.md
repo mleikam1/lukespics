@@ -11,8 +11,8 @@ league rules and display names.
 | `leagues/{leagueId}/private/invite` | Hashed invite configuration | Server only |
 | `leagues/{leagueId}/weeks/{weekId}` | Explicit week, picker, snapshots, status, winners | Active members read |
 | `.../weeks/{weekId}/games/{gameId}` | Canonical selected-game snapshot and result | While the week is `draft`: assigned picker and owner/commissioner only; afterward active members read; server writes |
-| `.../weeks/{weekId}/entries/{uid}` | Public completion and graded summary | Active members read; server writes |
-| `.../entries/{uid}/picks/{gameId}` | Private pre-lock team choice | Matching entry user (`uid`) only before lock; arena owners/commissioners denied |
+| `.../weeks/{weekId}/entries/{uid}` | Public completion and graded summary; `submittedAt` permanently seals a completed entry | Active members read; server writes |
+| `.../entries/{uid}/picks/{gameId}` | Private pre-lock team choice | Matching entry user (`uid`) reads; all mutations use the trusted callable; arena owners/commissioners denied |
 | `.../weeks/{weekId}/reveals/{gameId}/picks/{uid}` | Post-lock reveal copy | Members after server reveal |
 | `leagues/{leagueId}/standings/{uid}` | Rebuilt aggregate snapshot | Active members read |
 | `leagues/{leagueId}/auditLogs/{id}` | Safe immutable admin trail | Owner/commissioner read |

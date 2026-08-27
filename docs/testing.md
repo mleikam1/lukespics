@@ -23,19 +23,26 @@ SPORTSDATAIO_API_KEY=
 That is deliberate. A passing fixture or emulator test is not a live-provider
 smoke test.
 
-## CBS college-football boundary — 2026-08-25
+## CBS college-football boundary — 2026-08-27
 
 CBS parser and cache tests use small synthetic HTML fragments and mocked HTTP.
 Routine tests, emulator runs, browser automation, and CI must not contact CBS or
 persist a public page. The bounded public-route observation performed during
 development is separate evidence: it confirmed matchup markup, but not a
-trustworthy kickoff timestamp or a live authenticated product flow.
+live authenticated product flow. The 2026-08-27 observation also confirmed
+that all 99 embedded preloaded-state UTC epochs agreed with their Eastern
+display times, abbreviations, and week identity. The parser test reproduces
+that bounded shape synthetically; no raw CBS response is checked in. Additional
+minimal fixtures cover CBS's year-round `EDT` display label by comparing the
+epoch's real New York wall time, plus the live postseason `post` token and its
+route-week/internal-week divergence.
 
 The focused deterministic coverage lives in:
 
 - `functions/test/cbs-college-football-provider.test.ts` for strict route
   construction, canonical/title page identity, parsing, normalization, IDs,
-  statuses, logos, and conservative kickoff handling;
+  statuses, logos, and conservative kickoff handling, including fail-closed
+  visible/preloaded time and date conflicts that remain TBD after merging;
 - `functions/test/cbs-college-football-cache.test.ts` for config bounds,
   active-identity-only fetches, exact redirects, canonical cache identity,
   leases, cooldown, per-outbound-attempt rolling cap, parser-version reparse,
@@ -48,9 +55,9 @@ The focused deterministic coverage lives in:
 Flutter tests exercise NCAAF controls restricted to the configured active
 season/type/week, cross-provider calendar ownership, arena-timezone display, TBD
 selection blocking, stale/last-updated state, and retention across refresh. A
-synthetic confirmed-time fixture can prove workflow compatibility; it cannot
-prove that the current public CBS page supplies a selectable game. No production
-CBS deployment or authenticated end-to-end acceptance is recorded.
+synthetic confirmed-time fixture proves workflow compatibility. Live rollout
+still requires an exact Functions release, private parser-version bump, forced
+refresh, and authenticated UI verification.
 
 The authenticated emulator flow does prove the local cache-backed boundary: an
 owner loads a fresh preseeded CBS game without consuming a provider attempt,
