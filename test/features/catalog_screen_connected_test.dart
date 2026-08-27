@@ -417,6 +417,30 @@ void main() {
       expect(tbdCheckbox.onChanged, isNull);
       expect(controller.isCatalogGameSelectable(tbdGame), isFalse);
       expect(controller.selectedGameIds, isEmpty);
+      final confirmTimeButton = find.byKey(
+        const Key('catalog-confirm-time-mlb-time-tbd'),
+      );
+      expect(confirmTimeButton, findsOneWidget);
+      await tester.tap(confirmTimeButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Confirm kickoff and add'), findsOneWidget);
+      expect(find.text('Tap to enter the verified kickoff'), findsOneWidget);
+      final dialogTextFields = find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(TextField),
+      );
+      expect(
+        tester.widget<TextField>(dialogTextFields.first).controller?.text,
+        'North Pines',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Add to slate'));
+      await tester.pump();
+      expect(
+        find.text('Confirm the published kickoff date and time first.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
       expect(
         tester
             .widget<Text>(

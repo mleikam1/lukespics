@@ -518,6 +518,10 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     }
     final items = <Widget>[];
     void addGame(Game game) {
+      final canConfirmKickoff =
+          !controller.catalogStale &&
+          !controller.selectedGameIds.contains(game.id) &&
+          (game.timeTbd || game.scheduledAtUtc == null);
       items.add(
         _CatalogGameCard(
           game: game,
@@ -533,6 +537,10 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
           ),
           leagueTimezone: groupByDate ? controller.leagueTimezone : null,
           onChanged: () => controller.toggleSlateGame(game.id),
+          onConfirmKickoff: canConfirmKickoff
+              ? () =>
+                    _showManualGameDialog(context, controller, sourceGame: game)
+              : null,
         ),
       );
     }
@@ -976,28 +984,44 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
 
   Future<void> _showManualGameDialog(
     BuildContext context,
-    AppController controller,
-  ) async {
-    final home = TextEditingController();
-    final away = TextEditingController();
-    final league = TextEditingController(text: 'Community Sports');
-    final venue = TextEditingController();
-    var scheduledAt = DateTime.now().add(const Duration(days: 1));
+    AppController controller, {
+    Game? sourceGame,
+  }) async {
+    final home = TextEditingController(text: sourceGame?.homeTeam.name);
+    final away = TextEditingController(text: sourceGame?.awayTeam.name);
+    final league = TextEditingController(
+      text: sourceGame?.leagueName ?? 'Community Sports',
+    );
+    final venue = TextEditingController(text: sourceGame?.venueName);
+    final sourceDay = sourceGame?.scheduledDayEastern == null
+        ? null
+        : DateTime.tryParse('${sourceGame!.scheduledDayEastern}T12:00:00');
+    var scheduledAt = sourceDay ?? DateTime.now().add(const Duration(days: 1));
+    var kickoffConfirmed = sourceGame == null;
     String? validation;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setDialogState) => AlertDialog(
-          title: const Text('Add a manual game'),
+          title: Text(
+            sourceGame == null
+                ? 'Add a manual game'
+                : 'Confirm kickoff and add',
+          ),
           content: SizedBox(
             width: 520,
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
-                    'Use neutral team names for a schedule that does not come '
-                    'from the configured provider.',
+                  Text(
+                    sourceGame == null
+                        ? 'Use neutral team names for a schedule that does not '
+                              'come from the configured provider.'
+                        : 'CBS published this matchup without a trustworthy '
+                              'server-side kickoff. Verify the start from a '
+                              'trusted schedule; Luke’s Picks will use it as '
+                              'the pick deadline.',
                   ),
                   const SizedBox(height: 16),
                   TextField(
@@ -1029,7 +1053,11 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                     leading: const Icon(Icons.event_rounded),
                     title: const Text('Scheduled start'),
                     subtitle: Text(
-                      DateFormat('EEE, MMM d · h:mm a').format(scheduledAt),
+                      sourceGame != null && !kickoffConfirmed
+                          ? 'Tap to enter the verified kickoff'
+                          : DateFormat(
+                              'EEE, MMM d · h:mm a',
+                            ).format(scheduledAt),
                     ),
                     trailing: const Icon(Icons.edit_calendar_rounded),
                     onTap: () async {
@@ -1053,6 +1081,8 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                           time.hour,
                           time.minute,
                         );
+                        kickoffConfirmed = true;
+                        validation = null;
                       });
                     },
                   ),
@@ -1077,11 +1107,19 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
             ),
             FilledButton(
               onPressed: () async {
+                if (!kickoffConfirmed) {
+                  setDialogState(
+                    () => validation =
+                        'Confirm the published kickoff date and time first.',
+                  );
+                  return;
+                }
                 final saved = await controller.addManualGame(
                   homeName: home.text,
                   awayName: away.text,
                   leagueName: league.text,
                   scheduledAt: scheduledAt,
+                  sportCode: sourceGame?.sportCode ?? 'custom',
                   venueName: venue.text,
                 );
                 if (!dialogContext.mounted) return;
@@ -1438,6 +1476,7 @@ class _CatalogGameCard extends StatelessWidget {
     required this.logoPolicy,
     this.leagueTimezone,
     required this.onChanged,
+    this.onConfirmKickoff,
   });
 
   final Game game;
@@ -1447,6 +1486,7 @@ class _CatalogGameCard extends StatelessWidget {
   final TeamLogoPolicy logoPolicy;
   final String? leagueTimezone;
   final VoidCallback onChanged;
+  final VoidCallback? onConfirmKickoff;
 
   @override
   Widget build(BuildContext context) {
@@ -1580,7 +1620,7 @@ class _CatalogGameCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   SizedBox(
-                    width: 72,
+                    width: onConfirmKickoff == null ? 72 : 96,
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1589,6 +1629,8 @@ class _CatalogGameCard extends StatelessWidget {
                               ? Icons.remove_circle_outline_rounded
                               : enabled
                               ? Icons.add_circle_outline_rounded
+                              : onConfirmKickoff != null
+                              ? Icons.schedule_rounded
                               : Icons.block_rounded,
                           color: selected
                               ? Theme.of(context).colorScheme.tertiary
@@ -1600,10 +1642,27 @@ class _CatalogGameCard extends StatelessWidget {
                               ? 'Remove'
                               : enabled
                               ? 'Add'
+                              : onConfirmKickoff != null
+                              ? 'Set kickoff'
                               : 'Unavailable',
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.labelSmall,
                         ),
+                        if (onConfirmKickoff != null) ...[
+                          const SizedBox(height: 6),
+                          OutlinedButton(
+                            key: Key('catalog-confirm-time-${game.id}'),
+                            onPressed: onConfirmKickoff,
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 6,
+                              ),
+                              minimumSize: const Size(88, 34),
+                            ),
+                            child: const Text('Choose time'),
+                          ),
+                        ],
                       ],
                     ),
                   ),

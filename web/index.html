@@ -16,6 +16,19 @@
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.json">
   <title>Luke’s Picks</title>
+  <script>
+    // Keep durable Firebase Auth state on one user-facing origin. Firebase's
+    // alternate Hosting hostname remains available for the OAuth handler, but
+    // top-level visits should always return to the canonical live app.
+    if (window.location.hostname === 'lukes-picks.firebaseapp.com') {
+      window.location.replace(
+        'https://lukes-picks.web.app' +
+        window.location.pathname +
+        window.location.search +
+        window.location.hash
+      );
+    }
+  </script>
   <style>
     html, body { height: 100%; margin: 0; background: #0B1F3A; }
     #boot {

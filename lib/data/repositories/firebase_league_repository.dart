@@ -50,14 +50,39 @@ final class FirebaseLeagueRepository implements LeagueRepository {
           .where('uid', isEqualTo: uid)
           .where('status', isEqualTo: 'active')
           .get();
-      final leagueIds =
-          memberships.docs
-              .map((document) => document.reference.parent.parent?.id)
-              .whereType<String>()
-              .toSet()
-              .toList(growable: false)
-            ..sort();
-      return leagueIds;
+      final joinedAtByLeagueId = <String, DateTime?>{};
+      for (final membership in memberships.docs) {
+        final leagueId = membership.reference.parent.parent?.id;
+        if (leagueId == null || leagueId.isEmpty) continue;
+        final joinedAtValue = membership.data()['joinedAt'];
+        final joinedAt = joinedAtValue is Timestamp
+            ? joinedAtValue.toDate()
+            : null;
+        if (!joinedAtByLeagueId.containsKey(leagueId)) {
+          joinedAtByLeagueId[leagueId] = joinedAt;
+          continue;
+        }
+        final existing = joinedAtByLeagueId[leagueId];
+        if (existing == null ||
+            (joinedAt != null && joinedAt.isAfter(existing))) {
+          joinedAtByLeagueId[leagueId] = joinedAt;
+        }
+      }
+      final membershipsByRecency = joinedAtByLeagueId.entries.toList()
+        ..sort((left, right) {
+          final leftJoinedAt = left.value;
+          final rightJoinedAt = right.value;
+          if (leftJoinedAt == null && rightJoinedAt != null) return 1;
+          if (leftJoinedAt != null && rightJoinedAt == null) return -1;
+          if (leftJoinedAt != null && rightJoinedAt != null) {
+            final byJoinedAt = rightJoinedAt.compareTo(leftJoinedAt);
+            if (byJoinedAt != 0) return byJoinedAt;
+          }
+          return left.key.compareTo(right.key);
+        });
+      return membershipsByRecency
+          .map((membership) => membership.key)
+          .toList(growable: false);
     } on FirebaseException catch (error) {
       throw RepositoryException(
         error.code,

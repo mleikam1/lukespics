@@ -4,7 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 
 import '../core/widgets/brand_mark.dart';
@@ -21,6 +21,14 @@ final class BootstrapResult {
 
   final AppRuntimeMode mode;
   final String? message;
+}
+
+@visibleForTesting
+Future<void> waitForInitialAuthState(
+  Stream<User?> authStateChanges, {
+  Duration timeout = const Duration(seconds: 6),
+}) async {
+  await authStateChanges.first.timeout(timeout);
 }
 
 final class AppBootstrap {
@@ -79,6 +87,11 @@ final class AppBootstrap {
               'was loaded.',
         );
       }
+      // Wait for Firebase Auth to finish hydrating its durable browser state
+      // before the router decides whether this visit needs a sign-in screen.
+      // Without this gate, a returning web user can briefly look signed out
+      // while IndexedDB restoration is still in progress.
+      await waitForInitialAuthState(FirebaseAuth.instance.authStateChanges());
       await FirebaseServiceBootstrap.configureProductionServices();
       return const BootstrapResult(mode: AppRuntimeMode.firebase);
     } on Object {

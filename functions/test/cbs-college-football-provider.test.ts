@@ -406,6 +406,55 @@ describe("CBS college-football semantic parsing", () => {
 });
 
 describe("CBS public score-card fallbacks", () => {
+  it("extracts the raw card's numeric game ID and calendar day without inventing a kickoff", () => {
+    const html = `
+      <article class="single-score-card" id="game-50027398"
+        data-abbrev="NCAAF_20260829_UNC@TCU">
+        ${teamRow({name: "North Carolina", side: "away"})}
+        ${teamRow({name: "TCU", side: "home"})}
+      </article>`;
+
+    const result = parseCbsCollegeFootballScoreboardHtml(html, {
+      ...context,
+      season: 2026,
+      observedAt: new Date("2026-08-27T12:00:00.000Z"),
+    });
+
+    expect(result.games).toHaveLength(1);
+    expect(result.games[0]).toMatchObject({
+      providerGameId: "50027398",
+      scheduledDayEastern: "2026-08-29",
+      scheduledAtUtc: null,
+      publishedScheduledAtUtc: null,
+      effectiveLockAtUtc: null,
+      timeTbd: true,
+      kickoffDisplayText: null,
+      dateHeading: null,
+      status: "reviewRequired",
+    });
+  });
+
+  it("uses a validated data-abbrev as the stable ID fallback", () => {
+    const html = `
+      <article class="single-score-card"
+        data-abbrev="NCAAF_20260829_UNC@TCU">
+        ${teamRow({name: "North Carolina", side: "away"})}
+        ${teamRow({name: "TCU", side: "home"})}
+      </article>`;
+
+    const game = parseCbsCollegeFootballScoreboardHtml(html, {
+      ...context,
+      season: 2026,
+    }).games[0];
+
+    expect(game).toMatchObject({
+      providerGameId: "NCAAF_20260829_UNC-TCU",
+      scheduledDayEastern: "2026-08-29",
+      scheduledAtUtc: null,
+      timeTbd: true,
+    });
+  });
+
   it("associates multiple games with their date headings and keeps incomplete optional data", () => {
     const html = `
       <section>

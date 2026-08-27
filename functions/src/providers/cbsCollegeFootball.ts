@@ -34,7 +34,7 @@ const DATE_HEADING_SELECTOR = [
 ].join(", ");
 const CBS_PROVIDER = "cbsSports" as NormalizedGame["provider"];
 
-export const CBS_COLLEGE_FOOTBALL_PARSER_VERSION = "1.0.0";
+export const CBS_COLLEGE_FOOTBALL_PARSER_VERSION = "1.1.0";
 export const CBS_COLLEGE_FOOTBALL_LOGO_HOSTS = [...CBS_LOGO_HOSTS] as const;
 
 export type CbsCollegeFootballSeasonType = "regular" | "postseason";
@@ -837,6 +837,45 @@ function gameIdFromUrl(value: string | null): string | null {
   return safeIdentifier(match?.[1]);
 }
 
+type CardGameAbbrev = {
+  identifier: string;
+  scheduledDay: string;
+};
+
+function cardGameAbbrev(
+  card: Cheerio<AnyNode>,
+  context: Required<CbsCollegeFootballScoreboardInput>,
+): CardGameAbbrev | null {
+  const value = cleanText(card.attr("data-abbrev"), 160);
+  if (value === null) return null;
+  const match = /^NCAAF_(\d{4})(\d{2})(\d{2})_([A-Za-z0-9.-]{1,24})@([A-Za-z0-9.-]{1,24})$/.exec(
+    value,
+  );
+  if (match === null) return null;
+  const year = Number(match[1]);
+  const isExpectedSeasonYear =
+    year === context.season ||
+    (context.seasonType === "postseason" && year === context.season + 1);
+  if (!isExpectedSeasonYear) return null;
+  const scheduledDay = isoDay(year, Number(match[2]), Number(match[3]));
+  const identifier = safeIdentifier(value);
+  if (scheduledDay === null || identifier === null) return null;
+  return {identifier, scheduledDay};
+}
+
+function gameIdFromCardAttributes(
+  card: Cheerio<AnyNode>,
+  gameAbbrev: CardGameAbbrev | null,
+): string | null {
+  const explicit = safeIdentifier(
+    firstAttribute(card, ["data-game-id", "data-event-id", "data-cbs-game-id"]),
+  );
+  if (explicit !== null) return explicit;
+  const elementId = cleanText(card.attr("id"), 128);
+  const numericGameId = /^game-(\d{1,20})$/.exec(elementId ?? "")?.[1];
+  return numericGameId ?? gameAbbrev?.identifier ?? null;
+}
+
 function venueNameFromCard(card: Cheerio<AnyNode>): string | null {
   const attribute = firstAttribute(card, ["data-venue", "data-venue-name"]);
   if (attribute !== null) return attribute;
@@ -892,6 +931,7 @@ function cardCandidate(
   const card = $(element);
   const teams = teamsFromCard(card);
   if (teams === null || teams.awayTeam.slug === teams.homeTeam.slug) return null;
+  const gameAbbrev = cardGameAbbrev(card, context);
   const headingValue =
     firstAttribute(card, ["data-game-date", "data-date"]) ?? heading;
   const kickoffDisplayText =
@@ -916,7 +956,9 @@ function cardCandidate(
   const day =
     parseDateHeading(semanticStart, context.season, context.seasonType) ??
     parseDateHeading(headingValue, context.season, context.seasonType) ??
-    parseDateHeading(kickoffDisplayText, context.season, context.seasonType);
+    parseDateHeading(kickoffDisplayText, context.season, context.seasonType) ??
+    gameAbbrev?.scheduledDay ??
+    null;
   const start =
     parseAbsoluteOrEasternTimestamp(semanticStart, day) ??
     parseAbsoluteOrEasternTimestamp(kickoffDisplayText, day);
@@ -937,9 +979,7 @@ function cardCandidate(
     ordered.find((row) => teamFromRow(row)?.slug === teams.homeTeam.slug) ?? null;
   const sourceGameUrl = gameUrlFromCard(card);
   const explicitGameId =
-    safeIdentifier(
-      firstAttribute(card, ["data-game-id", "data-event-id", "data-cbs-game-id"]),
-    ) ?? gameIdFromUrl(sourceGameUrl);
+    gameIdFromCardAttributes(card, gameAbbrev) ?? gameIdFromUrl(sourceGameUrl);
   const neutralText = firstDescendantText(
     card,
     [".neutral-site", "[data-neutral-site]"],
