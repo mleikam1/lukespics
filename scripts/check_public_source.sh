@@ -63,12 +63,21 @@ for (const appId of Object.values(configured.configurations ?? {})) {
 const stableFlutterAssetHeaders = (firebase.hosting?.headers ?? []).find(
   (entry) => entry.source === "**/*.@(js|css|wasm)",
 );
+const appShellHeaders = (firebase.hosting?.headers ?? []).find(
+  (entry) => entry.source === "**",
+);
+const appShellCacheControl = appShellHeaders?.headers?.find(
+  (entry) => entry.key.toLowerCase() === "cache-control",
+)?.value;
 const stableFlutterCacheControl = stableFlutterAssetHeaders?.headers?.find(
   (entry) => entry.key.toLowerCase() === "cache-control",
 )?.value;
-if (stableFlutterCacheControl !== "public,max-age=0,must-revalidate") {
+if (
+  appShellCacheControl !== "public,max-age=0,must-revalidate" ||
+  stableFlutterCacheControl !== "public,max-age=0,must-revalidate"
+) {
   throw new Error(
-    "Stable Flutter asset filenames must revalidate so clients receive releases immediately.",
+    "The Flutter app shell and stable asset filenames must revalidate so clients receive releases immediately.",
   );
 }
 NODE
