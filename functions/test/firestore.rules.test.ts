@@ -212,6 +212,13 @@ async function seed(): Promise<void> {
       setDoc(doc(firestore, "sportsCache/internal"), {
         secret: "server-only",
       }),
+      setDoc(
+        doc(
+          firestore,
+          "sportsProviderCache/cbs_ncaaf_FBS_2026_regular_1",
+        ),
+        {sourceUrl: "server-only", etag: "private-validator"},
+      ),
       setDoc(doc(firestore, "sportsCatalogGames/sportsDataIo:football:401000001"), {
         provider: "sportsDataIo",
         providerGameId: "401000001",
@@ -510,6 +517,14 @@ describe("Firestore security boundary", () => {
     await assertFails(getDoc(doc(owner, "sportsCache/internal")));
     await assertFails(
       getDoc(
+        doc(
+          owner,
+          "sportsProviderCache/cbs_ncaaf_FBS_2026_regular_1",
+        ),
+      ),
+    );
+    await assertFails(
+      getDoc(
         doc(owner, "sportsCatalogGames/sportsDataIo:football:401000001"),
       ),
     );
@@ -530,6 +545,16 @@ describe("Firestore security boundary", () => {
     await assertFails(
       setDoc(doc(owner, "providerCircuitStates/sportsDataIo"), {
         circuitOpenUntil: Timestamp.now(),
+      }),
+    );
+    await assertFails(
+      setDoc(doc(owner, "providerUsage/cbsSports_rolling24h"), {
+        requestTimestamps: [Timestamp.now()],
+      }),
+    );
+    await assertFails(
+      setDoc(doc(owner, "systemConfig/cbsCollegeFootball"), {
+        enabled: true,
       }),
     );
     await assertFails(

@@ -21,6 +21,54 @@ Production arenas must remain `manual`. Do not describe the current live site
 as SportsDataIO-backed until an authorized deployment and the complete
 activation process below have both passed.
 
+## Current CBS college-football addition — 2026-08-25
+
+The current branch also adds the server-only `cbsSports` NCAAF/FBS schedule
+adapter. It has not been deployed or enabled in production, and no authenticated
+picker-to-results CBS workflow has been accepted. One bounded read of the public
+2026 regular-season Week 1 scoreboard confirmed the exact route and matchup
+markup, but it exposed no trustworthy kickoff date/time; those observations are
+correctly TBD and unselectable.
+
+The deployment is additive: `getCollegeFootballSchedule` and
+`refreshCollegeFootballScheduleAdmin` are callable Functions, and
+`refreshActiveCollegeFootballSchedule` is an hourly scheduled Function with
+automatic retries disabled. Existing `scheduledResultSync` remains the separate
+30-minute selected-result job. CBS adds a Firestore Rules denial for
+`sportsProviderCache`; it does not add or modify a composite index.
+
+CBS activation has no API key, but it still requires a separate operational and
+source-policy review:
+
+1. Confirm the exact target is `lukes-picks`, Blaze billing is active, the Cloud
+   Scheduler API is available, and the scheduler service agent can invoke the
+   deployed Function.
+2. Recheck the public scoreboard route and applicable CBS terms/robots policy;
+   do not use hidden endpoints, alternate hosts, authentication, cookies,
+   proxies, or anti-bot workarounds. Confirm redirects and the page
+   canonical/title still resolve to the exact configured season/type/week/FBS
+   identity.
+3. Create `systemConfig/cbsCollegeFootball` with `enabled: false` and
+   `autoRefreshEnabled: false`, a reviewed active FBS season/type/week, refresh
+   bounds, parser version, and request cap at or below 12.
+4. Deploy Rules and Functions, run the deterministic/emulator/browser/build
+   matrix, inspect the exact Function addition/deletion plan, and confirm the
+   hourly scheduler performs no request while disabled.
+5. Only after a separately authorized one-arena preview, set
+   `settings.providerBySport.NCAAF` to `cbsSports`; leave `providerName` and
+   every other sport unchanged. Enable CBS and automatic refresh as separate,
+   reversible configuration writes.
+
+Do not claim full acceptance until the real picker can load a CBS week with a
+confirmed UTC kickoff, select and publish it, submit and lock picks, reconcile a
+defensible final, and preserve standings through rollback. Synthetic confirmed-
+time fixtures do not satisfy that live gate.
+
+Only the configured active season/type/week is eligible for network access or
+advertised in the picker UI. Do not broaden that identity for a smoke test: an
+inactive week is cache-only internally and is rejected by the member-facing
+callables.
+
 ## Exact provider surface
 
 The client permits only `https://api.sportsdata.io`, HTTPS, no query string,
@@ -118,6 +166,11 @@ Before deploying this branch:
 - stop if a command proposes deleting an unexpected Function, index, site,
   release, secret, document, or other resource.
 
+For the CBS addition, also confirm `systemConfig/cbsCollegeFootball` remains
+disabled during the first deploy, no arena has an unintended `NCAAF` override,
+the new hourly schedule is the only new automatic trigger, routine tests made no
+CBS request, and `firestore.indexes.json` has no CBS-related change.
+
 ## Allowed release commands
 
 The wrapper accepts four fixed actions and no project override:
@@ -179,6 +232,15 @@ If a future authorized activation misbehaves:
    through a separately authorized guarded write; and
 5. preserve normalized caches, provider-qualified IDs, published week
    snapshots, picks, results, audits, overrides, and standings.
+
+For a CBS-specific rollback, first set both
+`systemConfig/cbsCollegeFootball.enabled` and `autoRefreshEnabled` to false,
+then remove `settings.providerBySport.NCAAF` (or restore its prior value). The
+hourly Function then becomes a no-op and new NCAAF catalog traffic returns to
+the arena default. Preserve `sportsProviderCache`, rolling usage records,
+published game snapshots, picks, results, standings, and audits. Redeploy a
+reviewed prior Functions revision only if disabling configuration and routing
+is insufficient.
 
 A replacement provider game ID never silently replaces a published selection.
 Use the audited commissioner correction/void workflow. Do not roll back by

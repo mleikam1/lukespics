@@ -9,13 +9,16 @@ flowchart LR
   Rules --> Firestore["Cloud Firestore"]
   Client --> Callables["Callable Functions v2"]
   Callables --> Services["Shared backend services"]
-  Scheduler["Scheduled result sync"] --> Services
+  Scheduler["30-minute result sync"] --> Services
+  CbsScheduler["Hourly CBS active-week refresh"] --> Services
   Services --> Firestore
   Config["Server-owned NFL/MLB catalog<br/>systemConfig/sportsDataIoCatalog"] --> Services
+  CbsConfig["Server-owned CBS week config<br/>systemConfig/cbsCollegeFootball"] --> Services
   Gate["SportsDataIO project/mode/entitlement/kill-switch gates"] --> Services
   Secret["Secret Manager key<br/>provider Functions only"] --> Services
   Services --> Cache["Provider cache / quota / locks"]
   Cache --> Provider["SportsDataIO client<br/>separate NFL + MLB adapters"]
+  Cache --> CBS["Allowlisted public CBS FBS scoreboard<br/>one configured week"]
   Cache --> Internal["TheSportsDB test adapter<br/>emulator/internal only"]
   Cache --> Fallback["Mock test data / manual fallback"]
   Firestore --> Reveals["Server-generated pick reveals"]
@@ -55,6 +58,11 @@ UI filter changes issue new callable requests using those server-returned
 identities. Date windows are arena-local calendar dates, constrained to the
 active week and seven inclusive days in both the client and server.
 
+Arena provider selection is backward compatible and per sport:
+`settings.providerName` is the default, and `settings.providerBySport` overrides
+only named sports. Mapping `NCAAF` to `cbsSports` therefore does not reroute an
+arena's NFL, MLB, or manual catalog.
+
 The deployed dormant-provider Flutter and Functions layers passed the isolated
 three-user browser-to-emulator release test together. See
 [validation-report.md](validation-report.md) for dated evidence.
@@ -85,6 +93,25 @@ buckets. The dedicated client constructs only five exact HTTPS League API path
 families and authenticates by header. Flutter never receives a vendor URL, key,
 or raw schema.
 
+The separate `cbsSports` adapter reads
+`systemConfig/cbsCollegeFootball` through the Admin SDK and supports only the
+`NCAAF` / `ncaaf` / `FBS` identity. It constructs a single HTTPS CBS scoreboard
+route from validated season, season type, and week fields; neither Flutter nor
+Firestore supplies an arbitrary URL. Redirects must resolve to that exact route,
+and the page canonical/`og:url` or title must confirm the same season, type, week,
+and FBS identity. Normalized week data, refresh lease, conditional-request
+metadata, and per-page safe failure state live in the private
+`sportsProviderCache` document. The provider-global rolling-24-hour attempt
+ledger, failure counter, and circuit deadline live at
+`providerUsage/cbsSports_rolling24h`. Raw HTML is parsed in memory and is not
+persisted.
+
+Only the configured active identity can make a network request. The server and
+Flutter advertise exactly that season, season type, and week; they do not expose
+a synthetic historical range. Parser-version changes force a full
+unconditional reparse, and zero-game or unexplained smaller parses retain the
+last known good normalized schedule.
+
 Separate NFL and MLB adapters map endpoint-specific DTOs into
 `NormalizedGame`. NFL joins `SchedulesBasic` identity/reschedule data with
 `ScoresByDate`; MLB uses `GamesByDate` so exception statuses remain observable.
@@ -100,6 +127,14 @@ Provider-facing Functions retain the existing stable application contract:
   reject duplicates/empty publication, and atomically expose snapshots;
 - `refreshSelectedGames` is an admin refresh path with server throttling;
 - `syncSelectedGameResults` is the protected on-demand reconciliation path;
+- `getCollegeFootballSchedule` returns one normalized CBS FBS week to the
+  authenticated current picker or an arena owner/commissioner through the same
+  cache coordinator;
+- `refreshCollegeFootballScheduleAdmin` permits a reasoned, authorized
+  picker/admin refresh while retaining the production cooldown and request cap;
+- `refreshActiveCollegeFootballSchedule` runs hourly with retries disabled and
+  evaluates only the configured active week; it is a no-op when CBS or automatic
+  refresh is disabled;
 - `scheduledResultSync` runs every 30 minutes UTC, claims shared provider work,
   refreshes active selected games, reveals newly locked picks, and invokes the
   existing idempotent result/standings lifecycle; and
@@ -126,10 +161,12 @@ the same already-published slate, including final settlement of concurrent calls
 sharing one request ID.
 
 This branch declares these gates but is not deployed. No key or enabled
-production catalog is present locally, no live smoke is claimed, and production
-arenas remain manual-provider. Sanitized fixtures prove parser, normalization,
-transport, and workflow behavior only; they do not prove live schema or feed
-entitlement.
+production catalog is present locally, no live SportsDataIO smoke is claimed,
+and no live authenticated CBS picker workflow has been accepted. The bounded
+2026-08-25 CBS page observation lacked a trustworthy kickoff timestamp, so its
+matchups remain TBD and unselectable. Deterministic fixtures prove parser,
+normalization, transport, and workflow behavior only; they do not prove cloud
+activation or live end-to-end behavior.
 
 Finalization reads the entire authoritative week, recomputes entries, writes
 ranked snapshots, rebuilds aggregate standings, records an audit event, and
@@ -157,6 +194,9 @@ fields to `reveals/{gameId}/picks/{uid}`. Email remains in private
   Mock data is emulator/test-only.
 - Catalog cache identities include canonical provider metadata, date bounds,
   and timezone so arena-local queries cannot collide.
+- CBS is the exception by design: its canonical cache identity is one FBS
+  season/season-type/week page, and arena-date filtering happens only after the
+  shared weekly cache is read.
 - Provider presentation defaults to neutral initials. Remote URLs survive
   normalization and Flutter rendering only after a reviewed date and exact
   host/query policy pass independently at both layers.

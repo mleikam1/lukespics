@@ -18,14 +18,17 @@ league rules and display names.
 | `leagues/{leagueId}/auditLogs/{id}` | Safe immutable admin trail | Owner/commissioner read |
 | `sportsCache/{key}` | Normalized provider cache/content hash | Server only |
 | `sportsCache/{key}/items/{gameId}` | Normalized cached query item | Server only |
+| `sportsProviderCache/cbs_ncaaf_FBS_{season}_{seasonType}_{week}` | CBS normalized weekly games, lease, validators, cadence, and safe failure/circuit metadata; never raw HTML | Server only |
 | `sportsCatalogGames/{gameId}` | Canonical catalog eligibility snapshot used to validate a draft | Server only |
 | `providerUsage/{provider}_{UTC-day}` | Daily request budget and quota observations | Server only |
+| `providerUsage/cbsSports_rolling24h` | Bounded CBS attempt reservations/timestamps plus provider-global failure and circuit state | Server only |
 | `providerCircuitStates/{provider}` | Provider-scoped circuit-breaker state across UTC day rollover | Server only |
 | `providerLocks/{key}` | Distributed refresh lease | Server only |
 | `providerManualRefreshLimits/{id}` | Server-side manual refresh throttle | Server only |
 | `joinCodeMappings/{hash}` | Non-queryable join lookup | Server only |
 | `joinAttemptLimits/{id}` | Hashed join-attempt throttle state | Server only |
 | `systemConfig/sportsDataIoCatalog` | Default-off NFL/MLB catalog, entitlement metadata, and kill switch | Server only |
+| `systemConfig/cbsCollegeFootball` | Default-off CBS FBS active-week identity and trusted UTC week-start cadence boundary, refresh policy, request cap, parser version, and kill switches | Server only |
 | `systemConfig/apiSportsCatalog` | Validated API-Sports leagues and fail-closed presentation policy | Server only |
 | `systemConfig/theSportsDbTestCatalog` | Emulator/internal-test provider catalog | Server only |
 | `systemConfig/{id}` | Other server-only runtime configuration | Server only |
@@ -37,18 +40,20 @@ league-game, global-game, and game-key cross references, canonical
 `providerLeagueId`, sport/league/season, optional round, nullable
 scheduled/published/lock timestamps, Eastern scheduled day, `timeTbd`,
 closure/reschedule metadata, venue/neutral status, typed teams, normalized status,
-status detail, scores/winner, broadcast/event detail, provider raw-schema
-version, provider and sync timestamps, override data, result version, and source
-payload hash. Teams may include a normalized color and a rights-gated remote
-logo URL. The provider league ID and season are persisted so later
+status detail, scores/winner, broadcast/event detail, optional source URL,
+source kickoff/date text, venue locality, provider raw-schema version, provider
+and sync timestamps, override data, result version, and source payload hash.
+Teams may include a normalized color and a rights-gated remote logo URL. The
+provider league ID and season are persisted so later
 result refresh can reproduce the exact provider query without guessing from a
 display league code.
 
 Canonical IDs use `{provider}:{sportCode}:{providerGameId}`. SportsDataIO keeps
 stable NFL/MLB IDs and never keys a game only by teams/date, so MLB
 doubleheaders remain distinct. Lock timestamps are monotonic once the server has
-locked or revealed the game. A time-TBD catalog record has a known Eastern day
-and null schedule/publication/lock timestamps; it cannot be selected or
+locked or revealed the game. A time-TBD catalog record may have a known source
+day or, for conservative CBS parsing, no trustworthy day at all. Its
+schedule/publication/lock timestamps remain null, and it cannot be selected or
 published until a real UTC instant is available.
 
 Published `firstGame` weeks also store `effectiveSlateLockAtUtc` on the week.
@@ -107,6 +112,24 @@ arrives before the final standings-query event still cannot reveal a partial
 generation. Rebuilds delete obsolete standing documents under the same fence.
 
 ## Provider catalog configuration
+
+League settings use `providerName` as the backward-compatible default and
+`providerBySport` as a bounded override map. The CBS route is selected with
+`providerBySport.NCAAF = "cbsSports"`; removing that key restores the default
+without altering other sports or historical provenance.
+
+`systemConfig/cbsCollegeFootball` is read only by trusted Functions. Its strict,
+fail-closed fields are `enabled`, `autoRefreshEnabled`, the active season,
+`regular`/`postseason` season type, week `0`–`25`, fixed `FBS` division,
+120–240-minute refresh bounds, parser version, and a rolling request limit that
+cannot exceed 12 outbound attempts across the provider. The configured
+season/type/week is the only identity eligible for a network fetch and the only
+CBS choice advertised to Flutter. The exact CBS weekly cache identity is
+`cbs_ncaaf_FBS_{season}_{seasonType}_{week}`. Cache documents hold normalized
+games and bounded operational metadata only; `providerUsage/cbsSports_rolling24h`
+holds bounded reservation IDs, cache IDs, attempt times, window/limit, the
+provider-global failure counter/circuit deadline, and update time—never response
+content. Firestore Rules deny client access to all three document families.
 
 `systemConfig/sportsDataIoCatalog` is read only by trusted Functions through the
 Admin SDK. Its validated shape contains:
@@ -176,6 +199,11 @@ lock.
 `firestore.indexes.json` contains queries for ordered weeks, rotation, game
 status/lock, and provider cache expiration. Add indexes only from observed query
 needs; avoid broad collection-group indexes over private pick fields.
+
+The CBS implementation performs direct document reads/transactions for its
+configuration, canonical weekly cache, and rolling usage ledger. It adds a
+rules denial for `sportsProviderCache` but no composite-index definition; the
+existing five reviewed indexes are unchanged by this branch.
 
 At the pre-release 2026-07-30 audit the cloud composite-index listing was empty.
 The guarded `lukes-picks` deployment created the five reviewed composite

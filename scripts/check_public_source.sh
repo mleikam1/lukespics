@@ -107,6 +107,11 @@ const sportsDataIoClient = path.resolve(
 const licensingPolicy = path.resolve("functions/src/providers/licensing.ts");
 const configSource = path.resolve("functions/src/config.ts");
 const functionManifest = path.resolve("functions/src/index.ts");
+const cbsRuntimeFiles = new Set([
+  path.resolve("functions/src/providers/cbsCollegeFootball.ts"),
+  path.resolve("functions/src/providers/cbsCollegeFootballProvider.ts"),
+  path.resolve("functions/src/services/cbsCollegeFootballSchedule.ts"),
+]);
 const sportsDataIoSecretFiles = new Set([configSource, functionManifest]);
 const blockedLogoRoots = new Set([
   "espn.com",
@@ -139,6 +144,13 @@ const sportsDataIoHostToken =
   /[A-Za-z0-9.-]*sportsdata\.io[A-Za-z0-9.-]*/gi;
 const blockedLogoHostToken =
   /[A-Za-z0-9.-]*(?:espn\.com|espncdn\.com|wikipedia\.org|wikimedia\.org)[A-Za-z0-9.-]*/gi;
+const cbsHostToken =
+  /[A-Za-z0-9.-]*(?:cbssports\.com|cbsimg\.net|cbsistatic\.com)[A-Za-z0-9.-]*/gi;
+const approvedCbsHosts = new Set([
+  "www.cbssports.com",
+  "sports.cbsimg.net",
+  "sportshub.cbsistatic.com",
+]);
 function isExactQuotedLiteral(source, hostIndex, host, expectedValue) {
   const hostOffset = expectedValue.indexOf(host);
   const literalStart = hostIndex - hostOffset - 1;
@@ -173,6 +185,13 @@ for (const file of files) {
       isExactQuotedLiteral(source, match.index, host, host);
     if (file !== licensingPolicy || !isBlockedRootLiteral) {
       violations.push(`${relative}: unapproved third-party logo host`);
+    }
+  }
+
+  for (const match of source.matchAll(cbsHostToken)) {
+    const host = match[0].toLowerCase();
+    if (!cbsRuntimeFiles.has(file) || !approvedCbsHosts.has(host)) {
+      violations.push(`${relative}: CBS host escaped the server-only provider allowlist`);
     }
   }
 

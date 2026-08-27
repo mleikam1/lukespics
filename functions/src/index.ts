@@ -1,7 +1,9 @@
 import {logger} from "firebase-functions";
 import {onSchedule} from "firebase-functions/v2/scheduler";
+import {HttpsError} from "firebase-functions/v2/https";
 import {callable} from "./callable.js";
 import {
+  db,
   INVITE_CODE_PEPPER,
   SPORTSDATAIO_API_KEY,
 } from "./config.js";
@@ -9,6 +11,8 @@ import {
   assignPickerSchema,
   createDraftWeekSchema,
   createLeagueSchema,
+  collegeFootballAdminRefreshSchema,
+  collegeFootballScheduleSchema,
   deleteAccountSchema,
   ensureUserProfileSchema,
   gameMutationSchema,
@@ -43,12 +47,22 @@ import {
   updateSettings,
 } from "./services/leagues.js";
 import {
+  assertCbsCollegeFootballActiveIdentity,
+  loadCbsCollegeFootballSchedule,
+  readCbsCollegeFootballConfiguration,
+  refreshActiveCbsCollegeFootballSchedule,
+  serializeCbsCollegeFootballScheduleResponse,
+  type CbsCollegeFootballConfig,
+} from "./services/cbsCollegeFootballSchedule.js";
+import {
   finalizeWeekAuthoritatively,
   rebuildLeagueStandingsAsNewGeneration,
 } from "./services/scoring.js";
 import {
   advanceRotation,
   assignPicker,
+  assertCurrentWeekProviderAccess,
+  configuredProviderForSport,
   createDraftWeekRecord,
   gradeWeekWithResultClaim,
   listCatalog,
@@ -62,9 +76,45 @@ import {
   submitEntry,
   syncActiveWeeks,
 } from "./services/weeks.js";
-import {requireAdmin, requireUser} from "./authz.js";
+import {
+  requireAdmin,
+  requireMembership,
+  requirePickerOrAdmin,
+  requireUser,
+} from "./authz.js";
 import {writeAudit} from "./audit.js";
 import type {LeagueSettings} from "./types.js";
+import {assertProviderAllowedForRuntime} from "./providers/policy.js";
+import {sha256} from "./utils.js";
+
+async function requireCbsCollegeFootballArena(input: {
+  leagueId: string;
+  season: number;
+  seasonType: "regular" | "postseason";
+  week: number;
+  division: "FBS";
+}): Promise<{
+  league: FirebaseFirestore.DocumentData;
+  configuration: CbsCollegeFootballConfig;
+}> {
+  const leagueSnapshot = await db.collection("leagues").doc(input.leagueId)
+    .get();
+  const league = leagueSnapshot.data();
+  if (!leagueSnapshot.exists || league === undefined) {
+    throw new HttpsError("not-found", "Arena not found.");
+  }
+  const settings =
+    (league.settings as Partial<LeagueSettings> | undefined) ?? {};
+  if (configuredProviderForSport(settings, "NCAAF") !== "cbsSports") {
+    throw new HttpsError(
+      "failed-precondition",
+      "CBS college football is not configured for this arena.",
+    );
+  }
+  const configuration = await readCbsCollegeFootballConfiguration();
+  assertCbsCollegeFootballActiveIdentity(configuration, input);
+  return {league, configuration};
+}
 
 function definedSettings(
   value: Record<string, unknown>,
@@ -271,6 +321,13 @@ export const listSportsCatalog = callable(
           ? {}
           : {providerLeagueId: input.leagueIdForProvider}),
         ...(input.season === undefined ? {} : {season: input.season}),
+        ...(input.seasonType === undefined
+          ? {}
+          : {seasonType: input.seasonType}),
+        ...(input.week === undefined ? {} : {week: input.week}),
+        ...(input.division === undefined
+          ? {}
+          : {division: input.division}),
         ...(input.from === undefined ? {} : {from: input.from}),
         ...(input.to === undefined ? {} : {to: input.to}),
         ...(input.timezone === undefined
@@ -282,6 +339,79 @@ export const listSportsCatalog = callable(
     });
   },
   {secrets: [SPORTSDATAIO_API_KEY]},
+);
+
+export const getCollegeFootballSchedule = callable(
+  "getCollegeFootballSchedule",
+  collegeFootballScheduleSchema,
+  async (input, request) => {
+    const user = requireUser(request);
+    await requireMembership(input.leagueId, user.uid);
+    assertProviderAllowedForRuntime("cbsSports");
+    const {league, configuration} = await requireCbsCollegeFootballArena(input);
+    const currentWeekId = league.currentWeekId;
+    if (typeof currentWeekId !== "string" || currentWeekId.length === 0) {
+      throw new HttpsError(
+        "failed-precondition",
+        "The arena does not have a current week for schedule access.",
+      );
+    }
+    await requirePickerOrAdmin(input.leagueId, currentWeekId, user.uid);
+    const scheduleInput = {
+      season: input.season,
+      seasonType: input.seasonType,
+      week: input.week,
+      division: input.division,
+    };
+    const schedule = await loadCbsCollegeFootballSchedule(
+      scheduleInput,
+      {},
+      {configuration},
+    );
+    return serializeCbsCollegeFootballScheduleResponse(schedule);
+  },
+);
+
+export const refreshCollegeFootballScheduleAdmin = callable(
+  "refreshCollegeFootballScheduleAdmin",
+  collegeFootballAdminRefreshSchema,
+  async (input, request, requestId) => {
+    const user = requireUser(request);
+    const {member} = await requirePickerOrAdmin(
+      input.leagueId,
+      input.weekId,
+      user.uid,
+    );
+    assertProviderAllowedForRuntime("cbsSports");
+    const {league, configuration} =
+      await requireCbsCollegeFootballArena(input);
+    assertCurrentWeekProviderAccess({
+      role: member.role,
+      currentWeekId: league.currentWeekId,
+      requestedWeekId: input.weekId,
+    });
+    logger.info("CBS college-football administrative refresh requested", {
+      functionName: "refreshCollegeFootballScheduleAdmin",
+      requestId,
+      season: input.season,
+      seasonType: input.seasonType,
+      week: input.week,
+      division: input.division,
+      reasonLength: input.reason.length,
+      reasonFingerprint: sha256({reason: input.reason}),
+    });
+    const schedule = await loadCbsCollegeFootballSchedule(
+      {
+        season: input.season,
+        seasonType: input.seasonType,
+        week: input.week,
+        division: input.division,
+      },
+      {forceRefresh: true, refreshReason: "admin"},
+      {configuration},
+    );
+    return serializeCbsCollegeFootballScheduleResponse(schedule);
+  },
 );
 
 export const saveDraftSlate = callable(
@@ -550,6 +680,38 @@ export const scheduledResultSync = onSchedule(
     } catch (error: unknown) {
       logger.error("Scheduled result sync failed", {
         functionName: "scheduledResultSync",
+        durationMs: Date.now() - startedAt,
+        safeErrorCode: error instanceof Error ? error.name : "UnknownError",
+      });
+      throw error;
+    }
+  },
+);
+
+export const refreshActiveCollegeFootballSchedule = onSchedule(
+  {
+    schedule: "every 60 minutes",
+    timeZone: "UTC",
+    retryCount: 0,
+    timeoutSeconds: 120,
+  },
+  async () => {
+    const startedAt = Date.now();
+    try {
+      assertProviderAllowedForRuntime("cbsSports");
+      const result = await refreshActiveCbsCollegeFootballSchedule();
+      logger.info("Scheduled CBS college-football refresh check completed", {
+        functionName: "refreshActiveCollegeFootballSchedule",
+        durationMs: Date.now() - startedAt,
+        outcome: "success",
+        activeScheduleConfigured: result !== null,
+        cacheStatus: result?.cacheStatus ?? null,
+        gameCount: result?.games.length ?? 0,
+        nextRefreshAt: result?.nextRefreshAt?.toISOString() ?? null,
+      });
+    } catch (error: unknown) {
+      logger.error("Scheduled CBS college-football refresh check failed", {
+        functionName: "refreshActiveCollegeFootballSchedule",
         durationMs: Date.now() - startedAt,
         safeErrorCode: error instanceof Error ? error.name : "UnknownError",
       });

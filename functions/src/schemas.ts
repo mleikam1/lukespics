@@ -70,6 +70,9 @@ export const normalizedGameSchema = z
       .default(null),
     timeTbd: z.boolean().default(false),
     venueName: z.string().trim().max(160).nullable().default(null),
+    venueCity: z.string().trim().max(80).nullable().default(null),
+    venueState: z.string().trim().max(80).nullable().default(null),
+    venueCountry: z.string().trim().max(80).nullable().default(null),
     neutralSite: z.boolean().default(false),
     homeTeam: teamSchema,
     awayTeam: teamSchema,
@@ -83,6 +86,9 @@ export const normalizedGameSchema = z
     winnerTeamId: idSchema.nullable().default(null),
     broadcast: z.string().trim().max(240).nullable().default(null),
     eventDetail: z.string().trim().max(160).nullable().default(null),
+    sourceGameUrl: z.url().nullable().default(null),
+    kickoffDisplayText: z.string().trim().max(160).nullable().default(null),
+    dateHeading: z.string().trim().max(160).nullable().default(null),
     rawResponseVersion: z.number().int().positive().max(100).default(1),
     providerLastUpdatedAt: dateSchema,
     lastSyncedAt: dateSchema,
@@ -98,13 +104,6 @@ export const normalizedGameSchema = z
   }))
   .superRefine((game, context) => {
     if (game.timeTbd) {
-      if (game.scheduledDayEastern === null) {
-        context.addIssue({
-          code: "custom",
-          path: ["scheduledDayEastern"],
-          message: "A time-TBD game requires its Eastern calendar day.",
-        });
-      }
       for (const field of [
         "scheduledAtUtc",
         "publishedScheduledAtUtc",
@@ -161,6 +160,11 @@ const leagueSettingsPatchSchema = z
     enabledLeagues: z.array(idSchema),
     manualFinalizationRequired: z.boolean(),
     providerName: z.enum(PROVIDER_NAMES),
+    providerBySport: z
+      .record(idSchema, z.enum(PROVIDER_NAMES))
+      .refine((value) => Object.keys(value).length <= 20, {
+        message: "At most 20 per-sport providers may be configured.",
+      }),
   })
   .partial();
 
@@ -174,6 +178,10 @@ export const leagueSettingsSchema = leagueSettingsPatchSchema.transform(
     enabledLeagues: [] as string[],
     manualFinalizationRequired: true,
     providerName: "manual" as const,
+    providerBySport: {} as Record<
+      string,
+      (typeof PROVIDER_NAMES)[number]
+    >,
     ...settings,
   }),
 );
@@ -291,6 +299,9 @@ export const providerQuerySchema = leagueMutationSchema.extend({
   leagueCode: idSchema.optional(),
   leagueIdForProvider: idSchema.optional(),
   season: z.string().trim().min(1).max(32).optional(),
+  seasonType: z.enum(["regular", "postseason"]).optional(),
+  week: z.number().int().min(0).max(25).optional(),
+  division: z.literal("FBS").optional(),
   from: z.iso.date().optional(),
   to: z.iso.date().optional(),
   timezone: z
@@ -347,6 +358,21 @@ export const sportsCatalogSchema = providerQuerySchema
       });
     }
   });
+
+export const collegeFootballScheduleSchema = leagueMutationSchema
+  .extend({
+    season: z.number().int().min(2000).max(2100),
+    seasonType: z.enum(["regular", "postseason"]),
+    week: z.number().int().min(0).max(25),
+    division: z.literal("FBS").default("FBS"),
+  })
+  .strict();
+
+export const collegeFootballAdminRefreshSchema =
+  collegeFootballScheduleSchema.extend({
+    weekId: idSchema,
+    reason: z.string().trim().min(3).max(240),
+  }).strict();
 
 export const selectedGamesSchema = weekMutationSchema
   .extend({

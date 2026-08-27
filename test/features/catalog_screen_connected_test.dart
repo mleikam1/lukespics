@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
 import 'package:lukespics/app/bootstrap.dart';
+import 'package:lukespics/core/domain/league_time.dart';
 import 'package:lukespics/data/demo/demo_repository.dart';
 import 'package:lukespics/data/models/game.dart';
 import 'package:lukespics/data/models/member.dart';
@@ -180,7 +183,9 @@ void main() {
           forceRefresh: any(named: 'forceRefresh'),
         ),
       ).thenAnswer((invocation) async {
-        final query = invocation.namedArguments[#query] as CatalogQuery?;
+        final requestedQuery =
+            invocation.namedArguments[#query] as CatalogQuery?;
+        final query = requestedQuery;
         calls.add(
           _CatalogCall(
             query: query,
@@ -204,28 +209,66 @@ void main() {
             : effectiveQuery.dateMode == CatalogDateMode.allDates
             ? [doubleheaderFirstGame, allDatesGame, tbdGame]
             : [filteredGame];
+        final visibleSports = requestedQuery == null
+            ? const [
+                CatalogSport(code: 'baseball', displayName: 'Baseball'),
+                CatalogSport(code: 'football', displayName: 'Football'),
+              ]
+            : [
+                requestedQuery.sportCode == 'football'
+                    ? const CatalogSport(
+                        code: 'football',
+                        displayName: 'Football',
+                      )
+                    : const CatalogSport(
+                        code: 'baseball',
+                        displayName: 'Baseball',
+                      ),
+              ];
+        final visibleLeagues = requestedQuery == null
+            ? const [
+                CatalogLeague(
+                  code: 'mlb',
+                  displayName: 'MLB',
+                  sportCode: 'baseball',
+                  providerLeagueId: providerLeagueId,
+                  provider: 'sportsDataIo',
+                  season: season,
+                ),
+                CatalogLeague(
+                  code: 'nfl',
+                  displayName: 'NFL',
+                  sportCode: 'football',
+                  providerLeagueId: footballProviderLeagueId,
+                  provider: 'sportsDataIo',
+                  season: season,
+                ),
+              ]
+            : requestedQuery.sportCode == 'football'
+            ? const [
+                CatalogLeague(
+                  code: 'nfl',
+                  displayName: 'NFL',
+                  sportCode: 'football',
+                  providerLeagueId: footballProviderLeagueId,
+                  provider: 'sportsDataIo',
+                  season: season,
+                ),
+              ]
+            : const [
+                CatalogLeague(
+                  code: 'mlb',
+                  displayName: 'MLB',
+                  sportCode: 'baseball',
+                  providerLeagueId: providerLeagueId,
+                  provider: 'sportsDataIo',
+                  season: season,
+                ),
+              ];
         return SportsCatalogResult(
           provider: 'sportsDataIo',
-          supportedSports: const [
-            CatalogSport(code: 'baseball', displayName: 'Baseball'),
-            CatalogSport(code: 'football', displayName: 'Football'),
-          ],
-          supportedLeagues: const [
-            CatalogLeague(
-              code: 'mlb',
-              displayName: 'MLB',
-              sportCode: 'baseball',
-              providerLeagueId: providerLeagueId,
-              season: season,
-            ),
-            CatalogLeague(
-              code: 'nfl',
-              displayName: 'NFL',
-              sportCode: 'football',
-              providerLeagueId: footballProviderLeagueId,
-              season: season,
-            ),
-          ],
+          supportedSports: visibleSports,
+          supportedLeagues: visibleLeagues,
           games: games,
           cacheHit: false,
           stale: false,
@@ -541,6 +584,16 @@ void main() {
       expect(find.byKey(const Key('catalog-single-day-label')), findsOneWidget);
       expect(controller.selectedGameIds, {'mlb-all-dates'});
 
+      final inheritedCustomSwitch = await _tapAndReadCall(
+        tester,
+        calls,
+        const Key('sport-filter-football'),
+      );
+      expect(inheritedCustomSwitch.$3.query?.dateMode, CatalogDateMode.custom);
+      expect(inheritedCustomSwitch.$3.query?.from, nextDayQuery.from);
+      expect(inheritedCustomSwitch.$3.query?.to, nextDayQuery.to);
+      await _tapAndReadCall(tester, calls, const Key('sport-filter-baseball'));
+
       final previousDayCall = await _tapAndReadCall(
         tester,
         calls,
@@ -551,6 +604,495 @@ void main() {
       expect(previousDayQuery.from, tomorrowQuery.from);
       expect(previousDayQuery.to, tomorrowQuery.to);
       expect(controller.selectedGameIds, {'mlb-all-dates'});
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'CBS college football keeps weekly metadata, groups dates, and refreshes in place',
+    (tester) async {
+      tester.view.physicalSize = const Size(1440, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final weekStartAt = DateTime.utc(2026, 8, 24, 5);
+      final weekEndAt = DateTime.utc(2026, 9, 1, 4, 59);
+      final fridayKickoff = DateTime.utc(2026, 8, 29, 4, 30);
+      final saturdayKickoff = DateTime.utc(2026, 8, 29, 17);
+      const metadata = CollegeFootballCatalogMetadata(
+        activeSeason: 2026,
+        activeSeasonType: 'regular',
+        activeWeek: 1,
+        division: 'FBS',
+        seasons: [2026],
+        seasonTypes: ['regular'],
+        minimumWeek: 1,
+        maximumWeek: 1,
+      );
+      final fridayGame = _game(
+        id: 'cbs-friday',
+        provider: 'cbsSports',
+        scheduledAt: fridayKickoff,
+        sportCode: 'NCAAF',
+        leagueCode: 'ncaaf',
+        leagueName: 'NCAA Football',
+        awayTeam: const Team(
+          id: 'away-friday',
+          name: 'Away Friday',
+          shortName: 'Friday',
+          abbreviation: 'AFR',
+        ),
+        homeTeam: const Team(
+          id: 'home-friday',
+          name: 'Home Friday',
+          shortName: 'Friday',
+          abbreviation: 'HFR',
+        ),
+        venueName: 'Memorial Stadium',
+      );
+      final saturdayGame = _game(
+        id: 'cbs-saturday',
+        provider: 'cbsSports',
+        scheduledAt: saturdayKickoff,
+        sportCode: 'NCAAF',
+        leagueCode: 'ncaaf',
+        leagueName: 'NCAA Football',
+        awayTeam: const Team(
+          id: 'away-saturday',
+          name: 'Away Saturday',
+          shortName: 'Saturday',
+          abbreviation: 'ASA',
+        ),
+        homeTeam: const Team(
+          id: 'home-saturday',
+          name: 'Home Saturday',
+          shortName: 'Saturday',
+          abbreviation: 'HSA',
+        ),
+        venueName: 'College Field',
+      );
+      final tbdGame = _game(
+        id: 'cbs-time-tbd',
+        provider: 'cbsSports',
+        scheduledAt: null,
+        scheduledDayEastern: '2026-08-30',
+        timeTbd: true,
+        kickoffDisplayText: '7:30 PM',
+        sportCode: 'NCAAF',
+        leagueCode: 'ncaaf',
+        leagueName: 'NCAA Football',
+        awayTeam: const Team(
+          id: 'away-tbd',
+          name: 'Away TBD',
+          shortName: 'Away TBD',
+          abbreviation: 'ATB',
+        ),
+        homeTeam: const Team(
+          id: 'home-tbd',
+          name: 'Home TBD',
+          shortName: 'Home TBD',
+          abbreviation: 'HTB',
+        ),
+        venueName: 'TBD Field',
+      );
+      final initialQuery = CatalogQuery(
+        sportCode: 'NCAAF',
+        leagueCode: 'ncaaf',
+        providerLeagueId: 'FBS',
+        season: '2026',
+        seasonType: 'regular',
+        week: 1,
+        division: 'FBS',
+        collegeFootball: metadata,
+        from: DateTime.utc(2026, 8, 25),
+        to: DateTime.utc(2026, 8, 31),
+        timezone: 'America/Chicago',
+        dateMode: CatalogDateMode.allDates,
+        weekStartAt: weekStartAt,
+        weekEndAt: weekEndAt,
+      );
+      final calls = <_CatalogCall>[];
+      Completer<SportsCatalogResult>? refreshCompleter;
+      final repository = _MockLeagueRepository();
+      final auth = _MockFirebaseAuth();
+      final user = _MockUser();
+
+      SportsCatalogResult resultFor(CatalogQuery query, {bool stale = true}) =>
+          SportsCatalogResult(
+            provider: 'cbsSports',
+            supportedSports: const [
+              CatalogSport(code: 'NCAAF', displayName: 'College Football'),
+            ],
+            supportedLeagues: const [
+              CatalogLeague(
+                code: 'ncaaf',
+                displayName: 'NCAA Football',
+                sportCode: 'NCAAF',
+                providerLeagueId: 'FBS',
+                provider: 'cbsSports',
+                season: '2026',
+                seasonType: 'regular',
+                week: 1,
+                division: 'FBS',
+              ),
+            ],
+            games: [fridayGame, saturdayGame, tbdGame],
+            cacheHit: true,
+            stale: stale,
+            delayed: false,
+            cachedAt: DateTime.utc(2026, 8, 25, 19, 15),
+            expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+            presentation: CatalogPresentation(
+              provider: 'cbsSports',
+              attributionText: 'Schedule source: CBS Sports',
+              allowRemoteLogos: true,
+              allowedLogoHosts: const {'sports.cbsimg.net'},
+              allowedLogoQueryParameters: const {},
+              logoRightsReviewDate: DateTime.utc(2026, 8, 25),
+            ),
+            effectiveQuery: query.copyWith(forceRefresh: false).snapshot,
+            availability: const CatalogAvailability(
+              state: CatalogAvailabilityState.available,
+            ),
+            collegeFootball: metadata,
+            weekStartAt: weekStartAt,
+            weekEndAt: weekEndAt,
+          );
+
+      when(() => user.uid).thenReturn('owner');
+      when(() => user.displayName).thenReturn('Connected Owner');
+      when(() => auth.currentUser).thenReturn(user);
+      when(auth.authStateChanges).thenAnswer((_) => const Stream.empty());
+      when(repository.findActiveLeagueIds).thenAnswer((_) async => const []);
+      _stubArena(repository, weekStartAt: weekStartAt, weekEndAt: weekEndAt);
+      when(
+        () => repository.listSportsCatalog(
+          leagueId: 'league-1',
+          weekId: 'week-0001',
+          query: any(named: 'query'),
+          timezone: any(named: 'timezone'),
+          weekStartAt: any(named: 'weekStartAt'),
+          weekEndAt: any(named: 'weekEndAt'),
+          forceRefresh: any(named: 'forceRefresh'),
+        ),
+      ).thenAnswer((invocation) async {
+        final query =
+            invocation.namedArguments[#query] as CatalogQuery? ?? initialQuery;
+        calls.add(
+          _CatalogCall(
+            query: invocation.namedArguments[#query] as CatalogQuery?,
+            timezone: invocation.namedArguments[#timezone] as String?,
+            weekStartAt: invocation.namedArguments[#weekStartAt] as DateTime?,
+            weekEndAt: invocation.namedArguments[#weekEndAt] as DateTime?,
+            forceRefresh:
+                invocation.namedArguments[#forceRefresh] as bool? ?? false,
+          ),
+        );
+        if (query.forceRefresh) {
+          refreshCompleter = Completer<SportsCatalogResult>();
+          return refreshCompleter!.future;
+        }
+        return resultFor(query);
+      });
+      when(
+        () => repository.saveDraftSlate(
+          leagueId: 'league-1',
+          weekId: 'week-0001',
+          chunkKey: any(named: 'chunkKey'),
+          games: any(named: 'games'),
+          removeGameIds: any(named: 'removeGameIds'),
+          requestId: any(named: 'requestId'),
+        ),
+      ).thenAnswer((_) async => 1);
+
+      final controller = AppController.connected(
+        runtimeMode: AppRuntimeMode.firebaseEmulator,
+        repository: repository,
+        auth: auth,
+      );
+      await tester.pump();
+      expect(await controller.joinArena('ABC12345'), isTrue);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appControllerProvider.overrideWith((ref) => controller)],
+          child: const MaterialApp(home: Scaffold(body: CatalogScreen())),
+        ),
+      );
+      await _pumpCatalogFrames(tester);
+
+      expect(find.byKey(const Key('cbs-season-filter-2026')), findsOneWidget);
+      expect(find.byKey(const Key('cbs-season-filter-2025')), findsNothing);
+      expect(
+        find.byKey(const Key('cbs-season-type-filter-postseason')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('cbs-season-filter-2026')), findsOneWidget);
+      expect(
+        find.byKey(const Key('cbs-season-type-filter-regular')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('cbs-week-filter-1')), findsOneWidget);
+      expect(
+        find.byKey(const Key('catalog-date-header-2026-08-28')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('catalog-date-header-2026-08-29')),
+        findsOneWidget,
+      );
+      expect(find.text('Friday, August 28'), findsOneWidget);
+      expect(find.text('Saturday, August 29'), findsOneWidget);
+      expect(find.text('AFR'), findsNWidgets(2));
+      expect(find.textContaining('Last updated:'), findsOneWidget);
+      expect(
+        find.textContaining('Showing the most recently saved schedule.'),
+        findsOneWidget,
+      );
+      final zone = inLeagueTimezone(
+        fridayKickoff,
+        'America/Chicago',
+      ).timeZoneName;
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('catalog-game-time-cbs-friday')))
+            .data,
+        '${formatLeagueTime(fridayKickoff, 'America/Chicago', 'EEE, MMM d · h:mm a')} '
+        '$zone · Memorial Stadium',
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const Key('catalog-game-time-cbs-time-tbd')),
+            )
+            .data,
+        contains('Time TBD (source shows 7:30 PM; timezone unconfirmed)'),
+      );
+      expect(
+        tester
+            .widget<Checkbox>(
+              find.byKey(const Key('catalog-checkbox-cbs-time-tbd')),
+            )
+            .onChanged,
+        isNull,
+      );
+
+      final seasonCall = await _tapAndReadCall(
+        tester,
+        calls,
+        const Key('cbs-season-filter-2026'),
+      );
+      expect(seasonCall.$3.query?.season, '2026');
+      final seasonTypeCall = await _tapAndReadCall(
+        tester,
+        calls,
+        const Key('cbs-season-type-filter-regular'),
+      );
+      expect(seasonTypeCall.$3.query?.seasonType, 'regular');
+      final weekCall = await _tapAndReadCall(
+        tester,
+        calls,
+        const Key('cbs-week-filter-1'),
+      );
+      expect(weekCall.$3.query?.week, 1);
+      expect(weekCall.$3.query?.division, 'FBS');
+      final dateCall = await _tapAndReadCall(
+        tester,
+        calls,
+        const Key('date-filter-today'),
+      );
+      expect(dateCall.$3.query?.season, '2026');
+      expect(dateCall.$3.query?.seasonType, 'regular');
+      expect(dateCall.$3.query?.week, 1);
+      expect(dateCall.$3.query?.division, 'FBS');
+
+      final callCount = calls.length;
+      await tester.tap(find.byKey(const Key('refresh-catalog-button')));
+      await tester.pump();
+      expect(calls, hasLength(callCount + 1));
+      expect(controller.catalogLoading, isTrue);
+      expect(
+        find.byKey(const Key('catalog-refreshing-indicator')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('catalog-checkbox-cbs-friday')),
+        findsOneWidget,
+      );
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.textContaining('Loading the NCAA Football'), findsNothing);
+
+      final refreshQuery = calls.last.query!;
+      refreshCompleter!.complete(resultFor(refreshQuery, stale: false));
+      await _pumpCatalogFrames(tester);
+      expect(controller.catalogLoading, isFalse);
+      expect(
+        find.byKey(const Key('catalog-refreshing-indicator')),
+        findsNothing,
+      );
+      final refreshedCheckbox = find.byKey(
+        const Key('catalog-checkbox-cbs-friday'),
+      );
+      expect(tester.widget<Checkbox>(refreshedCheckbox).onChanged, isNotNull);
+      await tester.tap(refreshedCheckbox);
+      await tester.pump();
+      expect(controller.selectedGameIds, {'cbs-friday'});
+      await tester.tap(refreshedCheckbox);
+      await tester.pump();
+      expect(controller.selectedGameIds, isEmpty);
+      await tester.tap(refreshedCheckbox);
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('save-draft-button')));
+      await _pumpCatalogFrames(tester);
+      verify(
+        () => repository.saveDraftSlate(
+          leagueId: 'league-1',
+          weekId: 'week-0001',
+          chunkKey: any(named: 'chunkKey'),
+          games: any(
+            named: 'games',
+            that: predicate<List<Game>>(
+              (games) => games.length == 1 && games.single.id == 'cbs-friday',
+            ),
+          ),
+          removeGameIds: const [],
+          requestId: any(named: 'requestId'),
+        ),
+      ).called(1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'failed cross-provider switch still uses the selected league calendar',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 2600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final weekStartAt = DateTime.utc(2030, 8, 24, 4, 30);
+      final weekEndAt = DateTime.utc(2030, 8, 31, 4);
+      final repository = _MockLeagueRepository();
+      final auth = _MockFirebaseAuth();
+      final user = _MockUser();
+      when(() => user.uid).thenReturn('owner');
+      when(() => user.displayName).thenReturn('Connected Owner');
+      when(() => auth.currentUser).thenReturn(user);
+      when(auth.authStateChanges).thenAnswer((_) => const Stream.empty());
+      when(repository.findActiveLeagueIds).thenAnswer((_) async => const []);
+      _stubArena(repository, weekStartAt: weekStartAt, weekEndAt: weekEndAt);
+      when(
+        () => repository.listSportsCatalog(
+          leagueId: 'league-1',
+          weekId: 'week-0001',
+          query: any(named: 'query'),
+          timezone: any(named: 'timezone'),
+          weekStartAt: any(named: 'weekStartAt'),
+          weekEndAt: any(named: 'weekEndAt'),
+          forceRefresh: any(named: 'forceRefresh'),
+        ),
+      ).thenAnswer((invocation) async {
+        final query = invocation.namedArguments[#query] as CatalogQuery?;
+        if (query != null) {
+          throw const RepositoryException(
+            'unavailable',
+            'The selected provider is temporarily unavailable.',
+          );
+        }
+        final effectiveQuery = CatalogQuery(
+          sportCode: 'baseball',
+          leagueCode: 'mlb',
+          providerLeagueId: providerLeagueId,
+          season: '2030',
+          from: catalogCalendarDate(weekStartAt, sportsDataIoCatalogTimezone),
+          to: catalogCalendarDate(weekEndAt, sportsDataIoCatalogTimezone),
+          timezone: sportsDataIoCatalogTimezone,
+          dateMode: CatalogDateMode.allDates,
+          weekStartAt: weekStartAt,
+          weekEndAt: weekEndAt,
+        );
+        return SportsCatalogResult(
+          provider: 'sportsDataIo',
+          supportedSports: const [
+            CatalogSport(code: 'baseball', displayName: 'Baseball'),
+            CatalogSport(code: 'NCAAF', displayName: 'College Football'),
+          ],
+          supportedLeagues: const [
+            CatalogLeague(
+              code: 'mlb',
+              displayName: 'MLB',
+              sportCode: 'baseball',
+              providerLeagueId: providerLeagueId,
+              provider: 'sportsDataIo',
+              season: '2030',
+            ),
+            CatalogLeague(
+              code: 'ncaaf',
+              displayName: 'NCAA Football',
+              sportCode: 'NCAAF',
+              providerLeagueId: 'FBS',
+              provider: 'cbsSports',
+              season: '2030',
+              seasonType: 'regular',
+              week: 1,
+              division: 'FBS',
+            ),
+          ],
+          games: const [],
+          cacheHit: true,
+          stale: false,
+          delayed: false,
+          cachedAt: DateTime.utc(2030, 8, 23),
+          expiresAt: DateTime.utc(2030, 8, 24),
+          effectiveQuery: effectiveQuery.snapshot,
+          availability: const CatalogAvailability(
+            state: CatalogAvailabilityState.noGames,
+          ),
+          weekStartAt: weekStartAt,
+          weekEndAt: weekEndAt,
+        );
+      });
+
+      final controller = AppController.connected(
+        runtimeMode: AppRuntimeMode.firebaseEmulator,
+        repository: repository,
+        auth: auth,
+      );
+      await tester.pump();
+      expect(await controller.joinArena('ABC12345'), isTrue);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appControllerProvider.overrideWith((ref) => controller)],
+          child: const MaterialApp(home: Scaffold(body: CatalogScreen())),
+        ),
+      );
+      await _pumpCatalogFrames(tester);
+
+      final sportsDataDay = catalogCalendarDate(
+        weekStartAt,
+        sportsDataIoCatalogTimezone,
+      );
+      final cbsDay = catalogCalendarDate(weekStartAt, 'America/Chicago');
+      expect(sportsDataDay, isNot(cbsDay));
+      expect(
+        find.text(DateFormat('EEE, MMM d').format(sportsDataDay)),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('sport-filter-NCAAF')));
+      await _pumpCatalogFrames(tester);
+      expect(controller.catalogProvider, 'sportsDataIo');
+      expect(
+        find.byKey(const Key('cbs-season-type-filter-postseason')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('cbs-week-filter-0')), findsNothing);
+      expect(find.byKey(const Key('cbs-week-filter-1')), findsOneWidget);
+      expect(
+        find.text(DateFormat('EEE, MMM d').format(cbsDay)),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
     },
   );
@@ -858,11 +1400,13 @@ Game _game({
   required Team awayTeam,
   required Team homeTeam,
   required String venueName,
+  String provider = 'sportsDataIo',
   String sportCode = 'baseball',
   String leagueCode = 'mlb',
   String leagueName = 'Major League Baseball',
   String? scheduledDayEastern,
   bool timeTbd = false,
+  String? kickoffDisplayText,
   String? statusDetail,
   String? broadcast,
   String? eventDetail,
@@ -874,7 +1418,7 @@ Game _game({
   String? selectionReason,
 }) => Game(
   id: id,
-  provider: 'sportsDataIo',
+  provider: provider,
   providerGameId: id,
   sportCode: sportCode,
   leagueCode: leagueCode,
@@ -885,6 +1429,7 @@ Game _game({
   effectiveLockAtUtc: timeTbd ? null : scheduledAt,
   scheduledDayEastern: scheduledDayEastern,
   timeTbd: timeTbd,
+  kickoffDisplayText: kickoffDisplayText,
   venueName: venueName,
   homeTeam: homeTeam,
   awayTeam: awayTeam,

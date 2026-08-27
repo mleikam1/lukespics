@@ -28,6 +28,10 @@ final class CatalogLeague {
     required this.sportCode,
     required this.providerLeagueId,
     required this.season,
+    this.provider,
+    this.seasonType,
+    this.week,
+    this.division,
   });
 
   final String code;
@@ -35,6 +39,38 @@ final class CatalogLeague {
   final String sportCode;
   final String providerLeagueId;
   final String season;
+  final String? provider;
+  final String? seasonType;
+  final int? week;
+  final String? division;
+}
+
+/// Server-owned discovery metadata for the CBS college-football catalog.
+///
+/// This travels with the effective query snapshot so the catalog screen can
+/// render bounded controls without duplicating provider configuration in the
+/// client. Only the selected season/type/week/division are sent back to the
+/// server.
+final class CollegeFootballCatalogMetadata {
+  const CollegeFootballCatalogMetadata({
+    required this.activeSeason,
+    required this.activeSeasonType,
+    required this.activeWeek,
+    required this.division,
+    required this.seasons,
+    required this.seasonTypes,
+    required this.minimumWeek,
+    required this.maximumWeek,
+  });
+
+  final int activeSeason;
+  final String activeSeasonType;
+  final int activeWeek;
+  final String division;
+  final List<int> seasons;
+  final List<String> seasonTypes;
+  final int minimumWeek;
+  final int maximumWeek;
 }
 
 final class CatalogPresentation {
@@ -114,6 +150,10 @@ final class CatalogQuerySnapshot {
     required this.from,
     required this.to,
     required this.timezone,
+    this.seasonType,
+    this.week,
+    this.division,
+    this.collegeFootball,
     this.dateMode = CatalogDateMode.allDates,
     this.weekStartAt,
     this.weekEndAt,
@@ -123,6 +163,10 @@ final class CatalogQuerySnapshot {
   final String leagueCode;
   final String providerLeagueId;
   final String season;
+  final String? seasonType;
+  final int? week;
+  final String? division;
+  final CollegeFootballCatalogMetadata? collegeFootball;
   final DateTime from;
   final DateTime to;
   final String timezone;
@@ -135,6 +179,10 @@ final class CatalogQuerySnapshot {
     leagueCode: leagueCode,
     providerLeagueId: providerLeagueId,
     season: season,
+    seasonType: seasonType,
+    week: week,
+    division: division,
+    collegeFootball: collegeFootball,
     from: from,
     to: to,
     timezone: timezone,
@@ -154,6 +202,10 @@ final class CatalogQuery {
     required this.from,
     required this.to,
     this.timezone = 'UTC',
+    this.seasonType,
+    this.week,
+    this.division,
+    this.collegeFootball,
     this.dateMode = CatalogDateMode.allDates,
     this.weekStartAt,
     this.weekEndAt,
@@ -164,6 +216,14 @@ final class CatalogQuery {
   final String leagueCode;
   final String providerLeagueId;
   final String season;
+  final String? seasonType;
+  final int? week;
+  final String? division;
+
+  /// Discovery-only bounds retained locally with the effective query.
+  /// Repository serialization deliberately sends only the selected scalar
+  /// fields above.
+  final CollegeFootballCatalogMetadata? collegeFootball;
   final DateTime from;
   final DateTime to;
   final String timezone;
@@ -177,6 +237,10 @@ final class CatalogQuery {
     leagueCode: leagueCode,
     providerLeagueId: providerLeagueId,
     season: season,
+    seasonType: seasonType,
+    week: week,
+    division: division,
+    collegeFootball: collegeFootball,
     from: from,
     to: to,
     timezone: timezone,
@@ -190,6 +254,10 @@ final class CatalogQuery {
     String? leagueCode,
     String? providerLeagueId,
     String? season,
+    String? seasonType,
+    int? week,
+    String? division,
+    CollegeFootballCatalogMetadata? collegeFootball,
     DateTime? from,
     DateTime? to,
     String? timezone,
@@ -202,6 +270,10 @@ final class CatalogQuery {
     leagueCode: leagueCode ?? this.leagueCode,
     providerLeagueId: providerLeagueId ?? this.providerLeagueId,
     season: season ?? this.season,
+    seasonType: seasonType ?? this.seasonType,
+    week: week ?? this.week,
+    division: division ?? this.division,
+    collegeFootball: collegeFootball ?? this.collegeFootball,
     from: from ?? this.from,
     to: to ?? this.to,
     timezone: timezone ?? this.timezone,
@@ -216,6 +288,9 @@ final class CatalogQuery {
       leagueCode == other.leagueCode &&
       providerLeagueId == other.providerLeagueId &&
       season == other.season &&
+      seasonType == other.seasonType &&
+      week == other.week &&
+      division == other.division &&
       _sameInstant(from, other.from) &&
       _sameInstant(to, other.to) &&
       timezone == other.timezone &&
@@ -238,6 +313,7 @@ final class SportsCatalogResult {
     this.presentation = const CatalogPresentation.disabled(),
     this.effectiveQuery,
     this.availability = const CatalogAvailability.unknown(),
+    this.collegeFootball,
     this.weekStartAt,
     this.weekEndAt,
   });
@@ -254,6 +330,7 @@ final class SportsCatalogResult {
   final CatalogPresentation presentation;
   final CatalogQuerySnapshot? effectiveQuery;
   final CatalogAvailability availability;
+  final CollegeFootballCatalogMetadata? collegeFootball;
   final DateTime? weekStartAt;
   final DateTime? weekEndAt;
 

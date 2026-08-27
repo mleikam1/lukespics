@@ -14,6 +14,7 @@ import {
 import {normalizedGameSchema} from "../schemas.js";
 import type {
   NormalizedGame,
+  ProviderCachedGamesResult,
   ProviderQuery,
   ProviderRequestOperation,
   SportsDataProvider,
@@ -30,15 +31,7 @@ export const SPORTSDATAIO_EMPTY_CACHE_DURATION_MS = 30 * 60 * 1000;
 const DEFAULT_SELECTED_GAME_MAXIMUM_IDS = 20;
 const ABSOLUTE_SELECTED_GAME_MAXIMUM_IDS = 500;
 
-export type CachedGamesResult = {
-  games: NormalizedGame[];
-  cacheHit: boolean;
-  stale: boolean;
-  delayed: boolean;
-  cachedAt: Date;
-  expiresAt: Date;
-  contentHash: string;
-};
+export type CachedGamesResult = ProviderCachedGamesResult;
 
 export class CanonicalTrustConflictError extends Error {}
 
@@ -61,9 +54,20 @@ export function providerCacheKey(
 }
 
 export function providerQueryCacheIdentity(
-  _providerName: string,
+  providerName: string,
   query: ProviderQuery,
 ): Record<string, unknown> {
+  if (providerName === "cbsSports") {
+    return {
+      sportCode: "NCAAF",
+      leagueCode: "ncaaf",
+      providerLeagueId: "FBS",
+      division: query.division ?? "FBS",
+      season: query.season,
+      seasonType: query.seasonType ?? "regular",
+      week: query.week,
+    };
+  }
   const upstreamIdentity = {
     sportCode: query.sportCode,
     leagueCode: query.leagueCode,
@@ -1358,6 +1362,22 @@ export async function listGamesWithCache(
   provider: SportsDataProvider,
   query: ProviderQuery,
 ): Promise<CachedGamesResult> {
+  if (provider.listGamesCached !== undefined) {
+    const result = await provider.listGamesCached(query);
+    if (!result.stale && !result.delayed) {
+      const canonical = await writeCatalogTrust({
+        games: result.games,
+        cacheKey: providerCacheKey(provider, query),
+        eligibleUntil: result.expiresAt,
+      });
+      if (!canonical) {
+        throw new CanonicalTrustConflictError(
+          "Provider refresh lost a race with newer canonical sports data.",
+        );
+      }
+    }
+    return result;
+  }
   const estimate = providerRequestEstimate(
     provider,
     "listGames",
@@ -1397,6 +1417,23 @@ export async function fetchGamesByIdsWithCache(
       "invalid-argument",
       `Selected-game refreshes require between one and ${maximumIds} provider game IDs.`,
     );
+  }
+  if (provider.fetchGamesCached !== undefined) {
+    const result = await provider.fetchGamesCached(uniqueIds, context);
+    const requestedIds = new Set(uniqueIds);
+    assertCompleteSelectedGamesResponse(
+      provider.name,
+      requestedIds,
+      result.games,
+      provider.selectedGameRefreshMode === "partial",
+    );
+    const returnedIds = new Set(
+      result.games.map((game) => game.providerGameId),
+    );
+    const missingRequestedGame = [...requestedIds].some(
+      (id) => !returnedIds.has(id),
+    );
+    return missingRequestedGame ? {...result, delayed: true} : result;
   }
   const estimate = providerRequestEstimate(
     provider,

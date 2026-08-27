@@ -83,6 +83,12 @@ cannot exceed seven days, and it must remain inside the active week. Provider
 base URLs, request paths, final-status lists, and presentation policy are never
 accepted from the client.
 
+CBS narrows that contract further: the server-owned active season/type/week is
+the only identity advertised to Flutter or eligible for network access. The
+callables reject a mismatched identity, every redirect must preserve the exact
+constructed route, and the returned page must confirm the same canonical/title
+identity.
+
 Mock and TheSportsDB test providers must be rejected in `lukes-picks`.
 TheSportsDB test access is allowed only with its explicit flag plus an
 emulator/internal condition. API-Sports requires all of the following:

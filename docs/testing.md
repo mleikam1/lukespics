@@ -23,20 +23,99 @@ SPORTSDATAIO_API_KEY=
 That is deliberate. A passing fixture or emulator test is not a live-provider
 smoke test.
 
-## Current verified matrix
+## CBS college-football boundary — 2026-08-25
 
-Only rows actually rerun on the current branch belong here. Historical counts
-are retained separately and must not be copied forward.
+CBS parser and cache tests use small synthetic HTML fragments and mocked HTTP.
+Routine tests, emulator runs, browser automation, and CI must not contact CBS or
+persist a public page. The bounded public-route observation performed during
+development is separate evidence: it confirmed matchup markup, but not a
+trustworthy kickoff timestamp or a live authenticated product flow.
+
+The focused deterministic coverage lives in:
+
+- `functions/test/cbs-college-football-provider.test.ts` for strict route
+  construction, canonical/title page identity, parsing, normalization, IDs,
+  statuses, logos, and conservative kickoff handling;
+- `functions/test/cbs-college-football-cache.test.ts` for config bounds,
+  active-identity-only fetches, exact redirects, canonical cache identity,
+  leases, cooldown, per-outbound-attempt rolling cap, parser-version reparse,
+  conditional requests, provider-global retry/circuit behavior,
+  suspicious-shrink retention, stale fallback, and terminal behavior; and
+- `functions/test/cbs-college-football-integration-contract.test.ts` for
+  provider policy, per-sport routing, shared-catalog identity, callable/scheduler
+  source contracts, and public-source isolation.
+
+Flutter tests exercise NCAAF controls restricted to the configured active
+season/type/week, cross-provider calendar ownership, arena-timezone display, TBD
+selection blocking, stale/last-updated state, and retention across refresh. A
+synthetic confirmed-time fixture can prove workflow compatibility; it cannot
+prove that the current public CBS page supplies a selectable game. No production
+CBS deployment or authenticated end-to-end acceptance is recorded.
+
+The authenticated emulator flow does prove the local cache-backed boundary: an
+owner loads a fresh preseeded CBS game without consuming a provider attempt,
+authorization rejects an ordinary member's direct schedule request, the picker
+saves and publishes the game, the member reads it, and the member submits a
+pick. It does not contact CBS, exercise a live result, or establish production
+acceptance.
+
+## Current CBS-tree verification matrix — 2026-08-25
+
+These results were recorded on the current CBS integration tree. The public
+source/build scans were rerun after the release build; none of these local,
+fixture, cache-backed, or emulator results is a deployment or live-provider
+claim.
 
 | Command | Current result | Evidence boundary |
 |---|---|---|
-| `flutter analyze` | Pass | No analyzer issues on the current Flutter tree |
-| `flutter test` | Pass — 117/117 | Unit, controller, repository, responsive UI, TBD, Eastern date, NFL↔MLB retention, doubleheader, score, and neutral-presentation coverage |
+| `dart format --output=none --set-exit-if-changed .` | Pass | Flutter source and tests are formatted |
+| `flutter analyze --no-pub` | Pass | No analyzer issues on the current Flutter tree |
+| `flutter test --no-pub` | Pass — 122/122 | Includes CBS active controls, cross-provider calendar ownership, TBD/stale behavior, draft add/remove/re-add, and repository parsing |
+| `flutter build web --release` | Pass | Current release web artifact compiled successfully |
+| `npm --prefix functions run lint` | Pass | ESLint completed with zero allowed warnings |
+| `npm --prefix functions run typecheck` | Pass | TypeScript no-emit check completed |
+| `npm --prefix functions run build` | Pass | Node 22 Functions TypeScript compiled |
+| `npm --prefix functions test` | Pass — 185/185 in 8 files | CBS parser/cache/contracts plus existing provider, lifecycle, and scoring coverage |
+| `npm --prefix functions run test:rules` | Pass — 12/12 | Firestore emulator confirms CBS config/cache/usage remain client-denied |
+| `npm --prefix functions run test:integration` | Pass — 10/10 | Includes authenticated cached-CBS lifecycle, authorization, and capacity checks without CBS network access |
+| `./scripts/test_browser_e2e.sh` | Pass | Connected three-user emulator lifecycle completed under safe provider flags |
+| `./scripts/check_public_source.sh` | Pass | Credential and public-source policy scan passed |
+| `./scripts/check_public_build.sh build/web` | Pass | Fresh public release-build scan passed |
+| `git diff --check` | Pass | Final changed-tree whitespace check passed |
+| `npm audit --prefix functions --omit=dev` | Pass — 0 vulnerabilities | Production Functions dependency graph only |
+| `npm audit --prefix functions` | Review — 8 findings | Full graph has 4 high and 4 moderate dev-tooling findings |
+| `flutter pub outdated` | Inventory | 25 locked packages can upgrade; 2 direct constraints trail otherwise resolvable versions |
+
+## Current dependency audit snapshot — 2026-08-25
+
+The freshly observed dependency checks reported:
+
+- `npm audit --prefix functions --omit=dev`: 0 vulnerabilities in the
+  production dependency graph;
+- `npm audit --prefix functions`: 8 total vulnerabilities in the full graph
+  (4 high and 4 moderate); and
+- `flutter pub outdated`: 25 locked packages can be upgraded, and 2 dependency
+  constraints are behind versions that the current graph can otherwise resolve.
+
+These are inventory results, not a dependency-upgrade authorization or release
+acceptance. Review the development-tool advisories and Flutter compatibility,
+then rerun the complete matrix after any approved upgrade.
+
+## Last recorded pre-CBS verified matrix — 2026-08-01
+
+These rows predate the CBS additions and are retained as baseline evidence only.
+They must not be cited as results for the current branch. Replace them only with
+commands actually rerun after all CBS edits settle.
+
+| Command | Recorded result | Evidence boundary |
+|---|---|---|
+| `flutter analyze` | Pass | No analyzer issues on the recorded Flutter tree |
+| `flutter test` | Pass — 117/117 | Recorded unit, controller, repository, responsive UI, TBD, Eastern date, NFL↔MLB retention, doubleheader, score, and neutral-presentation coverage |
 | `flutter build web --release --dart-define=LUKE_PICKS_PUBLIC_RELEASE=true` | Pass | Clean public web release compiled; Flutter's Wasm compatibility dry run also succeeded |
 | `npm --prefix functions run lint` | Pass | ESLint completed with zero allowed warnings on the settled tree |
 | `npm --prefix functions run typecheck` | Pass | TypeScript no-emit check completed on the settled tree |
-| `npm --prefix functions test` | Pass — 122/122 in 5 files | Current fixture, provider, gateway, scoring, callable, and contract suite |
-| `npm --prefix functions run build` | Pass | Current Node 22 Functions TypeScript compiled |
+| `npm --prefix functions test` | Pass — 122/122 in 5 files | Recorded fixture, provider, gateway, scoring, callable, and contract suite |
+| `npm --prefix functions run build` | Pass | Recorded Node 22 Functions TypeScript compiled |
 | `npm --prefix functions run test:rules` | Pass — 12/12 | Java 21 emulator run used the isolated synthetic project |
 | `npm --prefix functions run test:integration` | Pass — 9/9 | Functions/Auth/Firestore run included first-game lock tightening and sibling lock enforcement |
 | `./scripts/test_browser_e2e.sh` | Pass | Three-user connected lifecycle completed with automatic providers disabled |
@@ -109,6 +188,8 @@ No Flutter test makes a provider network request or handles a provider key.
 Firestore rules tests must prove:
 
 - clients cannot read or write `systemConfig/sportsDataIoCatalog`;
+- clients cannot read or write `systemConfig/cbsCollegeFootball`,
+  `sportsProviderCache`, or `providerUsage/cbsSports_rolling24h`;
 - catalog cache internals and provider budget/lock/circuit documents are not
   client-readable;
 - draft games remain picker/commissioner-only before publication;
@@ -121,7 +202,8 @@ The Functions emulator integration and browser lifecycle use
 They cover create/join, restoration, selection reconciliation, publication,
 picks, privacy, lock rejection, reveal, manual result/override, grading,
 standings, rotation, and picker participation both disabled and enabled. They
-must not enable SportsDataIO or contact a non-emulated Firebase service.
+must not enable SportsDataIO, enable CBS automatic refresh, contact CBS, or
+contact a non-emulated Firebase service.
 
 Expected emulator warnings about synthetic secret lookup, App Check, or an
 unexecuted scheduler do not prove provider behavior. Review every unexpected
@@ -184,6 +266,8 @@ The source/build scanners must verify that:
 - no secret value or forbidden secret file is present;
 - `SPORTSDATAIO_API_KEY`, its request header, and the provider origin remain
   server-only;
+- CBS scoreboard and logo hosts occur only in the reviewed server parser,
+  provider, and schedule service, never in Flutter or public build output;
 - no provider URL, test flag, emulator endpoint, source map, or secret name is
   embedded in the Hosting artifact;
 - retired provider runtime code and fixtures are absent;
@@ -191,8 +275,9 @@ The source/build scanners must verify that:
 - neutral initials remain the default presentation; and
 - the scanned build is fresh and tied to the reviewed source tree.
 
-The current clean public-release build and all final release scans passed
-against the settled artifact.
+The current 2026-08-25 CBS-tree source-policy and fresh public-build scans pass.
+That validates the local artifact boundary only; it does not authorize a preview
+or live deployment.
 
 ## Historical manual release evidence
 
@@ -225,4 +310,6 @@ CI should remain deterministic and network-free. It may run fixtures, rules,
 emulators, browser automation, scans, and builds. It must not inject a live
 SportsDataIO key, switch access mode to production, assert entitlement, mutate
 `systemConfig/sportsDataIoCatalog`, change an arena provider, or deploy cloud
-resources.
+resources. It also must not enable CBS, mutate
+`systemConfig/cbsCollegeFootball`, add an NCAAF provider override, or make a
+CBS request.

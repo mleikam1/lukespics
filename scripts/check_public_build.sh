@@ -95,7 +95,7 @@ if ! LC_ALL=C grep -aFq "$production_attestation" "$main_bundle"; then
   exit 1
 fi
 
-readonly forbidden_pattern='wingman-interactive-live|lukes-picks-non-public-local-runtime-v1|USE_FIREBASE_EMULATORS|ENABLE_BROWSER_E2E_AUTH|FIREBASE_(AUTH|FUNCTIONS)_EMULATOR|FIRESTORE_EMULATOR|ALLOW_(THESPORTSDB_TEST|SPORTSDATAIO|ESPN)_PROVIDER|SPORTSDATAIO_(ACCESS_MODE|ENTITLEMENT_VERIFIED|API_KEY)|Ocp-Apim-Subscription-Key|api\.sportsdata\.io|site\.api\.espn\.com|site\.web\.api\.espn\.com|(^|[^[:alnum:]_])espn([^[:alnum:]_]|$)|https?://(127\.0\.0\.1|localhost)(:[0-9]+)?|https?://[^[:space:]"'"'"']*(espn\.com|espncdn\.com|wikipedia\.org|wikimedia\.org|thesportsdb\.(com|net))'
+readonly forbidden_pattern='wingman-interactive-live|lukes-picks-non-public-local-runtime-v1|USE_FIREBASE_EMULATORS|ENABLE_BROWSER_E2E_AUTH|FIREBASE_(AUTH|FUNCTIONS)_EMULATOR|FIRESTORE_EMULATOR|ALLOW_(THESPORTSDB_TEST|SPORTSDATAIO|ESPN)_PROVIDER|SPORTSDATAIO_(ACCESS_MODE|ENTITLEMENT_VERIFIED|API_KEY)|Ocp-Apim-Subscription-Key|api\.sportsdata\.io|site\.api\.espn\.com|site\.web\.api\.espn\.com|(^|[^[:alnum:]_])espn([^[:alnum:]_]|$)|https?://(127\.0\.0\.1|localhost)(:[0-9]+)?|https?://[^[:space:]"'"'"']*(espn\.com|espncdn\.com|wikipedia\.org|wikimedia\.org|thesportsdb\.(com|net)|cbssports\.com|cbsimg\.net|cbsistatic\.com)'
 forbidden_matches="$(matching_files "$forbidden_pattern")"
 if [[ -n "$forbidden_matches" ]]; then
   echo "Public build contains a non-public attestation, server-only provider material, blocked third-party content, or forbidden project in:" >&2

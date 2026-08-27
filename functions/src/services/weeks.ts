@@ -28,6 +28,7 @@ import type {
   CatalogQueryRequest,
   CatalogPresentation,
   LeagueSettings,
+  MemberRole,
   NormalizedGame,
   ProviderLeague,
   ProviderName,
@@ -104,6 +105,15 @@ export function calendarDateInTimezone(date: Date, timezone: string): string {
   const value = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((part) => part.type === type)?.value ?? "";
   return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+export function catalogGameDateInTimezone(
+  game: Pick<NormalizedGame, "scheduledAtUtc" | "scheduledDayEastern">,
+  timezone: string,
+): string | null {
+  return game.scheduledAtUtc === null
+    ? game.scheduledDayEastern ?? null
+    : calendarDateInTimezone(game.scheduledAtUtc, timezone);
 }
 
 function addCalendarDays(value: string, days: number): string {
@@ -478,6 +488,82 @@ export function validateCatalogProviderForLeague(
     );
   }
   return provider;
+}
+
+export function configuredProviderForSport(
+  settings: Partial<LeagueSettings>,
+  sportCode: string,
+): ProviderName {
+  const configured =
+    settings.providerBySport?.[sportCode] ?? settings.providerName ?? "manual";
+  if (!isProviderName(configured)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The arena sports provider configuration is invalid.",
+    );
+  }
+  return configured;
+}
+
+export function catalogProviderNamesForQuery(
+  settings: Partial<LeagueSettings>,
+  query: CatalogQueryRequest,
+): ProviderName[] {
+  if (query.sportCode !== undefined) {
+    return [configuredProviderForSport(settings, query.sportCode)];
+  }
+  const defaultProvider = settings.providerName ?? "manual";
+  if (!isProviderName(defaultProvider)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The arena sports provider configuration is invalid.",
+    );
+  }
+  const names = new Set<ProviderName>([defaultProvider]);
+  for (const providerName of Object.values(settings.providerBySport ?? {})) {
+    if (!isProviderName(providerName)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "The arena per-sport provider configuration is invalid.",
+      );
+    }
+    names.add(providerName);
+  }
+  return [...names];
+}
+
+export function assertCurrentWeekProviderAccess(input: {
+  role: MemberRole;
+  currentWeekId: unknown;
+  requestedWeekId: string;
+}): void {
+  if (
+    input.role === "member" &&
+    input.currentWeekId !== input.requestedWeekId
+  ) {
+    throw new HttpsError(
+      "permission-denied",
+      "Only the current week's picker may browse or refresh provider schedules.",
+    );
+  }
+}
+
+export function assertSingleConnectedSlateProvider(
+  games: Array<{provider?: unknown}>,
+): void {
+  const connectedProviders = new Set(
+    games
+      .flatMap((game) =>
+        typeof game.provider === "string" ? [game.provider] : [],
+      )
+      .filter((provider) => provider !== "manual"),
+  );
+  if (connectedProviders.size > 1) {
+    throw new HttpsError(
+      "failed-precondition",
+      "A weekly slate may use only one connected sports provider. Remove games from the other provider before saving.",
+    );
+  }
 }
 
 export function isCatalogGameSelectable(
@@ -894,7 +980,7 @@ async function canonicalCatalogGames(
       }
       validateCatalogProviderForLeague(
         game.provider,
-        settings.providerName,
+        configuredProviderForSport(settings, game.sportCode),
       );
       if (
         game.id !== snapshot.id ||
@@ -1004,6 +1090,7 @@ export async function saveDraftSlateRecord(input: {
         .map((game) => game.data()),
       ...canonicalGames.filter((game) => !removalIds.has(game.id)),
     ];
+    assertSingleConnectedSlateProvider(finalProviderGames);
     if (hasDuplicateSportsDataIoGameAliases(finalProviderGames)) {
       throw new HttpsError(
         "failed-precondition",
@@ -1120,7 +1207,10 @@ async function validateGamesForPublish(input: {
     if (providerName !== "manual") {
       validateCatalogProviderForLeague(
         providerName,
-        input.settings.providerName,
+        configuredProviderForSport(
+          input.settings,
+          String(selected.sportCode),
+        ),
       );
     }
     const selectedScheduledAt = asDate(
@@ -1252,6 +1342,7 @@ async function commitPublishWritesInChunks<T>(
 async function publishedCatalogPresentation(
   games: QueryDocumentSnapshot[],
 ): Promise<PublishedCatalogPresentation> {
+  assertSingleConnectedSlateProvider(games.map((game) => game.data()));
   const providerNames = new Set(
     games
       .map((game) => String(game.data().provider))
@@ -1262,12 +1353,6 @@ async function publishedCatalogPresentation(
       catalogProviderSnapshot: "manual",
       catalogPresentationSnapshot: neutralCatalogPresentation("manual"),
     };
-  }
-  if (providerNames.size !== 1) {
-    throw new HttpsError(
-      "failed-precondition",
-      "A published slate must use one connected sports provider.",
-    );
   }
   const [providerName] = providerNames;
   if (!isProviderName(providerName)) {
@@ -1663,7 +1748,7 @@ export async function listCatalog(input: {
   actorUid: string;
   query: CatalogQueryRequest;
 }): Promise<Record<string, unknown>> {
-  const {week} = await requirePickerOrAdmin(
+  const {week, member} = await requirePickerOrAdmin(
     input.leagueId,
     input.weekId,
     input.actorUid,
@@ -1679,6 +1764,11 @@ export async function listCatalog(input: {
   if (leagueData === undefined) {
     throw new HttpsError("not-found", "Arena not found.");
   }
+  assertCurrentWeekProviderAccess({
+    role: member.role,
+    currentWeekId: leagueData.currentWeekId,
+    requestedWeekId: input.weekId,
+  });
   const settings =
     (leagueData.settings as Partial<LeagueSettings> | undefined) ?? {};
   if (
@@ -1718,14 +1808,83 @@ export async function listCatalog(input: {
   }
   const weekStartAt = asDate(week.startAt, "week startAt");
   const weekEndAt = asDate(week.endAt, "week endAt");
-  const configuredProvider = settings.providerName ?? "manual";
-  if (!isProviderName(configuredProvider)) {
+  const defaultProviderName = settings.providerName ?? "manual";
+  if (!isProviderName(defaultProviderName)) {
     throw new HttpsError(
       "failed-precondition",
       "The arena sports provider configuration is invalid.",
     );
   }
-  const providerName = configuredProvider;
+  const providerNames = catalogProviderNamesForQuery(settings, input.query);
+  const loadProviderCatalog = async (providerName: ProviderName) => {
+      const provider = await getProvider(providerName);
+      const [sports, leagues] = await Promise.all([
+        provider.listSupportedSports(),
+        provider.listLeagues(),
+      ]);
+      return {
+        providerName,
+        provider,
+        sports,
+        leagues: leagues.filter(
+          (item) =>
+            configuredProviderForSport(settings, item.sportCode) ===
+            providerName,
+        ),
+      };
+  };
+  const targetedProvider = input.query.sportCode !== undefined;
+  const providerCatalogs = targetedProvider
+    ? [await loadProviderCatalog(providerNames[0] ?? defaultProviderName)]
+    : (await Promise.allSettled(
+        providerNames.map(async (providerName) => ({
+          providerName,
+          catalog: await loadProviderCatalog(providerName),
+        })),
+      )).flatMap((result) => {
+        if (result.status === "fulfilled") return [result.value.catalog];
+        logger.warn("Sports catalog provider discovery unavailable", {
+          functionName: "listCatalog",
+          safeErrorCode:
+            result.reason instanceof Error
+              ? result.reason.name
+              : "UnknownError",
+        });
+        return [];
+      });
+  const enabledLeagueCatalogs = providerCatalogs.flatMap((catalog) =>
+    catalog.leagues
+      .filter(
+        (item) =>
+          ((settings.enabledSports?.length ?? 0) === 0 ||
+            settings.enabledSports?.includes(item.sportCode)) &&
+          ((settings.enabledLeagues?.length ?? 0) === 0 ||
+            settings.enabledLeagues?.includes(item.code)),
+      )
+      .map((league) => ({...catalog, league})),
+  );
+  const enabledLeagues = enabledLeagueCatalogs.map((item) => item.league);
+  const resolvedLeague = resolveCatalogLeague(input.query, enabledLeagues);
+  const selectedCatalog = resolvedLeague === null
+    ? providerCatalogs.find(
+        (item) => item.providerName === defaultProviderName,
+      ) ?? providerCatalogs.find((item) => item.leagues.length > 0) ??
+        providerCatalogs[0]
+    : enabledLeagueCatalogs.find(
+        (item) =>
+          item.league.sportCode === resolvedLeague.sportCode &&
+          item.league.code === resolvedLeague.code &&
+          item.league.providerLeagueId === resolvedLeague.providerLeagueId &&
+          item.league.season === resolvedLeague.season,
+      );
+  const provider = selectedCatalog?.provider;
+  const providerName = selectedCatalog?.providerName ?? defaultProviderName;
+  if (provider === undefined) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The arena sports provider configuration is unavailable.",
+    );
+  }
   const catalogTimezone =
     providerName === "sportsDataIo"
       ? SPORTSDATAIO_CALENDAR_TIMEZONE
@@ -1737,25 +1896,17 @@ export async function listCatalog(input: {
     weekStartAt,
     weekEndAt,
   });
-  const provider = await getProvider(providerName);
-  const [providerSports, providerLeagues] = await Promise.all([
-    provider.listSupportedSports(),
-    provider.listLeagues(),
-  ]);
-  const enabledLeagues = providerLeagues.filter(
-    (item) =>
-      ((settings.enabledSports?.length ?? 0) === 0 ||
-        settings.enabledSports?.includes(item.sportCode)) &&
-      ((settings.enabledLeagues?.length ?? 0) === 0 ||
-        settings.enabledLeagues?.includes(item.code)),
-  );
-  const resolvedLeague = resolveCatalogLeague(input.query, enabledLeagues);
   if (providerName !== "manual" && resolvedLeague === null) {
     throw new HttpsError(
       "failed-precondition",
       "Live sports data has not been configured for this league and season.",
     );
   }
+  const effectiveSeasonType =
+    input.query.seasonType ?? resolvedLeague?.seasonType;
+  const effectiveCbsWeek = input.query.week ?? resolvedLeague?.week;
+  const effectiveDivision =
+    input.query.division ?? resolvedLeague?.division;
   const effectiveQuery: ProviderQuery = {
     sportCode:
       resolvedLeague?.sportCode ?? input.query.sportCode ?? "manual",
@@ -1765,12 +1916,21 @@ export async function listCatalog(input: {
       resolvedLeague?.providerLeagueId ??
       input.query.providerLeagueId ??
       "manual",
-    season: resolvedLeague?.season ?? input.query.season ?? "manual",
+    season: input.query.season ?? resolvedLeague?.season ?? "manual",
     from: input.query.from ?? derivedRange.from,
     to: input.query.to ?? derivedRange.to,
     // SportsDataIO League API date buckets are US Eastern calendar days. The
     // server, not a browser offset, owns that policy.
     timezone: catalogTimezone,
+    ...(effectiveSeasonType === undefined
+      ? {}
+      : {seasonType: effectiveSeasonType}),
+    ...(effectiveCbsWeek === undefined
+      ? {}
+      : {week: effectiveCbsWeek}),
+    ...(effectiveDivision === undefined
+      ? {}
+      : {division: effectiveDivision}),
     forceRefresh: input.query.forceRefresh ?? false,
   };
   assertCatalogQueryWithinWeek({
@@ -1835,24 +1995,26 @@ export async function listCatalog(input: {
     catalogTimezone,
   );
   const visibleGames = cached.games.filter((game) => {
-    const localDate =
-      game.scheduledDayEastern ??
-      (game.scheduledAtUtc === null
-        ? null
-        : calendarDateInTimezone(game.scheduledAtUtc, catalogTimezone));
+    const localDate = catalogGameDateInTimezone(game, catalogTimezone);
+    const cbsDateUnknown =
+      providerName === "cbsSports" && localDate === null;
+    const includeUnknownCbsDate =
+      cbsDateUnknown &&
+      (discovery || input.query.dateMode === "allDates");
     const insideWeek =
       game.scheduledAtUtc === null
-        ? localDate !== null &&
+        ? includeUnknownCbsDate || (localDate !== null &&
           localDate >= catalogWeekStart &&
-          localDate <= catalogWeekEnd
+          localDate <= catalogWeekEnd)
         : game.scheduledAtUtc >= weekStartAt &&
           game.scheduledAtUtc <= weekEndAt;
     return (
       game.sportCode === effectiveQuery.sportCode &&
       game.leagueCode === effectiveQuery.leagueCode &&
-      localDate !== null &&
-      localDate >= effectiveQuery.from &&
-      localDate <= effectiveQuery.to &&
+      (includeUnknownCbsDate ||
+        (localDate !== null &&
+          localDate >= effectiveQuery.from &&
+          localDate <= effectiveQuery.to)) &&
       insideWeek &&
       ((settings.enabledSports?.length ?? 0) === 0 ||
         settings.enabledSports?.includes(game.sportCode)) &&
@@ -1888,18 +2050,33 @@ export async function listCatalog(input: {
   const supportedSportCodes = new Set(
     enabledLeagues.map((item) => item.sportCode),
   );
-  const sports = providerSports
+  const sports = [...new Set(
+    providerCatalogs.flatMap((catalog) => catalog.sports),
+  )]
     .filter((code) => supportedSportCodes.has(code))
-    .map((code) => ({code, displayName: displayNameForCode(code)}));
+    .sort()
+    .map((code) => ({
+      code,
+      displayName:
+        code === "NCAAF" ? "College Football" : displayNameForCode(code),
+    }));
   return {
     provider: provider.name,
     sports,
-    leagues: enabledLeagues.map((item) => ({
+    leagues: enabledLeagueCatalogs.map(({league: item, providerName}) => ({
       code: item.code,
       displayName: item.name,
       sportCode: item.sportCode,
       providerLeagueId: item.providerLeagueId,
+      provider: providerName,
       season: item.season,
+      ...(item.seasonType === undefined
+        ? {}
+        : {seasonType: item.seasonType}),
+      ...(item.week === undefined ? {} : {week: item.week}),
+      ...(item.division === undefined
+        ? {}
+        : {division: item.division}),
     })),
     games: visibleGames.map((game) =>
       gameForClient(
@@ -1925,6 +2102,15 @@ export async function listCatalog(input: {
       leagueCode: effectiveQuery.leagueCode,
       providerLeagueId: effectiveQuery.providerLeagueId,
       season: effectiveQuery.season,
+      ...(effectiveQuery.seasonType === undefined
+        ? {}
+        : {seasonType: effectiveQuery.seasonType}),
+      ...(effectiveQuery.week === undefined
+        ? {}
+        : {week: effectiveQuery.week}),
+      ...(effectiveQuery.division === undefined
+        ? {}
+        : {division: effectiveQuery.division}),
       from: effectiveQuery.from,
       to: effectiveQuery.to,
       timezone: effectiveQuery.timezone,
@@ -1935,6 +2121,20 @@ export async function listCatalog(input: {
           : {dateMode: input.query.dateMode}),
     },
     availability,
+    ...(providerName === "cbsSports"
+      ? {
+          collegeFootball: {
+            activeSeason: Number(effectiveQuery.season),
+            activeSeasonType: effectiveQuery.seasonType ?? "regular",
+            activeWeek: effectiveQuery.week ?? 1,
+            division: effectiveQuery.division ?? "FBS",
+            seasons: [Number(effectiveQuery.season)],
+            seasonTypes: [effectiveQuery.seasonType ?? "regular"],
+            minimumWeek: effectiveQuery.week ?? 1,
+            maximumWeek: effectiveQuery.week ?? 1,
+          },
+        }
+      : {}),
     week: {
       startAt: weekStartAt.toISOString(),
       endAt: weekEndAt.toISOString(),
@@ -1959,6 +2159,9 @@ function materialSyncHash(value: DocumentData | NormalizedGame): string {
       "effectiveLockAtUtc",
     ),
     venueName: value.venueName ?? null,
+    venueCity: value.venueCity ?? null,
+    venueState: value.venueState ?? null,
+    venueCountry: value.venueCountry ?? null,
     neutralSite: value.neutralSite === true,
     seasonType: value.seasonType ?? null,
     homeTeam: value.homeTeam,
@@ -1974,6 +2177,9 @@ function materialSyncHash(value: DocumentData | NormalizedGame): string {
     winnerTeamId: value.winnerTeamId ?? null,
     broadcast: value.broadcast ?? null,
     eventDetail: value.eventDetail ?? null,
+    sourceGameUrl: value.sourceGameUrl ?? null,
+    kickoffDisplayText: value.kickoffDisplayText ?? null,
+    dateHeading: value.dateHeading ?? null,
     rawResponseVersion: value.rawResponseVersion ?? null,
     resultVersion: value.resultVersion,
   });
@@ -2185,6 +2391,43 @@ function selectedGameToQuery(
     scheduledAtUtc: scheduled,
     timezone: calendarTimezone,
   });
+  const cbsWeek = provider === "cbsSports"
+    ? Number.parseInt(String(data.weekOrRound ?? ""), 10)
+    : null;
+  if (
+    provider === "cbsSports" &&
+    (cbsWeek === null || !Number.isSafeInteger(cbsWeek) || cbsWeek < 0 ||
+      cbsWeek > 25)
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The selected college-football game is missing its CBS week.",
+    );
+  }
+  const seasonType = String(data.seasonType ?? "regular");
+  if (
+    provider === "cbsSports" &&
+    seasonType !== "regular" &&
+    seasonType !== "postseason"
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The selected college-football game has an invalid season type.",
+    );
+  }
+  const collegeFootballContext: Partial<ProviderQuery> = {};
+  if (provider === "cbsSports") {
+    if (cbsWeek === null) {
+      throw new HttpsError(
+        "failed-precondition",
+        "The selected college-football game is missing its CBS week.",
+      );
+    }
+    collegeFootballContext.seasonType = seasonType as
+      "regular" | "postseason";
+    collegeFootballContext.week = cbsWeek;
+    collegeFootballContext.division = "FBS";
+  }
   return {
     sportCode: String(data.sportCode),
     leagueCode: String(data.leagueCode),
@@ -2193,6 +2436,7 @@ function selectedGameToQuery(
     from: range.from,
     to: range.to,
     timezone: calendarTimezone,
+    ...collegeFootballContext,
     forceRefresh,
   };
 }

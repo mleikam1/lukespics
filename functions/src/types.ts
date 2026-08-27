@@ -58,6 +58,9 @@ export type NormalizedGame = {
   scheduledDayEastern?: string | null;
   timeTbd?: boolean;
   venueName: string | null;
+  venueCity?: string | null;
+  venueState?: string | null;
+  venueCountry?: string | null;
   neutralSite: boolean;
   homeTeam: Team;
   awayTeam: Team;
@@ -71,6 +74,9 @@ export type NormalizedGame = {
   winnerTeamId: string | null;
   broadcast?: string | null;
   eventDetail?: string | null;
+  sourceGameUrl?: string | null;
+  kickoffDisplayText?: string | null;
+  dateHeading?: string | null;
   rawResponseVersion?: number;
   providerLastUpdatedAt: Date;
   lastSyncedAt: Date;
@@ -102,6 +108,9 @@ export type ProviderLeague = {
   sportCode: string;
   providerLeagueId: string;
   season: string;
+  seasonType?: "regular" | "postseason";
+  week?: number;
+  division?: "FBS";
 };
 
 export type ProviderQuery = {
@@ -112,6 +121,9 @@ export type ProviderQuery = {
   from: string;
   to: string;
   timezone: string;
+  seasonType?: "regular" | "postseason";
+  week?: number;
+  division?: "FBS";
   forceRefresh?: boolean;
 };
 
@@ -132,7 +144,20 @@ export type CatalogQueryRequest = Omit<
   from?: string;
   to?: string;
   timezone?: string;
+  seasonType?: "regular" | "postseason";
+  week?: number;
+  division?: "FBS";
   dateMode?: "today" | "tomorrow" | "later" | "allDates" | "custom";
+};
+
+export type ProviderCachedGamesResult = {
+  games: NormalizedGame[];
+  cacheHit: boolean;
+  stale: boolean;
+  delayed: boolean;
+  cachedAt: Date;
+  expiresAt: Date;
+  contentHash: string;
 };
 
 export type CatalogPresentation = {
@@ -162,10 +187,17 @@ export type SportsDataProvider = {
   listSupportedSports(): Promise<string[]>;
   listLeagues(sportCode?: string): Promise<ProviderLeague[]>;
   listGames(query: ProviderQuery): Promise<NormalizedGame[]>;
+  listGamesCached?(
+    query: ProviderQuery,
+  ): Promise<ProviderCachedGamesResult>;
   fetchGames(
     providerGameIds: string[],
     context?: Partial<ProviderQuery>,
   ): Promise<NormalizedGame[]>;
+  fetchGamesCached?(
+    providerGameIds: string[],
+    context: ProviderQuery,
+  ): Promise<ProviderCachedGamesResult>;
   getTeamMetadata(teamId: string): Promise<Team | null>;
   getHealth(): Promise<ProviderHealth>;
   mapStatus(providerStatus: string): GameStatus;
@@ -197,6 +229,7 @@ export const PROVIDER_NAMES = [
   "theSportsDbTest",
   "apiSports",
   "sportsDataIo",
+  "cbsSports",
 ] as const;
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 
@@ -233,6 +266,7 @@ export type LeagueSettings = {
   enabledLeagues: string[];
   manualFinalizationRequired: boolean;
   providerName: ProviderName;
+  providerBySport: Record<string, ProviderName>;
 };
 
 export type EntryScore = {

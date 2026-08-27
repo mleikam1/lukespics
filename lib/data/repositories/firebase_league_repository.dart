@@ -205,6 +205,9 @@ final class FirebaseLeagueRepository implements LeagueRepository {
         'leagueCode': query.leagueCode,
         'leagueIdForProvider': query.providerLeagueId,
         'season': query.season,
+        if (query.seasonType != null) 'seasonType': query.seasonType,
+        if (query.week != null) 'week': query.week,
+        if (query.division != null) 'division': query.division,
         'from': date(query.from),
         'to': date(query.to),
         'dateMode': query.dateMode.name,
@@ -791,9 +794,13 @@ SportsCatalogResult parseSportsCatalogResult(
     attribution: result['attribution'],
     fallbackProvider: provider,
   );
+  final collegeFootball = _collegeFootballCatalogMetadata(
+    result['collegeFootball'],
+  );
   final effectiveQuery = _catalogQuerySnapshot(
     result['effectiveQuery'] ?? result['query'],
     fallback: requestedQuery,
+    collegeFootball: collegeFootball ?? requestedQuery?.collegeFootball,
   );
   final week = _mapOrEmpty(result['week']);
   final weekStartAt =
@@ -831,6 +838,10 @@ SportsCatalogResult parseSportsCatalogResult(
             leagueCode: effectiveQuery.leagueCode,
             providerLeagueId: effectiveQuery.providerLeagueId,
             season: effectiveQuery.season,
+            seasonType: effectiveQuery.seasonType,
+            week: effectiveQuery.week,
+            division: effectiveQuery.division,
+            collegeFootball: effectiveQuery.collegeFootball,
             from: effectiveQuery.from,
             to: effectiveQuery.to,
             timezone: effectiveQuery.timezone,
@@ -839,6 +850,7 @@ SportsCatalogResult parseSportsCatalogResult(
             weekEndAt: weekEndAt,
           ),
     availability: availability,
+    collegeFootball: collegeFootball,
     weekStartAt: weekStartAt,
     weekEndAt: weekEndAt,
   );
@@ -896,10 +908,86 @@ List<CatalogLeague> _catalogLeagues(Object? value) {
       sportCode: sportCode,
       providerLeagueId: providerLeagueId,
       season: season,
+      provider: _nonEmptyString(data['provider']),
+      seasonType: _catalogSeasonType(data['seasonType']),
+      week: _catalogWeek(data['week']),
+      division: _catalogDivision(data['division']),
     );
   }
   return List<CatalogLeague>.unmodifiable(byCode.values);
 }
+
+CollegeFootballCatalogMetadata? _collegeFootballCatalogMetadata(Object? value) {
+  final data = _mapOrEmpty(value);
+  final activeSeason = _catalogSeason(data['activeSeason']);
+  final activeSeasonType = _catalogSeasonType(data['activeSeasonType']);
+  final activeWeek = _catalogWeek(data['activeWeek']);
+  final division = _catalogDivision(data['division']);
+  final minimumWeek = _catalogWeek(data['minimumWeek']);
+  final maximumWeek = _catalogWeek(data['maximumWeek']);
+  if (activeSeason == null ||
+      activeSeasonType == null ||
+      activeWeek == null ||
+      division == null ||
+      minimumWeek == null ||
+      maximumWeek == null ||
+      maximumWeek < minimumWeek ||
+      activeWeek < minimumWeek ||
+      activeWeek > maximumWeek) {
+    return null;
+  }
+
+  final seasons = <int>{
+    for (final item
+        in data['seasons'] is List
+            ? data['seasons']! as List
+            : const <Object?>[])
+      if (_catalogSeason(item) case final season?) season,
+  };
+  seasons.add(activeSeason);
+  final seasonTypes = <String>{
+    for (final item
+        in data['seasonTypes'] is List
+            ? data['seasonTypes']! as List
+            : const <Object?>[])
+      if (_catalogSeasonType(item) case final seasonType?) seasonType,
+  };
+  seasonTypes.add(activeSeasonType);
+  return CollegeFootballCatalogMetadata(
+    activeSeason: activeSeason,
+    activeSeasonType: activeSeasonType,
+    activeWeek: activeWeek,
+    division: division,
+    seasons: List<int>.unmodifiable(seasons),
+    seasonTypes: List<String>.unmodifiable(seasonTypes),
+    minimumWeek: minimumWeek,
+    maximumWeek: maximumWeek,
+  );
+}
+
+int? _catalogSeason(Object? value) {
+  final parsed = switch (value) {
+    int value => value,
+    num value when value == value.toInt() => value.toInt(),
+    String value => int.tryParse(value.trim()),
+    _ => null,
+  };
+  return parsed != null && parsed >= 1900 && parsed <= 2200 ? parsed : null;
+}
+
+String? _catalogSeasonType(Object? value) => switch (value) {
+  'regular' => 'regular',
+  'postseason' => 'postseason',
+  _ => null,
+};
+
+int? _catalogWeek(Object? value) {
+  if (value is! num || value != value.toInt()) return null;
+  final week = value.toInt();
+  return week >= 0 && week <= 25 ? week : null;
+}
+
+String? _catalogDivision(Object? value) => value == 'FBS' ? 'FBS' : null;
 
 const _activePresentationProviders = <String>{
   'manual',
@@ -907,12 +995,17 @@ const _activePresentationProviders = <String>{
   'theSportsDbTest',
   'apiSports',
   'sportsDataIo',
+  'cbsSports',
 };
 
 // SportsDataIO remains text/data-only until an explicit artwork entitlement
 // is reviewed. Only these configured providers may currently opt in to the
 // server-reviewed remote-logo policy.
-const _remoteLogoEligibleProviders = <String>{'theSportsDbTest', 'apiSports'};
+const _remoteLogoEligibleProviders = <String>{
+  'theSportsDbTest',
+  'apiSports',
+  'cbsSports',
+};
 
 CatalogPresentation _catalogPresentation(
   Object? value, {
@@ -971,6 +1064,7 @@ CatalogPresentation _catalogPresentation(
 CatalogQuerySnapshot? _catalogQuerySnapshot(
   Object? value, {
   required CatalogQuery? fallback,
+  CollegeFootballCatalogMetadata? collegeFootball,
 }) {
   final data = _mapOrEmpty(value);
   final sportCode = _nonEmptyString(data['sportCode']) ?? fallback?.sportCode;
@@ -984,8 +1078,8 @@ CatalogQuerySnapshot? _catalogQuerySnapshot(
       ) ??
       fallback?.providerLeagueId;
   final season = _nonEmptyString(data['season']) ?? fallback?.season;
-  final from = _dateOrNull(data['from']) ?? fallback?.from;
-  final to = _dateOrNull(data['to']) ?? fallback?.to;
+  final from = _calendarDateOrNull(data['from']) ?? fallback?.from;
+  final to = _calendarDateOrNull(data['to']) ?? fallback?.to;
   if (sportCode == null ||
       leagueCode == null ||
       providerLeagueId == null ||
@@ -999,6 +1093,19 @@ CatalogQuerySnapshot? _catalogQuerySnapshot(
     leagueCode: leagueCode,
     providerLeagueId: providerLeagueId,
     season: season,
+    seasonType:
+        _catalogSeasonType(data['seasonType']) ??
+        fallback?.seasonType ??
+        collegeFootball?.activeSeasonType,
+    week:
+        _catalogWeek(data['week']) ??
+        fallback?.week ??
+        collegeFootball?.activeWeek,
+    division:
+        _catalogDivision(data['division']) ??
+        fallback?.division ??
+        collegeFootball?.division,
+    collegeFootball: collegeFootball,
     from: from,
     to: to,
     timezone: _nonEmptyString(data['timezone']) ?? fallback?.timezone ?? 'UTC',
@@ -1102,6 +1209,11 @@ String? _calendarDayOrNull(Object? value) {
           parsed.toIso8601String().substring(0, 10) != normalized
       ? null
       : normalized;
+}
+
+DateTime? _calendarDateOrNull(Object? value) {
+  final day = _calendarDayOrNull(value);
+  return day == null ? null : DateTime.parse('${day}T00:00:00.000Z');
 }
 
 String _displayName(String code) => code
@@ -1228,6 +1340,9 @@ Map<String, Object?> _gameToJson(
   'scheduledDayEastern': game.scheduledDayEastern,
   'timeTbd': game.timeTbd,
   'venueName': game.venueName,
+  'venueCity': game.venueCity,
+  'venueState': game.venueState,
+  'venueCountry': game.venueCountry,
   'neutralSite': game.neutralSite,
   'homeTeam': game.homeTeam.toJson(),
   'awayTeam': game.awayTeam.toJson(),
@@ -1241,6 +1356,9 @@ Map<String, Object?> _gameToJson(
   'winnerTeamId': game.winnerTeamId,
   'broadcast': game.broadcast,
   'eventDetail': game.eventDetail,
+  'sourceGameUrl': game.sourceGameUrl?.toString(),
+  'kickoffDisplayText': game.kickoffDisplayText,
+  'dateHeading': game.dateHeading,
   'providerLastUpdatedAt': game.providerLastUpdatedAt.toIso8601String(),
   'lastSyncedAt': game.lastSyncedAt.toIso8601String(),
   'resultVersion': wireResultVersion,
@@ -1281,6 +1399,9 @@ Game parseGameSnapshot(String id, Map<String, Object?> data) {
     scheduledDayEastern: _calendarDayOrNull(data['scheduledDayEastern']),
     timeTbd: timeTbd,
     venueName: _nonEmptyString(data['venueName']),
+    venueCity: _nonEmptyString(data['venueCity']),
+    venueState: _nonEmptyString(data['venueState']),
+    venueCountry: _nonEmptyString(data['venueCountry']),
     neutralSite: data['neutralSite'] as bool? ?? false,
     homeTeam: _team(_map(data['homeTeam'])),
     awayTeam: _team(_map(data['awayTeam'])),
@@ -1305,6 +1426,12 @@ Game parseGameSnapshot(String id, Map<String, Object?> data) {
     winnerTeamId: _nonEmptyString(data['winnerTeamId']),
     broadcast: _nonEmptyString(data['broadcast']),
     eventDetail: _nonEmptyString(data['eventDetail']),
+    sourceGameUrl: switch (_nonEmptyString(data['sourceGameUrl'])) {
+      final value? => Uri.tryParse(value),
+      null => null,
+    },
+    kickoffDisplayText: _nonEmptyString(data['kickoffDisplayText']),
+    dateHeading: _nonEmptyString(data['dateHeading']),
     providerLastUpdatedAt:
         _dateOrNull(data['providerLastUpdatedAt']) ?? observedFallback,
     lastSyncedAt: _dateOrNull(data['lastSyncedAt']) ?? observedFallback,

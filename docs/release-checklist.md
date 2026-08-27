@@ -24,6 +24,50 @@ not deployment or activation claims.
 
 Production must stay `manual` while any unchecked activation item remains.
 
+## CBS additive release boundary — 2026-08-25
+
+- [x] `cbsSports` is server-only and scoped to `NCAAF` / `ncaaf` / `FBS`.
+- [x] Arena routing uses `settings.providerBySport.NCAAF`; the legacy
+      `providerName` remains the default for every other sport.
+- [x] Configuration, normalized weekly cache, and rolling attempt ledger are
+      private at `systemConfig/cbsCollegeFootball`, `sportsProviderCache`, and
+      `providerUsage/cbsSports_rolling24h`.
+- [x] Only the configured active season/type/week can make a CBS request or
+      appear as a picker choice; inactive identities cannot become a historical
+      crawler.
+- [x] Each outbound fetch, including retry and redirect hops, consumes the
+      provider-global rolling cap; the provider-global circuit spans cache
+      identities.
+- [x] Exact redirect/page identity, parser-version unconditional reparse, and
+      suspicious-shrink last-good retention fail closed.
+- [x] The branch adds two callables plus one hourly scheduled Function; the
+      existing 30-minute result sync remains separate.
+- [x] Firestore Rules add the new private-cache denial and
+      `firestore.indexes.json` has no CBS-related change.
+- [x] The complete deterministic, rules, emulator, browser, and public-build
+      matrix has passed after all CBS edits settle.
+- [ ] Blaze billing, Cloud Scheduler API, scheduler service-agent permission,
+      and the exact additive Function manifest have been rechecked.
+- [ ] `systemConfig/cbsCollegeFootball` has been created with both switches
+      false through a separately authorized guarded write.
+- [ ] Rules/Functions were deployed with CBS disabled, then verified in an
+      authenticated preview without a browser-originated CBS request.
+- [ ] A single arena was explicitly mapped to `cbsSports`, and a live CBS game
+      with a confirmed UTC kickoff completed load, slate, pick, lock, result,
+      scoring, and standings verification.
+- [ ] CBS was enabled or deployed. The bounded 2026-08-25 public-page check is
+      parser/source evidence only and exposed no trustworthy kickoff date/time.
+- [x] The current Functions production dependency graph reports 0
+      vulnerabilities.
+- [ ] The full Functions graph's 8 vulnerabilities (4 high, 4 moderate) and
+      Flutter's 25 locked upgrades/2 behind constraints have been reviewed and
+      dispositioned; the observed inventory does not itself authorize upgrades.
+
+Until the unchecked items pass, keep both CBS config switches false and leave
+the NCAAF override unset/manual. Rollback is config-first: disable both switches,
+remove/restore only `providerBySport.NCAAF`, preserve cache and historical game/
+pick/result data, and redeploy prior Functions only if still necessary.
+
 ## Implemented catalog and result behavior
 
 - [x] `listSportsCatalog` returns server-discovered NFL/MLB metadata,
@@ -102,25 +146,34 @@ Production must stay `manual` while any unchecked activation item remains.
 - [ ] A separate written team-mark entitlement and narrow host operation were
       approved. Until then this must remain unchecked.
 
-## Deterministic validation
+## Current CBS-tree deterministic validation — 2026-08-25
 
-- [x] `flutter analyze` passed on the current branch.
-- [x] `flutter test` passed 111/111 tests on the current branch.
-- [x] `flutter build web --release` completed successfully on the current
-      branch, including Flutter's Wasm compatibility dry run.
+- [x] Flutter format and analyze passed; unit/widget tests passed 122/122.
+- [x] The Flutter web release build completed and the fresh public-build scan
+      passed.
+- [x] Functions lint, typecheck, and build passed; unit/contract tests passed
+      185/185 across 8 files.
+- [x] Firestore Rules passed 12/12 and emulator integration passed 10/10,
+      including the authenticated cache-backed CBS lifecycle and capacity
+      boundary without a CBS network request.
+- [x] The connected browser-to-emulator lifecycle passed with safe provider
+      flags.
+- [x] Source policy, secret, public-build, and changed-tree whitespace checks
+      passed on the current tree.
+- [ ] An authenticated live CBS game completed the production picker-to-results
+      flow. This remains deliberately incomplete.
+
+## Recorded pre-CBS deterministic validation — 2026-08-01
+
+- [x] `flutter analyze` passed on the recorded pre-CBS tree.
+- [x] `flutter test` passed 111/111 tests on the recorded pre-CBS tree.
+- [x] `flutter build web --release` completed successfully on the recorded
+      pre-CBS tree, including Flutter's Wasm compatibility dry run.
 - [x] Final Functions lint, typecheck, 109/109 unit/contract tests in 5 files,
-      and TypeScript build passed under Node 22 on the settled tree.
-- [ ] Final Firestore rules and emulator integration matrix rerun after all
-      branch edits settle.
-- [ ] Final connected browser-to-emulator lifecycle rerun with automatic
-      providers disabled.
-- [ ] Final source, secret, and fresh public-build scans rerun on the exact
-      release artifact.
-- [ ] Authenticated SportsDataIO smoke completed. This is intentionally
-      separate from deterministic validation.
+      and TypeScript build passed under Node 22 on that settled tree.
 
-Only update counts above from actual command output on the current tree. Do not
-copy historical test counts into this section.
+These historical counts do not validate CBS; the dated current-tree section
+above records the completed branch matrix separately.
 
 ## Cloud release readiness
 

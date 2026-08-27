@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS: LeagueSettings = {
   enabledLeagues: [],
   manualFinalizationRequired: true,
   providerName: "manual",
+  providerBySport: {},
 };
 
 export async function ensureProfile(
@@ -94,6 +95,9 @@ export async function createLeagueRecord(input: {
   const invite = inviteReferences(inviteCodeHash, leagueId);
   const settings = {...DEFAULT_SETTINGS, ...input.settings};
   assertProviderAllowedForRuntime(settings.providerName);
+  for (const provider of Object.values(settings.providerBySport)) {
+    assertProviderAllowedForRuntime(provider);
+  }
   const baseSlug = slugify(input.name);
   const slug = `${baseSlug}-${leagueId.slice(-6)}`;
 
@@ -426,6 +430,9 @@ export async function updateSettings(input: {
     // Resolve the provider before committing the setting so a runtime flag
     // cannot strand an arena whose catalog activation is still incomplete.
     await getProvider(input.settings.providerName);
+  }
+  for (const provider of Object.values(input.settings.providerBySport ?? {})) {
+    await getProvider(provider);
   }
   const reference = db.collection("leagues").doc(input.leagueId);
   await db.runTransaction(async (transaction) => {

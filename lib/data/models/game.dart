@@ -82,12 +82,18 @@ final class Game {
     this.rawResponseVersion = 1,
     this.weekOrRound,
     this.venueName,
+    this.venueCity,
+    this.venueState,
+    this.venueCountry,
     this.neutralSite = false,
     this.homeScore,
     this.awayScore,
     this.winnerTeamId,
     this.broadcast,
     this.eventDetail,
+    this.sourceGameUrl,
+    this.kickoffDisplayText,
+    this.dateHeading,
     this.manualOverride = false,
     this.manualOverrideReason,
     this.manualOverrideBy,
@@ -116,6 +122,9 @@ final class Game {
   final String? scheduledDayEastern;
   final bool timeTbd;
   final String? venueName;
+  final String? venueCity;
+  final String? venueState;
+  final String? venueCountry;
   final bool neutralSite;
   final Team homeTeam;
   final Team awayTeam;
@@ -129,6 +138,9 @@ final class Game {
   final String? winnerTeamId;
   final String? broadcast;
   final String? eventDetail;
+  final Uri? sourceGameUrl;
+  final String? kickoffDisplayText;
+  final String? dateHeading;
   final DateTime providerLastUpdatedAt;
   final DateTime lastSyncedAt;
   final bool manualOverride;
@@ -213,6 +225,9 @@ final class Game {
     String? winnerTeamId,
     String? broadcast,
     String? eventDetail,
+    Uri? sourceGameUrl,
+    String? kickoffDisplayText,
+    String? dateHeading,
     DateTime? providerLastUpdatedAt,
     DateTime? lastSyncedAt,
     bool? manualOverride,
@@ -254,6 +269,9 @@ final class Game {
         : scheduledDayEastern as String?,
     timeTbd: timeTbd ?? this.timeTbd,
     venueName: venueName,
+    venueCity: venueCity,
+    venueState: venueState,
+    venueCountry: venueCountry,
     neutralSite: neutralSite,
     homeTeam: homeTeam,
     awayTeam: awayTeam,
@@ -269,6 +287,9 @@ final class Game {
     winnerTeamId: winnerTeamId ?? this.winnerTeamId,
     broadcast: broadcast ?? this.broadcast,
     eventDetail: eventDetail ?? this.eventDetail,
+    sourceGameUrl: sourceGameUrl ?? this.sourceGameUrl,
+    kickoffDisplayText: kickoffDisplayText ?? this.kickoffDisplayText,
+    dateHeading: dateHeading ?? this.dateHeading,
     providerLastUpdatedAt: providerLastUpdatedAt ?? this.providerLastUpdatedAt,
     lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
     manualOverride: manualOverride ?? this.manualOverride,

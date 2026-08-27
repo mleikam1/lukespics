@@ -84,12 +84,38 @@ a public preview. Rebuild with `flutter build web --release` before running
   path requires the exact project, kill switch, `production` access mode,
   verified feed/use entitlement, enabled server catalog, and Secret Manager
   key. Fixture/trial/discovery modes cannot activate production grading.
+- `cbsSports`: server-only NCAAF/FBS schedule integration. It uses the private
+  `systemConfig/cbsCollegeFootball` document and is selected per arena with
+  `settings.providerBySport.NCAAF`; it does not replace the arena's default
+  provider for another sport. Only the configured active season/type/week can
+  make a network request or appear in the Flutter controls.
 
 Do not make live SportsDataIO calls in CI or emulator tests. Use the sanitized
 NFL/MLB fixtures to test strict path construction, nullable/TBD parsing, status
 and closure mapping, reschedules, doubleheaders, UTC/Eastern behavior, and
 normalization. Never add a general proxy, put the API host/header/key in
 Flutter/web code, or accept a user-provided upstream URL.
+
+CBS unit and contract tests use synthetic HTML and mocked fetch responses. Keep
+`enabled` and `autoRefreshEnabled` false in emulator configuration unless a
+specific local test owns the mock transport; never point an ordinary emulator,
+browser test, or CI run at CBS. The normal isolated commands remain:
+
+```bash
+npm --prefix functions ci
+npm --prefix functions run lint
+npm --prefix functions run typecheck
+npm --prefix functions test
+npm --prefix functions run build
+npm --prefix functions run test:rules
+npm --prefix functions run test:integration
+./scripts/test_browser_e2e.sh
+```
+
+The rules suite must deny client access to `systemConfig/cbsCollegeFootball`,
+`sportsProviderCache`, and `providerUsage`. The Functions emulator uses
+`demo-lukes-picks-local`; the `cbsSports` runtime policy rejects any unrelated
+project.
 
 ## Source and build checks
 
@@ -111,9 +137,11 @@ prohibited.
 
 The source scan allows the exact SportsDataIO API origin and authentication
 header name only in the dedicated server client. Flutter/web and public builds
-reject all provider host/header/secret material. Blocked third-party logo hosts
-remain denied everywhere except the server's literal denylist. Do not evade a
-policy by assembling host strings.
+reject all provider host/header/secret material. CBS scoreboard/logo host
+literals are similarly restricted to the reviewed server parser, provider, and
+schedule service and are forbidden in Flutter/web and `build/web`. Blocked
+third-party logo hosts remain denied everywhere except the server's literal
+denylist. Do not evade a policy by assembling host strings.
 
 ## Cloud safety
 
@@ -127,7 +155,9 @@ It is not a development convenience command. Non-interactive production
 Functions deployment requires ignored `functions/.env.lukes-picks` values that
 explicitly keep automatic-provider flags false and SportsDataIO mode at
 `fixture`; never activate it without the complete external and technical
-review. A separately
+review. CBS has no secret or environment-key gate, so its server document must
+remain `enabled: false` and `autoRefreshEnabled: false` through the first
+deployment. A separately
 authorized prerequisite mutation, such as enabling a reviewed API or setting
 `INVITE_CODE_PEPPER`, must run `assert_firebase_project.sh lukes-picks`
 immediately before its own explicit project-targeted write.
@@ -140,5 +170,12 @@ The pre-release 2026-07-30 audit recorded:
 - complete graph: 27 advisories (18 high, 8 moderate, 1 low, 0 critical).
 
 Review compatibility before upgrades and rerun the complete suite. Do not use
-`npm audit fix --force`. Current release-candidate audit results belong in
-[validation-report.md](validation-report.md).
+`npm audit fix --force`.
+
+The current 2026-08-25 snapshot is materially different: the Functions
+production graph reports 0 vulnerabilities, while the complete graph reports 8
+(4 high and 4 moderate). `flutter pub outdated` reports 25 locked packages that
+can be upgraded and 2 constraints behind otherwise resolvable versions. These
+counts are an audit inventory, not approval to change constraints or a claim
+that development-tool findings are harmless. Current release-candidate details
+are tracked in [testing.md](testing.md).

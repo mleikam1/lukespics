@@ -196,6 +196,63 @@ void main() {
   });
 
   test(
+    'CBS catalog request propagates the bounded weekly cache identity',
+    () async {
+      final catalogCallable = _MockHttpsCallable();
+      final response = _MockHttpsCallableResult();
+      Map<String, Object?>? payload;
+      when(
+        () => functions.httpsCallable('listSportsCatalog'),
+      ).thenReturn(catalogCallable);
+      when(() => response.data).thenReturn({
+        'ok': true,
+        'result': {
+          'provider': 'cbsSports',
+          'games': const <Object?>[],
+          'cache': const <String, Object?>{},
+        },
+      });
+      when(() => catalogCallable.call<Object?>(any())).thenAnswer((
+        invocation,
+      ) async {
+        payload = Map<String, Object?>.from(
+          invocation.positionalArguments.single as Map,
+        );
+        return response;
+      });
+
+      await repository.listSportsCatalog(
+        leagueId: 'league-1',
+        weekId: 'week-0001',
+        query: CatalogQuery(
+          sportCode: 'NCAAF',
+          leagueCode: 'ncaaf',
+          providerLeagueId: 'FBS',
+          season: '2026',
+          seasonType: 'postseason',
+          week: 3,
+          division: 'FBS',
+          from: DateTime.utc(2026, 12, 18),
+          to: DateTime.utc(2026, 12, 22),
+          timezone: 'America/Chicago',
+        ),
+      );
+
+      expect(payload?['sportCode'], 'NCAAF');
+      expect(payload?['leagueCode'], 'ncaaf');
+      expect(payload?['leagueIdForProvider'], 'FBS');
+      expect(payload?['season'], '2026');
+      expect(payload?['seasonType'], 'postseason');
+      expect(payload?['week'], 3);
+      expect(payload?['division'], 'FBS');
+      expect(payload?['from'], '2026-12-18');
+      expect(payload?['to'], '2026-12-22');
+      expect(payload?['timezone'], 'America/Chicago');
+      expect(payload?['requestId'], isA<String>());
+    },
+  );
+
+  test(
     'saves the exact result version carried by the chosen snapshot',
     () async {
       final catalogCallable = _MockHttpsCallable();
@@ -232,6 +289,9 @@ void main() {
         'publishedScheduledAtUtc': '2030-07-01T18:00:00.000Z',
         'effectiveLockAtUtc': '2030-07-01T18:00:00.000Z',
         'venueName': 'Version Park',
+        if (includeMetadata) 'venueCity': 'Chicago',
+        if (includeMetadata) 'venueState': 'IL',
+        if (includeMetadata) 'venueCountry': 'USA',
         'neutralSite': false,
         'homeTeam': {
           'id': 'home',
@@ -263,6 +323,9 @@ void main() {
         'winnerTeamId': null,
         if (includeMetadata) 'broadcast': 'National Stream',
         if (includeMetadata) 'eventDetail': 'Doubleheader · Game 2',
+        if (includeMetadata) 'sourceGameUrl': 'https://example.test/game/42',
+        if (includeMetadata) 'kickoffDisplayText': '1:00 PM',
+        if (includeMetadata) 'dateHeading': 'Monday, July 1',
         'providerLastUpdatedAt': observedAt,
         'lastSyncedAt': observedAt,
         'resultVersion': resultVersion,
@@ -360,6 +423,12 @@ void main() {
       expect(newer.games.single.statusDetail, 'First pitch delayed');
       expect(newer.games.single.broadcast, 'National Stream');
       expect(newer.games.single.eventDetail, 'Doubleheader · Game 2');
+      expect(newer.games.single.venueCity, 'Chicago');
+      expect(newer.games.single.venueState, 'IL');
+      expect(newer.games.single.venueCountry, 'USA');
+      expect(newer.games.single.sourceGameUrl?.host, 'example.test');
+      expect(newer.games.single.kickoffDisplayText, '1:00 PM');
+      expect(newer.games.single.dateHeading, 'Monday, July 1');
       expect(newer.games.single.rawResponseVersion, 2);
       expect(newer.games.single.homeTeam.color, '#112233');
       expect(newer.games.single.awayTeam.color, '#aabbcc');
@@ -391,6 +460,12 @@ void main() {
       expect(serialized['statusDetail'], 'First pitch delayed');
       expect(serialized['broadcast'], 'National Stream');
       expect(serialized['eventDetail'], 'Doubleheader · Game 2');
+      expect(serialized['venueCity'], 'Chicago');
+      expect(serialized['venueState'], 'IL');
+      expect(serialized['venueCountry'], 'USA');
+      expect(serialized['sourceGameUrl'], 'https://example.test/game/42');
+      expect(serialized['kickoffDisplayText'], '1:00 PM');
+      expect(serialized['dateHeading'], 'Monday, July 1');
       expect(serialized['rawResponseVersion'], 2);
       expect(serialized['isClosed'], isFalse);
       expect(serialized['rescheduledFromLeagueGameId'], 'league-game-41');

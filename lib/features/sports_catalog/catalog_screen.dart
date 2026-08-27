@@ -26,6 +26,9 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   final _searchController = TextEditingController();
   String? _selectedSportCode;
   String? _selectedLeagueCode;
+  String? _selectedCollegeFootballSeason;
+  String? _selectedCollegeFootballSeasonType;
+  int? _selectedCollegeFootballWeek;
   CatalogDateMode _dateMode = CatalogDateMode.allDates;
   DateTimeRange? _customDateRange;
   bool _hasLocalQuerySelection = false;
@@ -55,6 +58,20 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     final selectedLeague = _resolvedLeague(controller, leagues);
     final games = _search(controller.catalogGames);
     final activeQuery = controller.activeCatalogQuery;
+    final isCollegeFootball =
+        selectedLeague != null && _isCbsCollegeFootball(selectedLeague);
+    final selectedProvider = selectedLeague == null
+        ? controller.catalogProvider
+        : _providerForLeague(controller, selectedLeague);
+    final selectedCollegeFootballSeason = isCollegeFootball
+        ? _collegeFootballSeason(activeQuery, selectedLeague)
+        : null;
+    final selectedCollegeFootballSeasonType = isCollegeFootball
+        ? _collegeFootballSeasonType(activeQuery, selectedLeague)
+        : null;
+    final selectedCollegeFootballWeek = isCollegeFootball
+        ? _collegeFootballWeek(activeQuery, selectedLeague)
+        : null;
     final visibleDateMode = _hasLocalQuerySelection
         ? _dateMode
         : activeQuery?.dateMode ?? _dateMode;
@@ -67,6 +84,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
       controller,
       mode: visibleDateMode,
       customDateRange: visibleCustomRange,
+      provider: selectedProvider,
     );
     final hasDateWindow = visibleDateWindow != null;
 
@@ -155,7 +173,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
           if (controller.catalogCachedAt != null) ...[
             const SizedBox(height: 8),
             Text(
-              'Schedule cached '
+              'Last updated: '
               '${formatLeagueTime(controller.catalogCachedAt!, controller.leagueTimezone, 'MMM d, h:mm a')}',
               textAlign: TextAlign.right,
               style: Theme.of(context).textTheme.bodySmall,
@@ -252,6 +270,87 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
               },
             ),
           ],
+          if (isCollegeFootball) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Choose season',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 8),
+            _FilterRow(
+              keyPrefix: 'cbs-season-filter',
+              choices: [
+                for (final season in _collegeFootballSeasons(
+                  activeQuery,
+                  selectedLeague,
+                ))
+                  _FilterChoice(id: season, label: season),
+              ],
+              selectedId: selectedCollegeFootballSeason,
+              onSelected: (season) => unawaited(
+                _requestCatalog(
+                  controller,
+                  sportCode: selectedLeague.sportCode,
+                  league: selectedLeague,
+                  dateMode: visibleDateMode,
+                  season: season,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text('Season type', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 8),
+            _FilterRow(
+              keyPrefix: 'cbs-season-type-filter',
+              choices: [
+                for (final seasonType in _collegeFootballSeasonTypes(
+                  activeQuery,
+                  selectedLeague,
+                ))
+                  _FilterChoice(
+                    id: seasonType,
+                    label: seasonType == 'postseason'
+                        ? 'Postseason'
+                        : 'Regular season',
+                  ),
+              ],
+              selectedId: selectedCollegeFootballSeasonType,
+              onSelected: (seasonType) => unawaited(
+                _requestCatalog(
+                  controller,
+                  sportCode: selectedLeague.sportCode,
+                  league: selectedLeague,
+                  dateMode: visibleDateMode,
+                  seasonType: seasonType,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text('Choose week', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 8),
+            _FilterRow(
+              keyPrefix: 'cbs-week-filter',
+              choices: [
+                for (final week in _collegeFootballWeeks(
+                  activeQuery,
+                  selectedLeague,
+                ))
+                  _FilterChoice(id: '$week', label: 'Week $week'),
+              ],
+              selectedId: selectedCollegeFootballWeek == null
+                  ? null
+                  : '$selectedCollegeFootballWeek',
+              onSelected: (week) => unawaited(
+                _requestCatalog(
+                  controller,
+                  sportCode: selectedLeague.sportCode,
+                  league: selectedLeague,
+                  dateMode: visibleDateMode,
+                  week: int.parse(week),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           _FilterRow(
             keyPrefix: 'date-filter',
@@ -292,11 +391,13 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                       controller,
                       visibleDateWindow.from,
                       -1,
+                      provider: selectedProvider,
                     ),
                     nextDate: _steppedDate(
                       controller,
                       visibleDateWindow.from,
                       1,
+                      provider: selectedProvider,
                     ),
                     loading: controller.catalogLoading,
                     onSelectDate: (date) => unawaited(
@@ -338,6 +439,10 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
           ),
         ],
         const SizedBox(height: 14),
+        if (controller.catalogLoading && games.isNotEmpty) ...[
+          const _CatalogRefreshingIndicator(),
+          const SizedBox(height: 12),
+        ],
         if ((controller.catalogStale || controller.catalogDelayed) &&
             games.isNotEmpty) ...[
           _CatalogWarning(controller: controller),
@@ -350,6 +455,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
             games: games,
             hasDateWindow: hasDateWindow,
             compactLayout: true,
+            groupByDate: isCollegeFootball,
           )
         else
           Expanded(
@@ -359,6 +465,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
               games: games,
               hasDateWindow: hasDateWindow,
               compactLayout: false,
+              groupByDate: isCollegeFootball,
             ),
           ),
         if (controller.catalogPresentation.attributionText.isNotEmpty) ...[
@@ -385,8 +492,9 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     required List<Game> games,
     required bool hasDateWindow,
     required bool compactLayout,
+    required bool groupByDate,
   }) {
-    if (controller.catalogLoading) {
+    if (controller.catalogLoading && games.isEmpty) {
       return _CatalogLoading(
         leagueName:
             selectedLeague?.displayName ??
@@ -408,15 +516,10 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
         searchActive: _searchController.text.trim().isNotEmpty,
       );
     }
-    return ListView.separated(
-      key: const Key('catalog-game-list'),
-      shrinkWrap: compactLayout,
-      physics: compactLayout ? const NeverScrollableScrollPhysics() : null,
-      itemCount: games.length,
-      separatorBuilder: (context, index) => const SizedBox(height: 12),
-      itemBuilder: (context, index) {
-        final game = games[index];
-        return _CatalogGameCard(
+    final items = <Widget>[];
+    void addGame(Game game) {
+      items.add(
+        _CatalogGameCard(
           game: game,
           selected: controller.selectedGameIds.contains(game.id),
           enabled:
@@ -428,9 +531,44 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
             presentation: controller.catalogPresentation,
             game: game,
           ),
+          leagueTimezone: groupByDate ? controller.leagueTimezone : null,
           onChanged: () => controller.toggleSlateGame(game.id),
+        ),
+      );
+    }
+
+    if (groupByDate) {
+      final gamesByDate = <String, List<Game>>{};
+      final labelsByDate = <String, String>{};
+      for (final game in games) {
+        final heading = _catalogDateHeading(game, controller.leagueTimezone);
+        gamesByDate.putIfAbsent(heading.$1, () => <Game>[]).add(game);
+        labelsByDate[heading.$1] = heading.$2;
+      }
+      final dates = gamesByDate.keys.toList(growable: false)..sort();
+      for (final date in dates) {
+        items.add(
+          _CatalogDateHeader(
+            key: Key('catalog-date-header-$date'),
+            label: labelsByDate[date]!,
+          ),
         );
-      },
+        for (final game in gamesByDate[date]!) {
+          addGame(game);
+        }
+      }
+    } else {
+      for (final game in games) {
+        addGame(game);
+      }
+    }
+    return ListView.separated(
+      key: const Key('catalog-game-list'),
+      shrinkWrap: compactLayout,
+      physics: compactLayout ? const NeverScrollableScrollPhysics() : null,
+      itemCount: items.length,
+      separatorBuilder: (context, index) => const SizedBox(height: 12),
+      itemBuilder: (context, index) => items[index],
     );
   }
 
@@ -490,16 +628,102 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     return leagues.first;
   }
 
+  bool _isCbsCollegeFootball(CatalogLeague league) {
+    if (league.provider != null) return league.provider == 'cbsSports';
+    final sport = league.sportCode.toLowerCase();
+    return league.code.toLowerCase() == 'ncaaf' ||
+        sport == 'ncaaf' ||
+        sport == 'college-football' ||
+        sport == 'college_football';
+  }
+
+  String _providerForLeague(AppController controller, CatalogLeague league) =>
+      league.provider ??
+      (_isCbsCollegeFootball(league)
+          ? 'cbsSports'
+          : controller.catalogProvider);
+
+  String _collegeFootballSeason(
+    CatalogQuery? activeQuery,
+    CatalogLeague league,
+  ) =>
+      _selectedCollegeFootballSeason ??
+      (activeQuery?.leagueCode == league.code ? activeQuery?.season : null) ??
+      league.season;
+
+  String _collegeFootballSeasonType(
+    CatalogQuery? activeQuery,
+    CatalogLeague league,
+  ) =>
+      _selectedCollegeFootballSeasonType ??
+      (activeQuery?.leagueCode == league.code
+          ? activeQuery?.seasonType
+          : null) ??
+      league.seasonType ??
+      activeQuery?.collegeFootball?.activeSeasonType ??
+      'regular';
+
+  int _collegeFootballWeek(CatalogQuery? activeQuery, CatalogLeague league) =>
+      _selectedCollegeFootballWeek ??
+      (activeQuery?.leagueCode == league.code ? activeQuery?.week : null) ??
+      league.week ??
+      activeQuery?.collegeFootball?.activeWeek ??
+      1;
+
+  List<String> _collegeFootballSeasons(
+    CatalogQuery? activeQuery,
+    CatalogLeague league,
+  ) {
+    final seasons = <String>{
+      for (final season
+          in activeQuery?.collegeFootball?.seasons ?? const <int>[])
+        '$season',
+      _collegeFootballSeason(activeQuery, league),
+    }.toList(growable: false);
+    seasons.sort((left, right) => right.compareTo(left));
+    return seasons;
+  }
+
+  List<String> _collegeFootballSeasonTypes(
+    CatalogQuery? activeQuery,
+    CatalogLeague league,
+  ) {
+    final configuredTypes = activeQuery?.collegeFootball?.seasonTypes;
+    final types = <String>{
+      ...?configuredTypes,
+      _collegeFootballSeasonType(activeQuery, league),
+    };
+    final ordered = <String>[
+      for (final type in const ['regular', 'postseason'])
+        if (types.contains(type)) type,
+    ];
+    return ordered;
+  }
+
+  Iterable<int> _collegeFootballWeeks(
+    CatalogQuery? activeQuery,
+    CatalogLeague league,
+  ) sync* {
+    final metadata = activeQuery?.collegeFootball;
+    final configuredWeek = _collegeFootballWeek(activeQuery, league);
+    final minimum = metadata?.minimumWeek ?? configuredWeek;
+    final maximum = metadata?.maximumWeek ?? configuredWeek;
+    for (var week = minimum; week <= maximum; week += 1) {
+      yield week;
+    }
+  }
+
   CatalogDateWindow? _dateWindow(
     AppController controller, {
     CatalogDateMode? mode,
     DateTimeRange? customDateRange,
+    String? provider,
   }) {
     final weekStartAt = controller.weekStartAt;
     final weekEndAt = controller.weekEndAt;
     if (weekStartAt == null || weekEndAt == null) return null;
     final queryTimezone = catalogQueryTimezone(
-      provider: controller.catalogProvider,
+      provider: provider ?? controller.catalogProvider,
       arenaTimezone: controller.leagueTimezone,
     );
     return catalogDateWindow(
@@ -516,13 +740,14 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   DateTime? _steppedDate(
     AppController controller,
     DateTime currentDate,
-    int dayDelta,
-  ) {
+    int dayDelta, {
+    required String provider,
+  }) {
     final weekStartAt = controller.weekStartAt;
     final weekEndAt = controller.weekEndAt;
     if (weekStartAt == null || weekEndAt == null) return null;
     final queryTimezone = catalogQueryTimezone(
-      provider: controller.catalogProvider,
+      provider: provider,
       arenaTimezone: controller.leagueTimezone,
     );
     return catalogSteppedDate(
@@ -555,15 +780,55 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     required String sportCode,
     required CatalogLeague league,
     required CatalogDateMode dateMode,
+    String? season,
+    String? seasonType,
+    int? week,
   }) async {
+    final isCollegeFootball = _isCbsCollegeFootball(league);
+    final targetProvider = _providerForLeague(controller, league);
+    final activeQuery = controller.activeCatalogQuery;
+    final requestedCustomRange = dateMode == CatalogDateMode.custom
+        ? _customDateRange ??
+              (activeQuery?.dateMode == CatalogDateMode.custom
+                  ? DateTimeRange(start: activeQuery!.from, end: activeQuery.to)
+                  : null)
+        : null;
+    final selectedSeason = isCollegeFootball
+        ? season ?? _collegeFootballSeason(activeQuery, league)
+        : league.season;
+    final selectedSeasonType = isCollegeFootball
+        ? seasonType ?? _collegeFootballSeasonType(activeQuery, league)
+        : null;
+    final selectedWeek = isCollegeFootball
+        ? week ?? _collegeFootballWeek(activeQuery, league)
+        : null;
+    final selectedDivision = isCollegeFootball
+        ? (activeQuery?.leagueCode == league.code
+                  ? activeQuery?.division
+                  : null) ??
+              league.division ??
+              activeQuery?.collegeFootball?.division ??
+              'FBS'
+        : null;
     setState(() {
       _selectedSportCode = sportCode;
       _selectedLeagueCode = league.code;
+      _selectedCollegeFootballSeason = isCollegeFootball
+          ? selectedSeason
+          : null;
+      _selectedCollegeFootballSeasonType = isCollegeFootball
+          ? selectedSeasonType
+          : null;
+      _selectedCollegeFootballWeek = isCollegeFootball ? selectedWeek : null;
       _dateMode = dateMode;
       _hasLocalQuerySelection = true;
-      if (dateMode != CatalogDateMode.custom) _customDateRange = null;
+      _customDateRange = requestedCustomRange;
     });
-    final window = _dateWindow(controller);
+    final window = _dateWindow(
+      controller,
+      provider: targetProvider,
+      customDateRange: requestedCustomRange,
+    );
     final weekStartAt = controller.weekStartAt;
     final weekEndAt = controller.weekEndAt;
     if (window == null || weekStartAt == null || weekEndAt == null) return;
@@ -577,11 +842,17 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
         sportCode: sportCode,
         leagueCode: league.code,
         providerLeagueId: league.providerLeagueId,
-        season: league.season,
+        season: selectedSeason,
+        seasonType: selectedSeasonType,
+        week: selectedWeek,
+        division: selectedDivision,
+        collegeFootball: isCollegeFootball
+            ? activeQuery?.collegeFootball
+            : null,
         from: window.from,
         to: window.to,
         timezone: catalogQueryTimezone(
-          provider: controller.catalogProvider,
+          provider: targetProvider,
           arenaTimezone: controller.leagueTimezone,
         ),
         dateMode: dateMode,
@@ -600,7 +871,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     final weekEndAt = controller.weekEndAt;
     if (weekStartAt == null || weekEndAt == null) return;
     final queryTimezone = catalogQueryTimezone(
-      provider: controller.catalogProvider,
+      provider: _providerForLeague(controller, league),
       arenaTimezone: controller.leagueTimezone,
     );
     final first = catalogCalendarDate(weekStartAt, queryTimezone);
@@ -640,7 +911,11 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   }
 
   String _providerStatus(AppController controller) {
-    if (controller.catalogLoading) return 'Loading schedule';
+    if (controller.catalogLoading) {
+      return controller.catalogGames.isEmpty
+          ? 'Loading cached schedule'
+          : 'Refreshing schedule';
+    }
     if (controller.isDemo) return 'Explicit demo schedule';
     if (controller.catalogProvider == 'theSportsDbTest') {
       return 'Internal test · TheSportsDB';
@@ -648,12 +923,12 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     if (controller.catalogProvider == 'mock') {
       return 'Emulator fixture schedule';
     }
-    if (controller.catalogStale) return 'Stale schedule';
+    if (controller.catalogStale) return 'Using cached schedule';
     if (controller.catalogDelayed) return 'Refresh delayed';
     if (controller.catalogProvider == 'manual') return 'Manual games';
-    if (controller.catalogCacheHit) return 'Cached schedule';
+    if (controller.catalogCacheHit) return 'Using cached schedule';
     if (controller.catalogProvider == 'unknown') return 'Schedule unavailable';
-    return 'Provider schedule';
+    return 'Schedule updated';
   }
 
   String? _disabledReason(AppController controller, Game game) {
@@ -931,6 +1206,51 @@ final class _FilterChoice {
   final String label;
 }
 
+class _CatalogRefreshingIndicator extends StatelessWidget {
+  const _CatalogRefreshingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      label: 'Refreshing schedule while cached games remain visible',
+      child: Row(
+        key: const Key('catalog-refreshing-indicator'),
+        children: [
+          const SizedBox.square(
+            dimension: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            'Refreshing schedule…',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CatalogDateHeader extends StatelessWidget {
+  const _CatalogDateHeader({super.key, required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      header: true,
+      child: Text(
+        label,
+        style: Theme.of(
+          context,
+        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
+      ),
+    );
+  }
+}
+
 class _CatalogLoading extends StatelessWidget {
   const _CatalogLoading({required this.leagueName});
 
@@ -977,8 +1297,9 @@ class _CatalogWarning extends StatelessWidget {
           Expanded(
             child: Text(
               stale
-                  ? 'This cached schedule is stale. Games remain visible, '
-                        'but cannot be added until a trusted refresh succeeds.'
+                  ? 'Showing the most recently saved schedule. Games remain '
+                        'visible, but cannot be added until a trusted refresh '
+                        'succeeds.'
                   : 'Refresh is delayed by provider quota protection. The '
                         'existing cached schedule remains visible.',
             ),
@@ -1093,6 +1414,21 @@ class _CatalogEmptyState extends StatelessWidget {
   }
 }
 
+(String, String) _catalogDateHeading(Game game, String timezone) {
+  DateTime? date;
+  final scheduledAt = game.scheduledAtUtc;
+  if (scheduledAt != null) {
+    date = catalogCalendarDate(scheduledAt, timezone);
+  } else if (game.scheduledDayEastern case final scheduledDay?) {
+    date = DateTime.tryParse('${scheduledDay}T00:00:00.000Z');
+  }
+  if (date == null) {
+    return ('z-date-tbd', game.dateHeading ?? 'Date to be announced');
+  }
+  final key = DateFormat('yyyy-MM-dd').format(date);
+  return (key, DateFormat('EEEE, MMMM d').format(date));
+}
+
 class _CatalogGameCard extends StatelessWidget {
   const _CatalogGameCard({
     required this.game,
@@ -1100,6 +1436,7 @@ class _CatalogGameCard extends StatelessWidget {
     required this.enabled,
     required this.disabledReason,
     required this.logoPolicy,
+    this.leagueTimezone,
     required this.onChanged,
   });
 
@@ -1108,11 +1445,12 @@ class _CatalogGameCard extends StatelessWidget {
   final bool enabled;
   final String? disabledReason;
   final TeamLogoPolicy logoPolicy;
+  final String? leagueTimezone;
   final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context) {
-    final time = _catalogGameTimeLabel(game);
+    final time = _catalogGameTimeLabel(game, timezone: leagueTimezone);
     final detail = gameDetailSummary(game);
     final broadcast = gameBroadcastSummary(game);
     final broadcastSummary = broadcast == null ? null : 'Broadcast: $broadcast';
@@ -1326,14 +1664,35 @@ class _CatalogTeamLine extends StatelessWidget {
   }
 }
 
-String _catalogGameTimeLabel(Game game) {
+String _catalogGameTimeLabel(Game game, {String? timezone}) {
   final scheduledAt = game.scheduledAtUtc;
   if (game.timeTbd || scheduledAt == null) {
     final day = game.scheduledDayEastern;
-    if (day == null) return 'Time TBD (Eastern)';
+    final kickoff = game.kickoffDisplayText?.trim();
+    final hasDiagnosticKickoff =
+        kickoff != null &&
+        kickoff.isNotEmpty &&
+        !const {'tbd', 'tba'}.contains(kickoff.toLowerCase());
+    final tbdLabel = timezone == null
+        ? (hasDiagnosticKickoff ? kickoff : 'Time TBD')
+        : hasDiagnosticKickoff
+        ? 'Time TBD (source shows $kickoff; timezone unconfirmed)'
+        : 'Time TBD';
+    if (day == null) {
+      return timezone == null ? '$tbdLabel (Eastern)' : tbdLabel;
+    }
     final parsed = DateTime.tryParse('${day}T00:00:00.000Z');
-    if (parsed == null) return 'Time TBD (Eastern)';
-    return '${DateFormat('EEE, MMM d').format(parsed)} · Time TBD (Eastern)';
+    if (parsed == null) {
+      return timezone == null ? '$tbdLabel (Eastern)' : tbdLabel;
+    }
+    return '${DateFormat('EEE, MMM d').format(parsed)} · $tbdLabel'
+        '${timezone == null ? ' (Eastern)' : ''}';
+  }
+  if (timezone != null) {
+    final zone = inLeagueTimezone(scheduledAt, timezone).timeZoneName.trim();
+    final suffix = zone.isEmpty ? timezone : zone;
+    return '${formatLeagueTime(scheduledAt, timezone, 'EEE, MMM d · h:mm a')} '
+        '$suffix';
   }
   final local = scheduledAt.toLocal();
   final zone = local.timeZoneName.trim();

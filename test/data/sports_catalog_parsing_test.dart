@@ -149,6 +149,89 @@ void main() {
     expect(result.effectiveQuery?.leagueCode, 'mlb');
   });
 
+  test(
+    'CBS catalog parser retains bounded college-football discovery data',
+    () {
+      final result = parseSportsCatalogResult({
+        'provider': 'cbsSports',
+        'sports': [
+          {'code': 'NCAAF', 'displayName': 'College Football'},
+        ],
+        'leagues': [
+          {
+            'code': 'ncaaf',
+            'displayName': 'NCAA Football',
+            'sportCode': 'NCAAF',
+            'providerLeagueId': 'FBS',
+            'provider': 'cbsSports',
+            'season': '2026',
+            'seasonType': 'regular',
+            'week': 1,
+            'division': 'FBS',
+          },
+        ],
+        'presentation': {
+          'provider': 'cbsSports',
+          'attributionText': 'Schedule source: CBS Sports',
+          'allowRemoteLogos': true,
+          'allowedLogoHosts': ['sports.cbsimg.net'],
+          'allowedLogoQueryParameters': <String>[],
+          'logoRightsReviewDate': '2026-08-25T00:00:00.000Z',
+        },
+        'effectiveQuery': {
+          'sportCode': 'NCAAF',
+          'leagueCode': 'ncaaf',
+          'providerLeagueId': 'FBS',
+          'season': '2026',
+          'seasonType': 'regular',
+          'week': 1,
+          'division': 'FBS',
+          'from': '2026-08-27',
+          'to': '2026-08-31',
+          'timezone': 'America/Chicago',
+        },
+        'collegeFootball': {
+          'activeSeason': 2026,
+          'activeSeasonType': 'regular',
+          'activeWeek': 1,
+          'division': 'FBS',
+          'seasons': [2025, 2026, 'invalid'],
+          'seasonTypes': ['regular', 'postseason', 'invalid'],
+          'minimumWeek': 0,
+          'maximumWeek': 25,
+        },
+        'cache': const <String, Object?>{},
+      }, games: const []);
+
+      final league = result.supportedLeagues.single;
+      expect(league.provider, 'cbsSports');
+      expect(league.seasonType, 'regular');
+      expect(league.week, 1);
+      expect(league.division, 'FBS');
+      expect(result.effectiveQuery?.seasonType, 'regular');
+      expect(result.effectiveQuery?.week, 1);
+      expect(result.effectiveQuery?.division, 'FBS');
+      expect(result.effectiveQuery?.from, DateTime.utc(2026, 8, 27));
+      expect(result.effectiveQuery?.to, DateTime.utc(2026, 8, 31));
+      expect(result.collegeFootball?.activeSeason, 2026);
+      expect(result.collegeFootball?.activeSeasonType, 'regular');
+      expect(result.collegeFootball?.activeWeek, 1);
+      expect(result.collegeFootball?.seasons, [2025, 2026]);
+      expect(result.collegeFootball?.seasonTypes, ['regular', 'postseason']);
+      expect(result.collegeFootball?.minimumWeek, 0);
+      expect(result.collegeFootball?.maximumWeek, 25);
+      expect(
+        result.effectiveQuery?.collegeFootball,
+        same(result.collegeFootball),
+      );
+      expect(result.presentation.allowRemoteLogos, isTrue);
+      expect(
+        result.presentation.permitsRemoteLogosForProvider('cbsSports'),
+        isTrue,
+      );
+    },
+  );
+
   test('logo rights require an explicit matching presentation provider', () {
     for (final presentation in <Map<String, Object?>>[
       {
@@ -280,6 +363,49 @@ void main() {
       expect(game.selectionReason, 'A confirmed start time is required.');
     },
   );
+
+  test('CBS game parsing retains normalized venue and display metadata', () {
+    final game = parseGameSnapshot('cbsSports:football:42', {
+      'provider': 'cbsSports',
+      'providerGameId': '42',
+      'sportCode': 'NCAAF',
+      'leagueCode': 'ncaaf',
+      'leagueName': 'NCAA Football',
+      'season': '2026',
+      'seasonType': 'regular',
+      'weekOrRound': '1',
+      'scheduledAtUtc': '2026-08-29T16:00:00.000Z',
+      'venueName': 'Memorial Stadium',
+      'venueCity': 'Lincoln',
+      'venueState': 'NE',
+      'venueCountry': 'USA',
+      'homeTeam': {
+        'id': 'home',
+        'name': 'Home Team',
+        'shortName': 'Home',
+        'abbreviation': 'HOM',
+      },
+      'awayTeam': {
+        'id': 'away',
+        'name': 'Away Team',
+        'shortName': 'Away',
+        'abbreviation': 'AWY',
+      },
+      'status': 'scheduled',
+      'sourceGameUrl':
+          'https://www.cbssports.com/college-football/gametracker/live/NCAAF_20260829_AWY@HOM/',
+      'kickoffDisplayText': '11:00 AM',
+      'dateHeading': 'Saturday, August 29',
+    });
+
+    expect(game.venueName, 'Memorial Stadium');
+    expect(game.venueCity, 'Lincoln');
+    expect(game.venueState, 'NE');
+    expect(game.venueCountry, 'USA');
+    expect(game.sourceGameUrl?.host, 'www.cbssports.com');
+    expect(game.kickoffDisplayText, '11:00 AM');
+    expect(game.dateHeading, 'Saturday, August 29');
+  });
 
   test('historic confirmed snapshots reuse their real scheduled instant', () {
     final game = parseGameSnapshot('historic-game', {

@@ -9,6 +9,7 @@ import type {ProviderName} from "../types.js";
 
 const AUTHORIZED_API_SPORTS_PROJECT_ID = "lukes-picks";
 const AUTHORIZED_SPORTSDATAIO_PROJECT_ID = "lukes-picks";
+const AUTHORIZED_CBS_SPORTS_PROJECT_ID = "lukes-picks";
 
 export type ProviderRuntime = {
   projectId: string | null;
@@ -80,6 +81,15 @@ export function isProviderAllowed(
   runtime: ProviderRuntime,
 ): boolean {
   if (name === "manual") return true;
+  const internalEmulator =
+    runtime.emulator && runtime.projectId === "demo-lukes-picks-local";
+  if (name === "cbsSports") {
+    return (
+      internalEmulator ||
+      (!runtime.emulator &&
+        runtime.projectId === AUTHORIZED_CBS_SPORTS_PROJECT_ID)
+    );
+  }
   if (name === "apiSports") {
     return (
       !runtime.emulator &&
@@ -97,8 +107,6 @@ export function isProviderAllowed(
     );
   }
 
-  const internalEmulator =
-    runtime.emulator && runtime.projectId === "demo-lukes-picks-local";
   if (name === "mock") return internalEmulator;
   return internalEmulator && runtime.allowTheSportsDbTest;
 }
@@ -125,6 +133,12 @@ export function assertProviderAllowedForRuntime(
     throw new HttpsError(
       "failed-precondition",
       "TheSportsDB test provider is restricted to the approved local emulator with its explicit test flag.",
+    );
+  }
+  if (name === "cbsSports") {
+    throw new HttpsError(
+      "failed-precondition",
+      "CBS Sports college-football access is restricted to Luke's Picks and its approved local emulator.",
     );
   }
   throw new HttpsError(

@@ -210,6 +210,9 @@ service cloud.firestore {
     match /sportsCache/{document=**} {
       allow read, write: if false;
     }
+    match /sportsProviderCache/{document=**} {
+      allow read, write: if false;
+    }
     match /sportsCatalogGames/{document=**} {
       allow read, write: if false;
     }

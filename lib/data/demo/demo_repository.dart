@@ -922,8 +922,29 @@ final class AppController extends ChangeNotifier {
     _currentCatalogResultsById
       ..clear()
       ..addAll(current);
-    _catalogSports = List<CatalogSport>.unmodifiable(result.supportedSports);
-    _catalogLeagues = List<CatalogLeague>.unmodifiable(result.supportedLeagues);
+    if (requestedQuery == null) {
+      _catalogSports = List<CatalogSport>.unmodifiable(result.supportedSports);
+      _catalogLeagues = List<CatalogLeague>.unmodifiable(
+        result.supportedLeagues,
+      );
+    } else {
+      final sportsByCode = <String, CatalogSport>{
+        for (final sport in _catalogSports) sport.code: sport,
+        for (final sport in result.supportedSports) sport.code: sport,
+      };
+      final leaguesByIdentity = <String, CatalogLeague>{
+        for (final league in _catalogLeagues)
+          '${league.sportCode}:${league.code}:${league.providerLeagueId}':
+              league,
+        for (final league in result.supportedLeagues)
+          '${league.sportCode}:${league.code}:${league.providerLeagueId}':
+              league,
+      };
+      _catalogSports = List<CatalogSport>.unmodifiable(sportsByCode.values);
+      _catalogLeagues = List<CatalogLeague>.unmodifiable(
+        leaguesByIdentity.values,
+      );
+    }
     _catalogPresentation = result.presentation;
     _catalogAvailability = result.availability;
     _catalogProvider = result.provider;

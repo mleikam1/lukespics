@@ -20,6 +20,13 @@ overall standings.
 > off, no key is present in this checkout, and no authenticated SportsDataIO
 > smoke test or deployment was performed. The new integration is deterministic-
 > fixture complete, not production-activated. Remote provider marks remain off.
+>
+> The additive `cbsSports` college-football work on the current branch is also
+> not deployed or production-activated. A bounded public-page check on
+> 2026-08-25 confirmed the allowlisted FBS scoreboard route and matchup markup,
+> but the observed page did not expose a trustworthy kickoff date/time. The
+> implementation therefore keeps those live observations TBD and unselectable;
+> it is not live end-to-end acceptance evidence.
 
 ## Product contract
 
@@ -58,9 +65,12 @@ connected Flutter/backend browser-to-emulator lifecycle with three isolated
 users and sanitized data; that evidence is not a live-provider test.
 
 The catalog callable now discovers its supported sports and leagues from the
-configured server provider. Its typed response includes sports, leagues,
-canonical provider league/season metadata, games, cache and availability
-state, presentation policy, the server-effective query, and active-week bounds.
+configured server providers. `settings.providerName` remains the arena default,
+while `settings.providerBySport` can route one sport independently—for example,
+`NCAAF` to `cbsSports` without changing NFL or MLB. Its typed response includes
+sports, leagues, canonical provider league/season metadata, games, cache and
+availability state, presentation policy, the server-effective query, and
+active-week bounds.
 Flutter keeps the current query result, its cross-query game cache, the desired
 draft selection, and the authoritative week-game stream as separate state, so
 changing sport, league, or date does not discard already selected games.
@@ -71,6 +81,7 @@ See:
 - [Firestore schema](docs/firestore-schema.md)
 - [Security model](docs/security-model.md)
 - [Commissioner runbook](docs/admin-runbook.md)
+- [CBS college-football provider](docs/cbs-college-football.md)
 
 ## Firebase isolation
 
@@ -116,6 +127,18 @@ The provider is fail-closed unless the runtime is the exact authorized project,
 `systemConfig/sportsDataIoCatalog` document is enabled and valid. No secret or
 contract contents belong in Firestore. Only reviewed NFL/MLB season definitions
 live there; Flutter never receives vendor configuration or credentials.
+
+CBS college football uses no credential or browser-side request. Trusted
+Functions read the fail-closed `systemConfig/cbsCollegeFootball` document and
+may request only the exact server-constructed HTTPS FBS scoreboard URL for the
+configured active season/type/week. Redirect and page identity must remain exact;
+inactive identities are cache-only and are not exposed as alternate Flutter
+choices. CBS normalized week caches and provider-global rolling attempt/circuit
+accounting remain private at
+`sportsProviderCache/cbs_ncaaf_FBS_{season}_{seasonType}_{week}` and
+`providerUsage/cbsSports_rolling24h`. Keep `enabled` and
+`autoRefreshEnabled` false until the guarded deployment, emulator checks, and
+one-arena validation are separately authorized and completed.
 
 ## Toolchain
 
@@ -202,6 +225,7 @@ Firebase JavaScript initialization.
 | `manual` | Valid production fallback and required production mode today |
 | `theSportsDbTest` | Internal/emulator only; requires an explicit flag and hard production rejection |
 | `sportsDataIo` | Server-only NFL/MLB League API adapter; default-off pending key, feed/use entitlement verification, smoke test, and authorized deployment |
+| `cbsSports` | Server-only public CBS NCAAF/FBS scoreboard adapter; default-off, cache-first, and configurable only as the `NCAAF` per-sport override |
 | `apiSports` | Dormant alternative adapter retained for replaceability; not the active production provider |
 
 The SportsDataIO catalog supports NFL and MLB only. NFL uses server-side Teams,
@@ -211,6 +235,18 @@ stored in UTC. A true time-TBD game can appear in the commissioner catalog but
 cannot be selected or published until it has a real UTC instant. Selected
 results reconcile through the existing centralized 30-minute job. Stale or
 partial refreshes never create a graded final.
+
+The CBS catalog is a separate conservative weekly-scoreboard path. It constructs
+one exact public FBS scoreboard page from validated season, season type, and
+week fields; it never accepts a URL from Flutter. The UI exposes only that exact
+active season/type/week. Every outbound request, retry, or redirect hop counts
+against the provider-global 12-attempt rolling cap, and the circuit breaker is
+provider-global. Parser-version changes force an unconditional reparse, while
+zero-game or unexplained smaller parses retain the last good schedule. Missing
+or timezone-ambiguous kickoffs remain TBD with no schedule or lock instant, so
+they cannot enter a published slate. The parser may retain an in-card logo URL
+from the two exact CBS image hosts. Flutter still requires reviewed presentation
+metadata before displaying a remote mark and otherwise fails closed to initials.
 
 No provider credential or URL is exposed to Flutter or Hosting. The server
 constructs only exact allowlisted League API paths and sends the key in the
@@ -272,19 +308,30 @@ host/header/secret material, blocked third-party logo hosts, source maps,
 symbolic links, control-character paths, or likely secrets. The source scan
 allows the SportsDataIO API host and authentication-header name only inside the
 dedicated server client. Flutter and web source remain provider-host-free. Both
-scans inspect regular files rather than trusting names.
+scans inspect regular files rather than trusting names. The exact CBS
+scoreboard/logo hosts are likewise allowed only in the reviewed server parser,
+provider, and schedule service and are rejected from Flutter and the public
+build.
 
 CI runs the static suites and these scans without deployment credentials. It
 does not deploy.
 
 ## Deployment
 
-The SportsDataIO branch has not been deployed. Before any provider-backed
+The SportsDataIO and CBS additions on this branch have not been deployed.
+Before any provider-backed
 preview or live release, confirm the key/contract covers the exact NFL and MLB
 schedule, team, and score feeds plus the intended display and result-grading
 use. Keep `ALLOW_SPORTSDATAIO_PROVIDER=false`, access mode `fixture`, entitlement
 verification false, and the provider catalog absent/disabled until then. Logo
 rights are a separate gate; neutral initials remain production-safe.
+
+For CBS, first deploy with `systemConfig/cbsCollegeFootball.enabled=false` and
+`autoRefreshEnabled=false`, leave `settings.providerBySport.NCAAF` unset (or
+`manual`), and review the additive callable/scheduler manifest. Activation also
+requires Blaze billing, Cloud Scheduler readiness, deterministic and emulator
+validation, a bounded public-route recheck, and an authorized single-arena
+preview. The implementation requires no new composite Firestore index.
 
 The current deployed release record below is historical evidence for the prior
 manual-provider build, not evidence for this SportsDataIO branch:
@@ -324,6 +371,18 @@ the project guard.
 
 ## Known limitations
 
+- The 2026-08-25 CBS Week 1 page observation contained matchups, network, and
+  venue data, but no trustworthy kickoff date/time. Those observations remain
+  visible as TBD and unselectable. An authenticated local emulator test passed
+  for a fresh preseeded CBS cache through authorization, catalog load,
+  save/publish, ordinary-member visibility, and pick submission without any CBS
+  request. No live-source result/scoring/standings flow, production authenticated
+  CBS acceptance, or deployment has been completed.
+- The 2026-08-25 dependency audit found 0 vulnerabilities in the Functions
+  production graph, but 8 in the complete graph (4 high, 4 moderate).
+  `flutter pub outdated` also reported 25 locked packages that can be upgraded
+  and 2 constraints behind otherwise resolvable versions. These findings need
+  review before upgrades; they are not production-acceptance evidence.
 - No SportsDataIO key is available in this checkout, so no authenticated smoke
   test established live schema compatibility or feed access.
 - The key's NFL/MLB feed entitlement and intended display/grading rights have

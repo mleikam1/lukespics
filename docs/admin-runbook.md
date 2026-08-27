@@ -12,7 +12,9 @@ is currently surfaced or browser-validated. Track observed readiness in
 2. Confirm production provider mode is `manual` until SportsDataIO's exact NFL
    and MLB feeds, intended display/grading use, API key, access mode, entitlement
    verification, configuration, and authorized deployment have all passed.
-   Remote team-mark rights are an independent review.
+   Remote team-mark rights are an independent review. Keep the separate
+   `providerBySport.NCAAF` route unset/manual until the CBS config, scheduler,
+   public-route policy, emulator checks, and single-arena activation have passed.
 3. Picker queries the catalog or enters a trustworthy manual game, selects at
    least one game, removes unwanted games, and reviews the exact saved set.
 4. Publish once; participant and picker-participation settings are snapshotted.
@@ -39,6 +41,14 @@ Do not repeatedly force refresh. Inspect cache age, last success/failure, quota
 remaining, and breaker state. Continue with cached schedules. Create/grade a
 manual game only from a trustworthy result source and record the source/reason
 in the audit event.
+
+For CBS, never bypass the two-hour production cooldown or provider-global
+rolling request cap/circuit. Every outbound fetch—including a retry or redirect
+hop—consumes an attempt. If kickoff remains TBD, the game has no lock instant
+and must stay unselected; use the reviewed manual-game path rather than inventing
+a date or timezone. To stop CBS traffic, disable both CBS config switches and
+remove/restore only the arena's `providerBySport.NCAAF` override. Preserve cache
+and history.
 
 ## Corrections
 

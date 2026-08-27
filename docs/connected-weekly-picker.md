@@ -69,6 +69,11 @@ sport, league, season, or provider league ID supplied on a later query must
 resolve to the server's enabled catalog; the client cannot invent support by
 sending arbitrary metadata.
 
+For `cbsSports`, discovery and Flutter expose exactly the Admin-configured active
+season, regular/postseason type, and week. An ordinary picker cannot request a
+different or historical CBS identity, and such an identity is never eligible
+for a provider network fetch.
+
 When publication succeeds, the backend atomically stores the provider name and
 reviewed presentation policy on the week. The week contract is already
 readable by active members, so Picks and Results can enforce approved logo

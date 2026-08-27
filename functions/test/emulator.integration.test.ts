@@ -31,9 +31,19 @@ import {
   getFirestore as getAdminFirestore,
 } from "firebase-admin/firestore";
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from "vitest";
+import {
+  buildCbsCollegeFootballScoreboardUrl,
+  CBS_COLLEGE_FOOTBALL_PARSER_VERSION,
+} from "../src/providers/cbsCollegeFootball.js";
+import {normalizedGameSchema} from "../src/schemas.js";
+import {
+  cbsCollegeFootballCacheDocumentId,
+  cbsCollegeFootballGamesContentHash,
+} from "../src/services/cbsCollegeFootballSchedule.js";
 import {repairFinalizedWeekFollowUps} from "../src/services/scoring.js";
 import {
   MAX_GAME_RESCHEDULE_OFFSET_MS,
+  calendarDateInTimezone,
   publishSlate,
   reopenWeekRecord,
   revealLockedPicks,
@@ -264,6 +274,7 @@ describe("emulator pick'em lifecycle", () => {
         displayName: "Demo Football",
         sportCode: "football",
         providerLeagueId: "demo-football",
+        provider: "mock",
         season: "demo",
       });
       expect(catalog.presentation).toEqual(
@@ -2288,6 +2299,374 @@ describe("emulator pick'em lifecycle", () => {
         completionState: "complete",
       });
       await deleteAdminApp(adminApp);
+    },
+    120_000,
+  );
+
+  it(
+    "publishes a fresh cached CBS game and exposes it to an ordinary member",
+    async () => {
+      const owner = await createSignedInApp("cbs-cache-lifecycle-owner");
+      const member = await createSignedInApp("cbs-cache-lifecycle-member");
+      const memberUid = String(getAuth(member).currentUser?.uid);
+      const adminApp = initializeAdminApp(
+        {projectId},
+        "cbs-cache-lifecycle-admin",
+      );
+      const adminDb = getAdminFirestore(adminApp);
+      const configurationReference = adminDb.doc(
+        "systemConfig/cbsCollegeFootball",
+      );
+      const usageReference = adminDb.doc(
+        "providerUsage/cbsSports_rolling24h",
+      );
+      const start = new Date();
+      start.setUTCHours(0, 0, 0, 0);
+      start.setUTCDate(start.getUTCDate() + 1);
+      const end = new Date(start.valueOf() + 7 * 24 * 60 * 60_000);
+      const scheduledAt = new Date(start.valueOf() + 36 * 60 * 60_000);
+      const season = start.getUTCFullYear();
+      const identity = {
+        season,
+        seasonType: "regular" as const,
+        week: 1,
+        division: "FBS" as const,
+      };
+      const cacheReference = adminDb.doc(
+        `sportsProviderCache/${cbsCollegeFootballCacheDocumentId(identity)}`,
+      );
+      const [previousConfiguration, previousCache, usageBefore] =
+        await Promise.all([
+          configurationReference.get(),
+          cacheReference.get(),
+          usageReference.get(),
+        ]);
+
+      try {
+        await configurationReference.set({
+          enabled: true,
+          autoRefreshEnabled: false,
+          activeSeason: season,
+          activeSeasonType: identity.seasonType,
+          activeWeek: identity.week,
+          division: identity.division,
+          minimumRefreshMinutes: 120,
+          defaultRefreshMinutes: 180,
+          maximumRefreshMinutes: 240,
+          parserVersion: CBS_COLLEGE_FOOTBALL_PARSER_VERSION,
+          globalDailyRequestLimit: 12,
+        });
+        const created = await call<{leagueId: string; inviteCode: string}>(
+          owner,
+          "createLeague",
+          {
+            requestId: requestId("cbs-cache-create"),
+            name: "CBS Cached Schedule Arena",
+            timezone: "America/Chicago",
+            settings: {
+              providerName: "manual",
+              providerBySport: {NCAAF: "cbsSports"},
+              enabledSports: ["NCAAF"],
+              enabledLeagues: ["ncaaf"],
+            },
+          },
+        );
+        await call(member, "joinLeagueByCode", {
+          requestId: requestId("cbs-cache-join"),
+          inviteCode: created.inviteCode,
+          nickname: "CBS Member",
+        });
+        const week = await call<{weekId: string}>(owner, "createDraftWeek", {
+          requestId: requestId("cbs-cache-week"),
+          leagueId: created.leagueId,
+          sequentialNumber: 1,
+          label: "CBS Cache Week",
+          startAt: start.toISOString(),
+          endAt: end.toISOString(),
+        });
+
+        const providerGameId =
+          `emulator-${created.leagueId.slice(-24)}`;
+        const game = normalizedGameSchema.parse({
+          id: `cbsSports:NCAAF:${providerGameId}`,
+          provider: "cbsSports",
+          providerGameId,
+          providerScoreId: null,
+          providerLeagueGameId: providerGameId,
+          providerGlobalGameId: null,
+          providerGameKey: providerGameId,
+          providerLeagueId: "FBS",
+          sportCode: "NCAAF",
+          leagueCode: "ncaaf",
+          leagueName: "NCAA Football",
+          season: String(season),
+          seasonType: identity.seasonType,
+          weekOrRound: String(identity.week),
+          scheduledAtUtc: scheduledAt,
+          publishedScheduledAtUtc: scheduledAt,
+          effectiveLockAtUtc: scheduledAt,
+          scheduledDayEastern: calendarDateInTimezone(
+            scheduledAt,
+            "America/New_York",
+          ),
+          timeTbd: false,
+          venueName: "Cached Test Stadium",
+          venueCity: "Chicago",
+          venueState: "IL",
+          venueCountry: "US",
+          neutralSite: false,
+          homeTeam: {
+            id: "cbsSports:ncaaf:cached-home",
+            name: "Cached Home",
+            shortName: "Home",
+            abbreviation: "HME",
+            logoUrl: null,
+            color: null,
+            providerTeamId: "cached-home",
+            providerGlobalTeamId: null,
+          },
+          awayTeam: {
+            id: "cbsSports:ncaaf:cached-away",
+            name: "Cached Away",
+            shortName: "Away",
+            abbreviation: "AWY",
+            logoUrl: null,
+            color: null,
+            providerTeamId: "cached-away",
+            providerGlobalTeamId: null,
+          },
+          status: "scheduled",
+          statusDetail: "Scheduled",
+          isClosed: null,
+          rescheduledFromLeagueGameId: null,
+          rescheduledToLeagueGameId: null,
+          homeScore: null,
+          awayScore: null,
+          winnerTeamId: null,
+          broadcast: "CBS",
+          eventDetail: null,
+          sourceGameUrl: null,
+          kickoffDisplayText: "12:00 PM ET",
+          dateHeading: calendarDateInTimezone(
+            scheduledAt,
+            "America/New_York",
+          ),
+          rawResponseVersion: 1,
+          providerLastUpdatedAt: new Date(),
+          lastSyncedAt: new Date(),
+          manualOverride: false,
+          manualOverrideReason: null,
+          manualOverrideBy: null,
+          resultVersion: "cbs-emulator-result-v1",
+          sourcePayloadHash: "c".repeat(64),
+        });
+        const cachedAt = new Date();
+        const nextRefreshAt = new Date(
+          cachedAt.valueOf() + 12 * 60 * 60_000,
+        );
+        await cacheReference.set({
+          source: "cbsSports",
+          sourceUrl: buildCbsCollegeFootballScoreboardUrl(identity).toString(),
+          sport: "NCAAF",
+          division: identity.division,
+          season: identity.season,
+          seasonType: identity.seasonType,
+          week: identity.week,
+          games: [{
+            ...game,
+            scheduledAtUtc: game.scheduledAtUtc?.toISOString() ?? null,
+            publishedScheduledAtUtc:
+              game.publishedScheduledAtUtc?.toISOString() ?? null,
+            effectiveLockAtUtc:
+              game.effectiveLockAtUtc?.toISOString() ?? null,
+            providerLastUpdatedAt:
+              game.providerLastUpdatedAt.toISOString(),
+            lastSyncedAt: game.lastSyncedAt.toISOString(),
+          }],
+          etag: '"cbs-emulator-cache"',
+          lastModified: "Wed, 28 Aug 2030 10:00:00 GMT",
+          contentHash: cbsCollegeFootballGamesContentHash([game]),
+          cachedAt: Timestamp.fromDate(cachedAt),
+          lastAttemptAt: Timestamp.fromDate(cachedAt),
+          lastSuccessfulFetchAt: Timestamp.fromDate(cachedAt),
+          nextRefreshAt: Timestamp.fromDate(nextRefreshAt),
+          hardExpiresAt: Timestamp.fromMillis(
+            nextRefreshAt.valueOf() + 24 * 60 * 60_000,
+          ),
+          refreshState: "idle",
+          refreshLeaseOwner: null,
+          refreshLeaseUntil: null,
+          lastHttpStatus: 200,
+          consecutiveFailures: 0,
+          lastErrorCode: null,
+          lastErrorAt: null,
+          circuitOpenUntil: null,
+          parserVersion: CBS_COLLEGE_FOOTBALL_PARSER_VERSION,
+        });
+
+        const queryDay = calendarDateInTimezone(
+          scheduledAt,
+          "America/Chicago",
+        );
+        const catalog = await call<{
+          provider: string;
+          games: Array<Record<string, unknown>>;
+          cache: {hit: boolean; stale: boolean; delayed: boolean};
+        }>(owner, "listSportsCatalog", {
+          requestId: requestId("cbs-cache-catalog"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          sportCode: "NCAAF",
+          leagueCode: "ncaaf",
+          leagueIdForProvider: "FBS",
+          season: String(season),
+          seasonType: identity.seasonType,
+          week: identity.week,
+          division: identity.division,
+          from: queryDay,
+          to: queryDay,
+          timezone: "America/Chicago",
+          dateMode: "custom",
+          forceRefresh: false,
+        });
+        expect(catalog).toMatchObject({
+          provider: "cbsSports",
+          cache: {hit: true, stale: false, delayed: false},
+        });
+        expect(catalog.games).toHaveLength(1);
+        expect(catalog.games[0]).toMatchObject({
+          id: game.id,
+          provider: "cbsSports",
+          providerGameId,
+          selectable: true,
+        });
+        const [cacheAfterCatalog, usageAfter] = await Promise.all([
+          cacheReference.get(),
+          usageReference.get(),
+        ]);
+        const cacheLastAttemptAt = cacheAfterCatalog.get(
+          "lastAttemptAt",
+        ) as Timestamp;
+        expect(cacheLastAttemptAt.toMillis()).toBe(
+          cachedAt.valueOf(),
+        );
+        expect(usageAfter.exists).toBe(usageBefore.exists);
+        expect(usageAfter.data()).toEqual(usageBefore.data());
+
+        const directScheduleInput = {
+          requestId: requestId("cbs-cache-direct"),
+          leagueId: created.leagueId,
+          season,
+          seasonType: identity.seasonType,
+          week: identity.week,
+          division: identity.division,
+        };
+        await expect(
+          httpsCallable(
+            getFunctions(member, "us-central1"),
+            "getCollegeFootballSchedule",
+          )(directScheduleInput),
+        ).rejects.toThrow();
+        const directSchedule = await call<{
+          source: string;
+          games: Array<Record<string, unknown>>;
+          cache: {status: string};
+        }>(owner, "getCollegeFootballSchedule", {
+          ...directScheduleInput,
+          requestId: requestId("cbs-cache-direct-owner"),
+        });
+        expect(directSchedule).toMatchObject({
+          source: "cbsSports",
+          cache: {status: "fresh"},
+        });
+        expect(directSchedule.games).toHaveLength(1);
+        expect((await usageReference.get()).data()).toEqual(
+          usageBefore.data(),
+        );
+
+        const selectedGame = catalog.games[0];
+        if (selectedGame === undefined) {
+          throw new Error("The cached CBS catalog game was unavailable.");
+        }
+        await call(owner, "saveDraftSlate", {
+          requestId: requestId("cbs-cache-save"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          chunkKey: requestId("cbs-cache-chunk"),
+          games: [selectedGame],
+          removeGameIds: [],
+        });
+        const published = await call<{
+          published: boolean;
+          selectedGameCount: number;
+          eligibleMemberCount: number;
+        }>(owner, "publishWeeklySlate", {
+          requestId: requestId("cbs-cache-publish"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+        });
+        expect(published).toEqual({
+          published: true,
+          selectedGameCount: 1,
+          eligibleMemberCount: 1,
+        });
+
+        const gamePath =
+          `leagues/${created.leagueId}/weeks/${week.weekId}/games/${game.id}`;
+        const memberGame = await getDoc(doc(getFirestore(member), gamePath));
+        expect(memberGame.data()).toMatchObject({
+          provider: "cbsSports",
+          providerGameId,
+          homeTeam: {name: "Cached Home"},
+          awayTeam: {name: "Cached Away"},
+        });
+        await call(member, "submitOrConfirmEntry", {
+          requestId: requestId("cbs-cache-pick"),
+          leagueId: created.leagueId,
+          weekId: week.weekId,
+          picks: [{gameId: game.id, selectedTeamId: game.awayTeam.id}],
+        });
+        const entry = await adminDb
+          .doc(
+            `leagues/${created.leagueId}/weeks/${week.weekId}/entries/${memberUid}`,
+          )
+          .get();
+        const pick = await entry.ref.collection("picks").doc(game.id).get();
+        expect(entry.data()).toMatchObject({
+          savedPickCount: 1,
+          totalRequiredPickCount: 1,
+          completionState: "complete",
+        });
+        expect(pick.data()).toMatchObject({
+          gameId: game.id,
+          selectedTeamId: game.awayTeam.id,
+          outcome: "pending",
+        });
+        const publishedWeek = await adminDb
+          .doc(`leagues/${created.leagueId}/weeks/${week.weekId}`)
+          .get();
+        expect(publishedWeek.data()).toMatchObject({
+          status: "open",
+          catalogProviderSnapshot: "cbsSports",
+          catalogPresentationSnapshot: {
+            provider: "cbsSports",
+            allowRemoteLogos: true,
+          },
+        });
+      } finally {
+        await Promise.all([
+          previousConfiguration.exists
+            ? configurationReference.set(previousConfiguration.data() ?? {})
+            : configurationReference.delete(),
+          previousCache.exists
+            ? cacheReference.set(previousCache.data() ?? {})
+            : cacheReference.delete(),
+          usageBefore.exists
+            ? usageReference.set(usageBefore.data() ?? {})
+            : usageReference.delete(),
+        ]);
+        await deleteAdminApp(adminApp);
+      }
     },
     120_000,
   );
