@@ -635,7 +635,9 @@ void main() {
   testWidgets(
     'CBS college football keeps weekly metadata, groups dates, and refreshes in place',
     (tester) async {
-      tester.view.physicalSize = const Size(1440, 2400);
+      // Match a common laptop-height browser viewport. This guards against
+      // the CBS-only filters collapsing the game-results viewport to zero.
+      tester.view.physicalSize = const Size(1280, 720);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
@@ -900,7 +902,6 @@ void main() {
             .onChanged,
         isNull,
       );
-
       final seasonCall = await _tapAndReadCall(
         tester,
         calls,
@@ -931,7 +932,10 @@ void main() {
       expect(dateCall.$3.query?.division, 'FBS');
 
       final callCount = calls.length;
-      await tester.tap(find.byKey(const Key('refresh-catalog-button')));
+      final refreshButton = find.byKey(const Key('refresh-catalog-button'));
+      await tester.ensureVisible(refreshButton);
+      await tester.pump();
+      await tester.tap(refreshButton);
       await tester.pump();
       expect(calls, hasLength(callCount + 1));
       expect(controller.catalogLoading, isTrue);
@@ -958,6 +962,8 @@ void main() {
         const Key('catalog-checkbox-cbs-friday'),
       );
       expect(tester.widget<Checkbox>(refreshedCheckbox).onChanged, isNotNull);
+      await tester.ensureVisible(refreshedCheckbox);
+      await tester.pump();
       await tester.tap(refreshedCheckbox);
       await tester.pump();
       expect(controller.selectedGameIds, {'cbs-friday'});
@@ -966,7 +972,10 @@ void main() {
       expect(controller.selectedGameIds, isEmpty);
       await tester.tap(refreshedCheckbox);
       await tester.pump();
-      await tester.tap(find.byKey(const Key('save-draft-button')));
+      final saveDraftButton = find.byKey(const Key('save-draft-button'));
+      await tester.ensureVisible(saveDraftButton);
+      await tester.pump();
+      await tester.tap(saveDraftButton);
       await _pumpCatalogFrames(tester);
       verify(
         () => repository.saveDraftSlate(
@@ -1242,7 +1251,10 @@ Future<(DateTime, DateTime, _CatalogCall)> _tapAndReadCall(
 ) async {
   final callCount = calls.length;
   final beforeTap = DateTime.now().toUtc();
-  await tester.tap(find.byKey(key));
+  final target = find.byKey(key);
+  await tester.ensureVisible(target);
+  await tester.pump();
+  await tester.tap(target);
   await _pumpCatalogFrames(tester);
   final afterTap = DateTime.now().toUtc();
   expect(calls, hasLength(callCount + 1));

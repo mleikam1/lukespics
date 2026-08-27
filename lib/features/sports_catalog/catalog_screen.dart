@@ -116,6 +116,11 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     }
 
     final compactLayout = MediaQuery.sizeOf(context).width < 600;
+    // College football adds season, season-type, and week controls above the
+    // results. On laptop-height desktop windows those controls can otherwise
+    // consume the entire Column and leave the Expanded game list with no
+    // usable viewport. Let the complete CBS picker surface scroll as one unit.
+    final scrollableLayout = compactLayout || isCollegeFootball;
     final content = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -448,7 +453,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
           _CatalogWarning(controller: controller),
           const SizedBox(height: 12),
         ],
-        if (compactLayout)
+        if (scrollableLayout)
           _catalogResults(
             controller: controller,
             selectedLeague: selectedLeague,
@@ -482,7 +487,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     );
     return Padding(
       padding: AppBreakpoints.pagePadding(context),
-      child: compactLayout ? SingleChildScrollView(child: content) : content,
+      child: scrollableLayout ? SingleChildScrollView(child: content) : content,
     );
   }
 
