@@ -1155,13 +1155,25 @@ function timeoutLike(error: unknown): boolean {
 
 function challengePage(html: string): boolean {
   const sample = html.slice(0, 250_000).toLowerCase();
-  return [
-    "captcha",
+  if ([
     "cf-chl-",
     "challenge-platform",
     "access denied",
     "verify you are human",
     "unusual traffic",
+  ].some((marker) => sample.includes(marker))) {
+    return true;
+  }
+  // CBS's valid scoreboard currently embeds a generic CAPTCHA-related asset
+  // string alongside the real game cards. Treat CAPTCHA as a challenge only
+  // when the page also contains a human-verification prompt; a bare asset or
+  // analytics marker is not evidence that the response body is a challenge.
+  return sample.includes("captcha") && [
+    "complete the captcha",
+    "solve the captcha",
+    "are you a robot",
+    "are you human",
+    "human verification",
   ].some((marker) => sample.includes(marker));
 }
 

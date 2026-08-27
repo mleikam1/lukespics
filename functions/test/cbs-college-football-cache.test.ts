@@ -910,6 +910,31 @@ describe("CBS safe HTTP client", () => {
     expect(challengeFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("does not mistake a scoreboard CAPTCHA asset marker for a challenge page", async () => {
+    const scoreboardHtml = [
+      "<html><head>",
+      "<title>2026 NCAA Football Scores - FBS - Week 1 - CBS Sports</title>",
+      "<script src='/assets/captcha-telemetry.js'></script>",
+      "</head><body><div class='single-score-card'></div></body></html>",
+    ].join("");
+    const fetchImpl = mockedFetch(async () => new Response(scoreboardHtml));
+    const result = await fetchCbsCollegeFootballScoreboard({
+      url: cacheRecord().sourceUrl,
+      etag: null,
+      lastModified: null,
+      authorizeRequest: async () => undefined,
+      fetchImpl,
+      clock: () => NOW,
+    });
+    expect(result).toMatchObject({
+      kind: "modified",
+      status: 200,
+      html: scoreboardHtml,
+      requestCount: 1,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("enforces the five-megabyte streaming/declared-size limit", async () => {
     await expect(fetchCbsCollegeFootballScoreboard({
       url: cacheRecord().sourceUrl,
