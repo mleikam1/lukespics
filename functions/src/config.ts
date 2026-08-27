@@ -18,11 +18,11 @@ db.settings({ignoreUndefinedProperties: true});
 export const auth = getAuth();
 
 export const INVITE_CODE_PEPPER = defineSecret("INVITE_CODE_PEPPER");
-export const SPORTSDATAIO_API_KEY = defineSecret("SPORTSDATAIO_API_KEY");
 
-// Secret Manager injects this value only into the four provider-bearing
-// Functions that declare SPORTSDATAIO_API_KEY. Provider construction and
-// catalog validation remain secret-free.
+// SportsDataIO is intentionally not bound to this CBS release. The source
+// remains fail-closed and reads only a future, explicitly provisioned
+// environment value after entitlement review and a separately authorized
+// deployment adds the narrow Secret Manager bindings.
 export function sportsDataIoKey(): string {
   return (process.env.SPORTSDATAIO_API_KEY ?? "").trim();
 }

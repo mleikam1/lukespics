@@ -151,8 +151,8 @@ screenshot, fixture, or report.
 
 Before deploying this branch:
 
-- review the exact Function addition/change/deletion plan, especially the four
-  secret-bearing provider entry points;
+- review the exact Function addition/change/deletion plan and confirm the CBS
+  release does not bind the unprovisioned SportsDataIO secret;
 - confirm mock and internal test providers remain production-rejected;
 - confirm all production arenas remain `manual` during deployment and smoke
   testing;

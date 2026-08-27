@@ -55,7 +55,8 @@ the key/live/entitlement gates as complete:
 - a strict, enabled, server-only `systemConfig/sportsDataIoCatalog` with a new
   revision, production access mode, reviewed entitlement reference/date,
   exact NFL/MLB seasons, and Teams/Schedule/Live & Final feed checks;
-- `SPORTSDATAIO_API_KEY` bound only to the four provider-bearing Functions;
+- a future `SPORTSDATAIO_API_KEY` binding limited to the four provider-bearing
+  Functions; the CBS release does not carry that unprovisioned binding;
 - actual account entitlement for every exact endpoint and intended use;
 - bounded authenticated endpoint smoke and reviewed sanitized fixtures;
 - complete settled-tree deterministic validation and artifact scans; and

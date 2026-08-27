@@ -135,20 +135,22 @@ authorized key and production plan are supplied. API-Sports remains disabled
 until its full gate passes. TheSportsDB test mode does not use production
 Secret Manager and must be rejected by `lukes-picks`.
 
-SportsDataIO requires the `SPORTSDATAIO_API_KEY` Secret Manager secret, but this
-branch does not create or set it. Only after entitlement and an authorized
-activation, run the exact project guard immediately before the interactive
-secret command:
+SportsDataIO requires the `SPORTSDATAIO_API_KEY` Secret Manager secret, but the
+CBS production release neither creates nor binds it. Only after entitlement and
+a separately authorized SportsDataIO activation, add the narrow Function
+bindings, run the exact project guard immediately before the interactive secret
+command, and redeploy those reviewed Functions:
 
 ```bash
 ./scripts/assert_firebase_project.sh lukes-picks
 firebase functions:secrets:set SPORTSDATAIO_API_KEY --project lukes-picks
 ```
 
-Do not put the value on the command line or record terminal input/output. The
-secret is bound only to the catalog, two result-refresh, and scheduled-sync
-Functions. Rotation creates a new version; retain the previous version until a
-guarded Functions deployment and smoke verification succeed.
+Do not put the value on the command line or record terminal input/output. A
+future activation may bind the secret only to the catalog, two result-refresh,
+and scheduled-sync Functions. Rotation creates a new version; retain the
+previous version until a guarded Functions deployment and smoke verification
+succeed.
 
 Activation separately requires `ALLOW_SPORTSDATAIO_PROVIDER=true`, both
 environment and catalog access mode `production`, both entitlement-verification
@@ -156,9 +158,9 @@ gates true, and an enabled Admin-only `systemConfig/sportsDataIoCatalog` with
 reviewed NFL/MLB seasons and feed flags. Store only bounded entitlement review
 metadata in Firestore, not a key or contract contents.
 
-The currently deployed 29-export manifest predates and therefore does not
-include this branch's SportsDataIO binding. No unavailable API-Sports or CFBD secret is a deployment
-requirement.
+The CBS release deliberately keeps the unprovisioned SportsDataIO binding out of
+its manifest. No unavailable SportsDataIO, API-Sports, or CFBD secret is a CBS
+deployment requirement.
 
 Enabling required Google APIs is a cloud mutation. The APIs needed by the
 reviewed manifest were enabled under the guarded `lukes-picks` release; all 29

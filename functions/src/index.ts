@@ -5,7 +5,6 @@ import {callable} from "./callable.js";
 import {
   db,
   INVITE_CODE_PEPPER,
-  SPORTSDATAIO_API_KEY,
 } from "./config.js";
 import {
   assignPickerSchema,
@@ -338,7 +337,6 @@ export const listSportsCatalog = callable(
       },
     });
   },
-  {secrets: [SPORTSDATAIO_API_KEY]},
 );
 
 export const getCollegeFootballSchedule = callable(
@@ -479,7 +477,6 @@ function refreshCallable(functionName: string) {
       // bounded per cache chunk, while the callable has room to process
       // multiple chunks and league groups in one claimed operation.
       timeoutSeconds: 540,
-      secrets: [SPORTSDATAIO_API_KEY],
     },
   );
 }
@@ -666,7 +663,6 @@ export const scheduledResultSync = onSchedule(
     timeZone: "UTC",
     retryCount: 0,
     timeoutSeconds: 540,
-    secrets: [SPORTSDATAIO_API_KEY],
   },
   async () => {
     const startedAt = Date.now();

@@ -1597,7 +1597,7 @@ describe("provider source allowlist", () => {
     expect(configSource).toMatch(
       /defineSecret\(\s*["']INVITE_CODE_PEPPER["']\s*\)/,
     );
-    expect(configSource).toMatch(
+    expect(configSource).not.toMatch(
       /defineSecret\(\s*["']SPORTSDATAIO_API_KEY["']\s*\)/,
     );
     expect(configSource).toMatch(/process\.env\.SPORTSDATAIO_API_KEY/);
@@ -1656,13 +1656,7 @@ describe("provider source allowlist", () => {
     expect(secretScan).toContain("Ocp-Apim-Subscription-Key");
   });
 
-  it("binds the provider secret to exactly the four provider-bearing Functions", () => {
-    const expectedBindings = new Set([
-      "listSportsCatalog",
-      "refreshSelectedGames",
-      "syncSelectedGameResults",
-      "scheduledResultSync",
-    ]);
+  it("keeps the unprovisioned provider secret out of the CBS release", () => {
     const observed = new Set<string>();
     for (const [name, candidate] of Object.entries(functionExports)) {
       const endpoint = (
@@ -1677,12 +1671,8 @@ describe("provider source allowlist", () => {
       );
       expect(secrets.has("API_SPORTS_KEY"), name).toBe(false);
       if (secrets.has("SPORTSDATAIO_API_KEY")) observed.add(name);
-      if (expectedBindings.has(name)) {
-        expect(secrets.has("SPORTSDATAIO_API_KEY"), name).toBe(true);
-      } else {
-        expect(secrets.has("SPORTSDATAIO_API_KEY"), name).toBe(false);
-      }
+      expect(secrets.has("SPORTSDATAIO_API_KEY"), name).toBe(false);
     }
-    expect(observed).toEqual(expectedBindings);
+    expect(observed).toEqual(new Set());
   });
 });

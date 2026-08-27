@@ -120,7 +120,8 @@ does not perform—such as enabling a reviewed API or setting
 `./scripts/assert_firebase_project.sh lukes-picks` immediately before their own
 explicitly targeted write. Never record a secret value.
 
-SportsDataIO uses the server-only `SPORTSDATAIO_API_KEY` Secret Manager secret.
+SportsDataIO requires a future server-only `SPORTSDATAIO_API_KEY` Secret Manager
+binding; the CBS release does not provision or bind it.
 The provider is fail-closed unless the runtime is the exact authorized project,
 `ALLOW_SPORTSDATAIO_PROVIDER=true`, `SPORTSDATAIO_ACCESS_MODE=production`,
 `SPORTSDATAIO_ENTITLEMENT_VERIFIED=true`, and the Admin-only

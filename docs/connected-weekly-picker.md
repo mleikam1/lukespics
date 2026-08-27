@@ -221,10 +221,10 @@ not bind `API_SPORTS_KEY`. Flutter never supplies base URLs, request paths,
 league identities, result mappings, or logo policy for either adapter.
 
 The API-Sports paragraph above describes a dormant alternative path.
-SportsDataIO binds its Secret Manager key only to provider-bearing Functions and
-must not be enabled or described as production-backed until feed/use entitlement,
-live contract validation, the full test matrix, guarded release, and smoke test
-are complete.
+Any future SportsDataIO activation binds its Secret Manager key only to
+provider-bearing Functions and must not be enabled or described as
+production-backed until feed/use entitlement, live contract validation, the
+full test matrix, guarded release, and smoke test are complete.
 
 No client calls a sports provider directly. Only the server client may call the
 exact allowlisted SportsDataIO League API paths after activation. No arbitrary

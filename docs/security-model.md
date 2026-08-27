@@ -114,7 +114,8 @@ following:
 - an enabled, valid `systemConfig/sportsDataIoCatalog` with matching production
   mode, bounded entitlement review metadata, and verified NFL/MLB feed flags;
 - a non-empty `SPORTSDATAIO_API_KEY` Secret Manager value bound only to the four
-  provider-bearing entry points; and
+  provider-bearing entry points in a future, separately authorized
+  SportsDataIO deployment (the CBS release carries no such binding); and
 - the existing authorization, cache, soft-budget, timeout, retry, lease,
   stale-data, and circuit-breaker controls.
 

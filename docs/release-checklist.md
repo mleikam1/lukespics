@@ -127,8 +127,8 @@ pick/result data, and redeploy prior Functions only if still necessary.
 - [ ] Sanitized fixtures regenerated from only fields necessary for tests and
       reviewed for secrets, personal data, and third-party marks.
 - [ ] Complete deterministic release matrix passes on the exact commit.
-- [ ] Functions manifest and deletion plan reviewed, including secret binding
-      only on the four provider-bearing Functions.
+- [ ] Functions manifest and deletion plan reviewed; a future SportsDataIO
+      release may bind its secret only to the four provider-bearing Functions.
 - [ ] Catalog document enabled only after the safe deployment succeeds.
 - [ ] One authorized test arena changed from `manual` to `sportsDataIo` and
       verified end to end before wider use.
