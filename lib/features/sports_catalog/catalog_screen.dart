@@ -529,7 +529,6 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
       final canConfirmKickoff =
           !controller.selectedGameIds.contains(game.id) &&
           (game.timeTbd || game.scheduledAtUtc == null) &&
-          game.selectable != false &&
           (game.status == GameStatus.scheduled ||
               game.status == GameStatus.delayed);
       items.add(

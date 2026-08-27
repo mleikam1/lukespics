@@ -721,6 +721,9 @@ void main() {
           abbreviation: 'HTB',
         ),
         venueName: 'TBD Field',
+        selectable: false,
+        selectionReason:
+            'Schedule data is stale. Refresh before adding this game.',
       );
       final initialQuery = CatalogQuery(
         sportCode: 'NCAAF',
