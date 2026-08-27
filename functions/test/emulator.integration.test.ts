@@ -2504,35 +2504,38 @@ describe("emulator pick'em lifecycle", () => {
           parserVersion: CBS_COLLEGE_FOOTBALL_PARSER_VERSION,
         });
 
-        const queryDay = calendarDateInTimezone(
-          scheduledAt,
-          "America/Chicago",
-        );
         const catalog = await call<{
           provider: string;
+          sports: Array<{code: string}>;
+          leagues: Array<{
+            code: string;
+            providerLeagueId: string;
+            provider: string;
+          }>;
           games: Array<Record<string, unknown>>;
           cache: {hit: boolean; stale: boolean; delayed: boolean};
+          availability: {state: string};
         }>(owner, "listSportsCatalog", {
           requestId: requestId("cbs-cache-catalog"),
           leagueId: created.leagueId,
           weekId: week.weekId,
-          sportCode: "NCAAF",
-          leagueCode: "ncaaf",
-          leagueIdForProvider: "FBS",
-          season: String(season),
-          seasonType: identity.seasonType,
-          week: identity.week,
-          division: identity.division,
-          from: queryDay,
-          to: queryDay,
           timezone: "America/Chicago",
-          dateMode: "custom",
           forceRefresh: false,
         });
         expect(catalog).toMatchObject({
           provider: "cbsSports",
           cache: {hit: true, stale: false, delayed: false},
+          availability: {state: "available"},
         });
+        expect(catalog.sports).toContainEqual({
+          code: "NCAAF",
+          displayName: "College Football",
+        });
+        expect(catalog.leagues).toContainEqual(expect.objectContaining({
+          code: "ncaaf",
+          providerLeagueId: "FBS",
+          provider: "cbsSports",
+        }));
         expect(catalog.games).toHaveLength(1);
         expect(catalog.games[0]).toMatchObject({
           id: game.id,

@@ -1816,6 +1816,12 @@ export async function listCatalog(input: {
     );
   }
   const providerNames = catalogProviderNamesForQuery(settings, input.query);
+  logger.info("Sports catalog provider context", {
+    functionName: "listCatalog",
+    leagueFingerprint: sha256(input.leagueId).slice(0, 12),
+    targetedSportCode: input.query.sportCode ?? null,
+    configuredProviderNames: providerNames,
+  });
   const loadProviderCatalog = async (providerName: ProviderName) => {
       const provider = await getProvider(providerName);
       const [sports, leagues] = await Promise.all([
