@@ -161,15 +161,67 @@ describe("emulator pick'em lifecycle", () => {
       const adminApp = initializeAdminApp({projectId}, "integration-admin");
       const adminDb = getAdminFirestore(adminApp);
 
-      const created = await call<{leagueId: string; inviteCode: string}>(
-        owner,
-        "createLeague",
+      const createLeagueInputs = [
         {
-          requestId: requestId("createleague"),
-          name: "Integration Arena",
+          requestId: requestId("createleague-a"),
+          name: "Integration Arena A",
           timezone: "America/Chicago",
           settings: {providerName: "mock"},
         },
+        {
+          requestId: requestId("createleague-b"),
+          name: "Integration Arena B",
+          timezone: "America/Chicago",
+          settings: {providerName: "mock"},
+        },
+      ];
+      const createLeagueAttempts = await Promise.allSettled(
+        createLeagueInputs.map(async (input) =>
+          call<{leagueId: string; inviteCode: string}>(
+            owner,
+            "createLeague",
+            input,
+          )
+        ),
+      );
+      const successfulCreates = createLeagueAttempts.flatMap(
+        (result, index) => result.status === "fulfilled"
+          ? [{created: result.value, input: createLeagueInputs[index]}]
+          : [],
+      );
+      const failedCreates = createLeagueAttempts.filter(
+        (result) => result.status === "rejected",
+      );
+      expect(successfulCreates).toHaveLength(1);
+      expect(failedCreates).toHaveLength(1);
+      expect(String(failedCreates[0]?.reason)).toMatch(
+        /already belong to an active arena/i,
+      );
+      const successfulCreate = successfulCreates[0];
+      if (successfulCreate === undefined || successfulCreate.input === undefined) {
+        throw new Error("Exactly one concurrent arena create must succeed.");
+      }
+      const {created, input: createLeagueInput} = successfulCreate;
+      await expect(
+        httpsCallable(getFunctions(owner, "us-central1"), "createLeague")(
+          createLeagueInput,
+        ),
+      ).rejects.toThrow(/create request has already completed/i);
+      const ownerLeagues = await adminDb
+        .collection("leagues")
+        .where("ownerUid", "==", ownerUid)
+        .get();
+      expect(ownerLeagues.docs.map((league) => league.id)).toEqual([
+        created.leagueId,
+      ]);
+      const activeOwnerMemberships = await adminDb
+        .collectionGroup("members")
+        .where("uid", "==", ownerUid)
+        .where("status", "==", "active")
+        .get();
+      expect(activeOwnerMemberships.docs).toHaveLength(1);
+      expect(activeOwnerMemberships.docs[0]?.ref.parent.parent?.id).toBe(
+        created.leagueId,
       );
       await call(memberA, "joinLeagueByCode", {
         requestId: requestId("joinmembera"),
@@ -2365,12 +2417,18 @@ describe("emulator pick'em lifecycle", () => {
             timezone: "America/Chicago",
             settings: {
               providerName: "manual",
-              providerBySport: {NCAAF: "cbsSports"},
               enabledSports: ["NCAAF"],
               enabledLeagues: ["ncaaf"],
             },
           },
         );
+        const createdLeague = await adminDb
+          .doc(`leagues/${created.leagueId}`)
+          .get();
+        expect(createdLeague.data()?.settings).toMatchObject({
+          providerName: "manual",
+          providerBySport: {NCAAF: "cbsSports"},
+        });
         await call(member, "joinLeagueByCode", {
           requestId: requestId("cbs-cache-join"),
           inviteCode: created.inviteCode,

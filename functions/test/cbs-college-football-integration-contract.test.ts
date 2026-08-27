@@ -10,6 +10,7 @@ import {
   assertCbsCollegeFootballActiveIdentity,
   parseCbsCollegeFootballConfig,
 } from "../src/services/cbsCollegeFootballSchedule.js";
+import {withCbsProviderForNewLeague} from "../src/services/leagues.js";
 import {
   assertSingleConnectedSlateProvider,
   assertCurrentWeekProviderAccess,
@@ -22,6 +23,36 @@ import {CbsCollegeFootballProvider} from
 import type {ProviderQuery} from "../src/types.js";
 
 describe("CBS college-football integration contracts", () => {
+  it("adds the server-enabled CBS mapping to every new arena", () => {
+    const settings = withCbsProviderForNewLeague({
+      providerName: "manual",
+      providerBySport: {
+        baseball: "manual",
+        NCAAF: "manual",
+      },
+    }, true);
+
+    expect(settings).toEqual({
+      providerName: "manual",
+      providerBySport: {
+        baseball: "manual",
+        NCAAF: "cbsSports",
+      },
+    });
+  });
+
+  it("does not add the CBS mapping while its server kill switch is off", () => {
+    const settings = withCbsProviderForNewLeague({
+      providerName: "manual",
+      providerBySport: {baseball: "manual"},
+    }, false);
+
+    expect(settings).toEqual({
+      providerName: "manual",
+      providerBySport: {baseball: "manual"},
+    });
+  });
+
   it("supports a per-sport CBS provider without changing the default provider", () => {
     const settings = leagueSettingsSchema.parse({
       providerName: "sportsDataIo",

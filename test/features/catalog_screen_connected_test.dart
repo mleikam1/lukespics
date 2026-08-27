@@ -902,6 +902,20 @@ void main() {
             .onChanged,
         isNull,
       );
+      final staleTbdKickoff = find.byKey(
+        const Key('catalog-confirm-time-cbs-time-tbd'),
+      );
+      expect(staleTbdKickoff, findsOneWidget);
+      expect(
+        tester.widget<OutlinedButton>(staleTbdKickoff).onPressed,
+        isNotNull,
+      );
+      await tester.ensureVisible(staleTbdKickoff);
+      await tester.tap(staleTbdKickoff);
+      await tester.pumpAndSettle();
+      expect(find.text('Confirm kickoff and add'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
       final seasonCall = await _tapAndReadCall(
         tester,
         calls,
@@ -1404,6 +1418,13 @@ void _stubArena(
       nickname: any(named: 'nickname'),
     ),
   ).thenAnswer((_) async => 'league-1');
+  when(() => repository.getLeague('league-1')).thenAnswer((_) async => league);
+  when(
+    () => repository.getMembers('league-1'),
+  ).thenAnswer((_) async => [member]);
+  when(
+    () => repository.getWeek('league-1', 'week-0001'),
+  ).thenAnswer((_) async => week);
   when(
     () => repository.watchLeague('league-1'),
   ).thenAnswer((_) => Stream.value(league));

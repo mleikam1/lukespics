@@ -27,6 +27,17 @@ abstract interface class LeagueRepository {
   /// persisting invite codes or exposing a public league directory.
   Future<List<String>> findActiveLeagueIds();
 
+  /// Reads the arena from the server so session restoration never mistakes an
+  /// empty local cache for a deleted arena.
+  Future<LeagueSummary?> getLeague(String leagueId);
+
+  /// Reads the current week from the server during session restoration.
+  Future<WeekSummary?> getWeek(String leagueId, String weekId);
+
+  /// Reads the current arena membership roster from the server during session
+  /// restoration.
+  Future<List<LeagueMember>> getMembers(String leagueId);
+
   Future<CreatedLeague> createLeague({
     required String name,
     required String timezone,

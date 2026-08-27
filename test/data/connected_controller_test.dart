@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lukespics/app/app.dart';
 import 'package:lukespics/app/bootstrap.dart';
 import 'package:lukespics/data/demo/demo_repository.dart';
 import 'package:lukespics/data/models/game.dart';
@@ -73,6 +74,251 @@ void main() {
     expect(controller.weekLabel, isNot('Week 9'));
     expect(controller.currentPickerName, 'Weekly picker');
   });
+
+  testWidgets(
+    'signed-in membership lookup never exposes arena creation while pending',
+    (tester) async {
+      final memberships = Completer<List<String>>();
+      when(
+        repository.findActiveLeagueIds,
+      ).thenAnswer((_) => memberships.future);
+      final controller = AppController.connected(
+        runtimeMode: AppRuntimeMode.firebaseEmulator,
+        repository: repository,
+        auth: auth,
+      );
+
+      await tester.pumpWidget(
+        LukesPicksApp(
+          bootstrap: const BootstrapResult(
+            mode: AppRuntimeMode.firebaseEmulator,
+          ),
+          controller: controller,
+          initialLocation: '/arena/create',
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('Restoring your arena…'), findsOneWidget);
+      expect(find.text('Create your arena'), findsNothing);
+      expect(controller.restoringArena, isTrue);
+
+      memberships.complete(const []);
+      await tester.pumpAndSettle();
+
+      expect(controller.restoringArena, isFalse);
+      expect(find.text('Your next rivalry starts here.'), findsOneWidget);
+    },
+  );
+
+  test(
+    'known membership stays reserved when initial league hydration fails',
+    () async {
+      when(
+        repository.findActiveLeagueIds,
+      ).thenAnswer((_) async => const ['league-1']);
+      when(
+        () => repository.getLeague('league-1'),
+      ).thenAnswer((_) => Future<LeagueSummary?>.error(StateError('offline')));
+      final controller = AppController.connected(
+        runtimeMode: AppRuntimeMode.firebaseEmulator,
+        repository: repository,
+        auth: auth,
+      );
+      addTearDown(controller.dispose);
+
+      await _flush();
+
+      expect(controller.restoringArena, isTrue);
+      expect(controller.hasLeague, isTrue);
+      expect(controller.activeLeagueId, 'league-1');
+      expect(controller.errorMessage, contains('reconnecting'));
+    },
+  );
+
+  test('auth account change queues a clean restore for the new user', () async {
+    final authChanges = StreamController<User?>.broadcast();
+    final firstMemberships = Completer<List<String>>();
+    final secondUser = _MockUser();
+    when(() => secondUser.uid).thenReturn('member-b');
+    when(() => secondUser.displayName).thenReturn('Member B');
+    when(auth.authStateChanges).thenAnswer((_) => authChanges.stream);
+    var membershipLookups = 0;
+    when(repository.findActiveLeagueIds).thenAnswer((_) {
+      membershipLookups += 1;
+      if (membershipLookups == 1) return firstMemberships.future;
+      return Future.value(const <String>[]);
+    });
+    final controller = AppController.connected(
+      runtimeMode: AppRuntimeMode.firebaseEmulator,
+      repository: repository,
+      auth: auth,
+    );
+    addTearDown(() async {
+      controller.dispose();
+      await authChanges.close();
+    });
+    await _flush();
+    expect(membershipLookups, 1);
+
+    when(() => auth.currentUser).thenReturn(secondUser);
+    authChanges.add(secondUser);
+    await _flush();
+    firstMemberships.complete(const ['league-from-first-user']);
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+
+    expect(membershipLookups, 2);
+    expect(controller.currentUserId, 'member-b');
+    expect(controller.hasLeague, isFalse);
+    expect(controller.restoringArena, isFalse);
+    expect(controller.activeLeagueId, isNull);
+  });
+
+  test('disposed controller ignores a late failed membership lookup', () async {
+    final memberships = Completer<List<String>>();
+    when(repository.findActiveLeagueIds).thenAnswer((_) => memberships.future);
+    final controller = AppController.connected(
+      runtimeMode: AppRuntimeMode.firebaseEmulator,
+      repository: repository,
+      auth: auth,
+    );
+    await _flush();
+
+    controller.dispose();
+    memberships.completeError(StateError('late offline failure'));
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+  });
+
+  test('failed Firebase sign-out preserves and restores the session', () async {
+    final retryMemberships = Completer<List<String>>();
+    var membershipLookups = 0;
+    when(repository.findActiveLeagueIds).thenAnswer((_) {
+      membershipLookups += 1;
+      return membershipLookups == 1
+          ? Future.value(const <String>[])
+          : retryMemberships.future;
+    });
+    when(auth.signOut).thenThrow(
+      FirebaseAuthException(
+        code: 'network-request-failed',
+        message: 'Temporary persistence failure.',
+      ),
+    );
+    final controller = AppController.connected(
+      runtimeMode: AppRuntimeMode.firebaseEmulator,
+      repository: repository,
+      auth: auth,
+    );
+    addTearDown(controller.dispose);
+    await _flush();
+
+    await controller.signOut();
+
+    expect(controller.signedIn, isTrue);
+    expect(controller.currentUserId, 'owner');
+    expect(controller.errorMessage, contains('could not be completed'));
+    verify(auth.signOut).called(1);
+    retryMemberships.complete(const []);
+  });
+
+  test('successful sign-out clears a private invite code', () async {
+    _stubArena(
+      repository,
+      catalogGames: const [],
+      selectedGames: const [],
+      weekStatus: 'draft',
+    );
+    when(
+      () => repository.rotateInviteCode(leagueId: 'league-1'),
+    ).thenAnswer((_) async => 'PRIVATE-CODE');
+    when(auth.signOut).thenAnswer((_) async {});
+    final controller = AppController.connected(
+      runtimeMode: AppRuntimeMode.firebaseEmulator,
+      repository: repository,
+      auth: auth,
+    );
+    addTearDown(controller.dispose);
+    await _flush();
+    expect(await controller.joinArena('ABC12345'), isTrue);
+    expect(await controller.rotateInviteCode(), isTrue);
+    expect(controller.inviteCode, 'PRIVATE-CODE');
+
+    await controller.signOut();
+
+    expect(controller.signedIn, isFalse);
+    expect(controller.inviteCode, isNull);
+  });
+
+  test('auth account change clears and fences prior history', () async {
+    final authChanges = StreamController<User?>.broadcast();
+    final history = StreamController<List<WeekSummary>>.broadcast();
+    final secondUser = _MockUser();
+    when(() => secondUser.uid).thenReturn('member-b');
+    when(() => secondUser.displayName).thenReturn('Member B');
+    when(auth.authStateChanges).thenAnswer((_) => authChanges.stream);
+    _stubArena(
+      repository,
+      catalogGames: const [],
+      selectedGames: const [],
+      weekStatus: 'draft',
+      historyStream: history.stream,
+    );
+    final controller = AppController.connected(
+      runtimeMode: AppRuntimeMode.firebaseEmulator,
+      repository: repository,
+      auth: auth,
+    );
+    addTearDown(() async {
+      controller.dispose();
+      await Future.wait([authChanges.close(), history.close()]);
+    });
+    await _flush();
+    expect(await controller.joinArena('ABC12345'), isTrue);
+    final priorWeek = _weekSummary(id: 'week-prior', status: 'finalized');
+    history.add([priorWeek]);
+    await _flush();
+    expect(controller.historyWeeks, [priorWeek]);
+
+    when(() => auth.currentUser).thenReturn(secondUser);
+    authChanges.add(secondUser);
+    history.add([priorWeek]);
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+
+    expect(controller.currentUserId, 'member-b');
+    expect(controller.historyWeeks, isEmpty);
+  });
+
+  test(
+    'restore skips an orphaned membership and hydrates the next arena',
+    () async {
+      when(
+        repository.findActiveLeagueIds,
+      ).thenAnswer((_) async => const ['orphaned-league', 'league-1']);
+      when(
+        () => repository.getLeague('orphaned-league'),
+      ).thenAnswer((_) async => null);
+      _stubArena(
+        repository,
+        catalogGames: const [],
+        selectedGames: const [],
+        weekStatus: 'draft',
+      );
+      final controller = AppController.connected(
+        runtimeMode: AppRuntimeMode.firebaseEmulator,
+        repository: repository,
+        auth: auth,
+      );
+      addTearDown(controller.dispose);
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(controller.activeLeagueId, 'league-1');
+      expect(controller.hasLeague, isTrue);
+      expect(controller.restoringArena, isFalse);
+      expect(controller.errorMessage, isNull);
+    },
+  );
 
   test(
     'standings stay hidden through chunks and reveal after marker catch-up',
@@ -767,15 +1013,9 @@ void main() {
       weekStatus: 'open',
       leagueStream: leagues.stream,
     );
-    var weekOneGameWatchCount = 0;
-    when(() => repository.watchWeekGames('league-1', 'week-0001')).thenAnswer((
-      _,
-    ) {
-      weekOneGameWatchCount += 1;
-      return weekOneGameWatchCount == 1
-          ? Stream.value(const <Game>[])
-          : heldWeekOneGames.stream;
-    });
+    when(
+      () => repository.watchWeekGames('league-1', 'week-0001'),
+    ).thenAnswer((_) => heldWeekOneGames.stream);
     when(
       () => repository.watchWeek('league-1', 'week-0002'),
     ).thenAnswer((_) => weekTwo.stream);
@@ -2225,6 +2465,7 @@ void _stubArena(
   Stream<WeekSummary?>? weekStream,
   List<Standing> standings = const <Standing>[],
   Stream<List<Standing>>? standingsStream,
+  Stream<List<WeekSummary>>? historyStream,
   List<Pick> ownPicks = const <Pick>[],
 }) {
   final league = leagueSummary ?? _leagueSummary(pickerUid: pickerUid);
@@ -2250,6 +2491,13 @@ void _stubArena(
       nickname: any(named: 'nickname'),
     ),
   ).thenAnswer((_) async => 'league-1');
+  when(() => repository.getLeague('league-1')).thenAnswer((_) async => league);
+  when(
+    () => repository.getMembers('league-1'),
+  ).thenAnswer((_) async => [member]);
+  when(
+    () => repository.getWeek('league-1', 'week-0001'),
+  ).thenAnswer((_) async => week);
   when(
     () => repository.watchLeague('league-1'),
   ).thenAnswer((_) => leagueStream ?? Stream.value(league));
@@ -2261,7 +2509,7 @@ void _stubArena(
   ).thenAnswer((_) => standingsStream ?? Stream.value(standings));
   when(
     () => repository.watchFinalizedWeeks('league-1'),
-  ).thenAnswer((_) => Stream.value(const <WeekSummary>[]));
+  ).thenAnswer((_) => historyStream ?? Stream.value(const <WeekSummary>[]));
   when(
     () => repository.watchWeek('league-1', 'week-0001'),
   ).thenAnswer((_) => weekStream ?? Stream.value(week));

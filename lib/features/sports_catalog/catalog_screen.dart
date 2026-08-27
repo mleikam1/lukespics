@@ -523,10 +523,15 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     }
     final items = <Widget>[];
     void addGame(Game game) {
+      // Kickoff confirmation creates a manually verified game, so keep this
+      // escape hatch available when the provider is serving last-known-good
+      // cached matchups. The picker still has to enter a trusted future time.
       final canConfirmKickoff =
-          !controller.catalogStale &&
           !controller.selectedGameIds.contains(game.id) &&
-          (game.timeTbd || game.scheduledAtUtc == null);
+          (game.timeTbd || game.scheduledAtUtc == null) &&
+          game.selectable != false &&
+          (game.status == GameStatus.scheduled ||
+              game.status == GameStatus.delayed);
       items.add(
         _CatalogGameCard(
           game: game,

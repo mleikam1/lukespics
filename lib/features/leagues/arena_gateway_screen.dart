@@ -8,6 +8,77 @@ import '../../data/demo/demo_repository.dart';
 
 enum ArenaMode { choose, create, join }
 
+class ArenaRestoreScreen extends ConsumerWidget {
+  const ArenaRestoreScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.watch(appControllerProvider);
+    return Scaffold(
+      appBar: AppBar(
+        title: const BrandMark(size: 36),
+        actions: [
+          TextButton(
+            onPressed: controller.signOut,
+            child: const Text('Sign out'),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 620),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 24),
+                    Text(
+                      'Restoring your arena…',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Your membership and saved picks are being reconnected. '
+                      'You won’t need to create another arena.',
+                      textAlign: TextAlign.center,
+                    ),
+                    if (controller.errorMessage != null) ...[
+                      const SizedBox(height: 16),
+                      Semantics(
+                        liveRegion: true,
+                        child: Text(
+                          controller.errorMessage!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      OutlinedButton.icon(
+                        onPressed: controller.retryArenaRestore,
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: const Text('Retry now'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class ArenaGatewayScreen extends ConsumerStatefulWidget {
   const ArenaGatewayScreen({super.key, this.initialMode = ArenaMode.choose});
 

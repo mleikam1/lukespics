@@ -30,9 +30,21 @@ GoRouter createAppRouter(
       final isLegal = location.startsWith('/legal');
       final isSignIn = location == '/sign-in';
       final isArena = location.startsWith('/arena');
+      final isRestoringArena = location == '/restoring-arena';
 
       if (!controller.signedIn && !isSignIn && !isLegal) {
         return '/sign-in';
+      }
+      if (controller.signedIn &&
+          controller.restoringArena &&
+          !isRestoringArena &&
+          !isLegal) {
+        return '/restoring-arena';
+      }
+      if (controller.signedIn &&
+          !controller.restoringArena &&
+          isRestoringArena) {
+        return controller.hasLeague ? '/dashboard' : '/arena';
       }
       if (controller.signedIn && isSignIn) {
         return controller.hasLeague ? '/dashboard' : '/arena';
@@ -40,6 +52,7 @@ GoRouter createAppRouter(
       if (controller.signedIn &&
           !controller.hasLeague &&
           !isArena &&
+          !isRestoringArena &&
           !isLegal) {
         return '/arena';
       }
@@ -84,6 +97,10 @@ GoRouter createAppRouter(
                 const ArenaGatewayScreen(initialMode: ArenaMode.join),
           ),
         ],
+      ),
+      GoRoute(
+        path: '/restoring-arena',
+        builder: (context, state) => const ArenaRestoreScreen(),
       ),
       GoRoute(
         path: '/legal/:page',

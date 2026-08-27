@@ -34,6 +34,8 @@ final class AppController extends ChangeNotifier {
   }) : runtimeMode = AppRuntimeMode.demo,
        _signedIn = signedIn,
        _hasLeague = hasLeague,
+       _arenaMembershipResolved = true,
+       _arenaHydrated = true,
        _offline = offline,
        _repository = null,
        _auth = null,
@@ -54,6 +56,8 @@ final class AppController extends ChangeNotifier {
        ),
        _signedIn = false,
        _hasLeague = false,
+       _arenaMembershipResolved = false,
+       _arenaHydrated = false,
        _offline = false,
        _repository = repository ?? FirebaseLeagueRepository(),
        _auth = auth ?? FirebaseAuth.instance,
@@ -66,6 +70,7 @@ final class AppController extends ChangeNotifier {
       _signedIn = true;
       _currentUserId = currentUser.uid;
       _displayName = _connectedDisplayName(currentUser.displayName);
+      _sessionRestoreGeneration += 1;
       unawaited(_resumeExistingSession());
     }
     _authSubscription = _auth.authStateChanges().listen(_handleAuthStateChange);
@@ -86,6 +91,8 @@ final class AppController extends ChangeNotifier {
 
   bool _signedIn;
   bool _hasLeague;
+  bool _arenaMembershipResolved;
+  bool _arenaHydrated;
   bool _authBusy = false;
   bool _browserE2eAccountCreated = false;
   bool _offline;
@@ -93,6 +100,13 @@ final class AppController extends ChangeNotifier {
   bool _demoReviewReady = false;
   bool _weekFinalized = false;
   bool _restoringSession = false;
+  bool _sessionRestoreQueued = false;
+  bool _disposed = false;
+  int _sessionRestoreGeneration = 0;
+  int _activeSessionRestoreGeneration = -1;
+  String? _activeSessionRestoreUid;
+  int _sessionRestoreRetryAttempt = 0;
+  Timer? _sessionRestoreRetry;
   bool _pickerParticipatesInPicks = false;
   PickLockPolicy _pickLockPolicy = PickLockPolicy.perGame;
   bool _weekPickerParticipatesInPicks = false;
@@ -180,6 +194,9 @@ final class AppController extends ChangeNotifier {
 
   bool get signedIn => _signedIn;
   bool get hasLeague => _hasLeague;
+  bool get restoringArena =>
+      _signedIn &&
+      (!_arenaMembershipResolved || (_hasLeague && !_arenaHydrated));
   bool get authBusy => _authBusy;
   bool get offline => _offline;
   bool get slatePublished => _slatePublished;
@@ -395,6 +412,10 @@ final class AppController extends ChangeNotifier {
   Future<void> signIn() async {
     if (_authBusy) return;
     _authBusy = true;
+    if (_repository != null) {
+      _arenaMembershipResolved = false;
+      _arenaHydrated = false;
+    }
     _errorMessage = null;
     notifyListeners();
     try {
@@ -524,29 +545,46 @@ final class AppController extends ChangeNotifier {
   };
 
   Future<void> signOut() async {
-    if (_browserE2eAlias != null) browserE2eForgetSession();
-    if (_repository != null) {
-      await _auth!.signOut();
+    _sessionRestoreGeneration += 1;
+    _sessionRestoreQueued = false;
+    _cancelSessionRestoreRetry();
+    try {
+      if (_repository != null) {
+        await _auth!.signOut();
+      }
+    } on Object {
+      final currentUser = _auth?.currentUser;
+      if (currentUser != null) {
+        _signedIn = true;
+        _currentUserId = currentUser.uid;
+        _displayName = _connectedDisplayName(currentUser.displayName);
+        _errorMessage = 'Sign-out could not be completed. Try again.';
+        unawaited(_resumeExistingSession());
+      } else {
+        _signedIn = false;
+        _hasLeague = false;
+        _arenaMembershipResolved = true;
+        _arenaHydrated = false;
+        await _cancelLeagueSubscriptions();
+        _clearArenaSessionState();
+        _currentUserId = '';
+        _displayName = 'Member';
+        _errorMessage = null;
+      }
+      if (!_disposed) notifyListeners();
+      return;
     }
-    await _cancelLeagueSubscriptions();
+    if (_browserE2eAlias != null) browserE2eForgetSession();
     _signedIn = false;
+    await _cancelLeagueSubscriptions();
     _hasLeague = false;
-    _setActiveLeagueId(null);
-    _setActiveWeekId(null);
-    _clearCatalogState();
-    _selectedWeekGames.clear();
-    _selectedDraftGamesById.clear();
-    _serverDraftGameIds.clear();
-    _serverDraftGamesById.clear();
-    _pickTeamIds.clear();
-    _confirmedPickTeamIds.clear();
-    _ownPicksByGameId.clear();
-    _pickSyncStates.clear();
-    _members.clear();
-    _resetStandingsState();
-    _entries.clear();
-    _historyWeeks.clear();
-    notifyListeners();
+    _arenaMembershipResolved = true;
+    _arenaHydrated = false;
+    _clearArenaSessionState();
+    _currentUserId = '';
+    _displayName = 'Member';
+    _errorMessage = null;
+    if (!_disposed) notifyListeners();
   }
 
   Future<void> createArena({
@@ -576,6 +614,8 @@ final class AppController extends ChangeNotifier {
         _setActiveLeagueId(created.leagueId);
         _inviteCode = created.inviteCode;
         _hasLeague = true;
+        _arenaMembershipResolved = true;
+        _arenaHydrated = false;
         final now = DateTime.now().toUtc();
         final week = await _repository.createDraftWeek(
           leagueId: created.leagueId,
@@ -604,9 +644,19 @@ final class AppController extends ChangeNotifier {
         await loadCatalog();
       }
       _hasLeague = true;
+      _arenaMembershipResolved = true;
+      _arenaHydrated = true;
       unawaited(_telemetry.log('league_created'));
     } on RepositoryException catch (error) {
-      _errorMessage = error.safeMessage;
+      if (_repository != null && error.code == 'already-exists') {
+        _hasLeague = false;
+        _arenaMembershipResolved = false;
+        _arenaHydrated = false;
+        _errorMessage = 'Restoring your existing arena…';
+        unawaited(_resumeExistingSession());
+      } else {
+        _errorMessage = error.safeMessage;
+      }
     } finally {
       notifyListeners();
     }
@@ -622,22 +672,37 @@ final class AppController extends ChangeNotifier {
       if (_repository == null) {
         await Future<void>.delayed(const Duration(milliseconds: 140));
       } else {
-        _setActiveLeagueId(
-          await _repository.joinLeagueByCode(
-            inviteCode: inviteCode.trim(),
-            nickname: _displayName,
-          ),
+        final joinedLeagueId = await _repository.joinLeagueByCode(
+          inviteCode: inviteCode.trim(),
+          nickname: _displayName,
         );
+        _setActiveLeagueId(joinedLeagueId);
+        _hasLeague = true;
+        _arenaMembershipResolved = true;
+        _arenaHydrated = false;
+        notifyListeners();
         await _hydrateJoinedLeague(_activeLeagueId!);
         await _startLeagueSubscriptions(_activeLeagueId!);
       }
       _hasLeague = true;
+      _arenaMembershipResolved = true;
+      _arenaHydrated = true;
       unawaited(_telemetry.log('league_joined'));
       _errorMessage = null;
       notifyListeners();
       return true;
     } on RepositoryException catch (error) {
       _errorMessage = error.safeMessage;
+      if (_repository != null && _hasLeague) {
+        unawaited(_resumeExistingSession());
+      }
+      notifyListeners();
+      return false;
+    } on Object {
+      _errorMessage = 'Your arena is reconnecting. Please try again shortly.';
+      if (_repository != null && _hasLeague) {
+        unawaited(_resumeExistingSession());
+      }
       notifyListeners();
       return false;
     }
@@ -750,6 +815,26 @@ final class AppController extends ChangeNotifier {
     _lastNextPickerUid = null;
     _slatePublished = true;
     _weekStatus = 'loading';
+  }
+
+  void _clearArenaSessionState() {
+    _setActiveLeagueId(null);
+    _setActiveWeekId(null);
+    _resetForExternalWeekChange();
+    _members.clear();
+    _resetStandingsState();
+    _historyWeeks.clear();
+    _inviteCode = null;
+    _currentPickerId = '';
+    _leagueName = 'Luke’s Picks Arena';
+    _leagueTimezone = 'UTC';
+    _weekLabel = 'Current week';
+    _weekSequentialNumber = 0;
+    _pickerParticipatesInPicks = false;
+    _pickLockPolicy = PickLockPolicy.perGame;
+    _weekPickerParticipatesInPicks = false;
+    _weekLockPolicy = PickLockPolicy.perGame;
+    _offline = false;
   }
 
   Future<void> loadCatalog({
@@ -1864,7 +1949,9 @@ final class AppController extends ChangeNotifier {
   }
 
   bool _isActiveStandingsContext(String leagueId, int generation) =>
-      _activeLeagueId == leagueId && _standingsContextGeneration == generation;
+      !_disposed &&
+      _activeLeagueId == leagueId &&
+      _standingsContextGeneration == generation;
 
   void _applyStandingsFence(LeagueSummary league) {
     _standingsEpoch = league.standingsEpoch;
@@ -1921,68 +2008,190 @@ final class AppController extends ChangeNotifier {
       _activeContextGeneration == generation;
 
   void _handleAuthStateChange(User? user) {
+    if (_disposed) return;
     if (user == null) {
+      _sessionRestoreGeneration += 1;
+      _sessionRestoreQueued = false;
+      _cancelSessionRestoreRetry();
       _signedIn = false;
       _hasLeague = false;
-      _setActiveLeagueId(null);
-      _setActiveWeekId(null);
-      _clearCatalogState();
-      _selectedWeekGames.clear();
-      _selectedDraftGamesById.clear();
-      _serverDraftGameIds.clear();
-      _serverDraftGamesById.clear();
-      _pickTeamIds.clear();
-      _confirmedPickTeamIds.clear();
-      _ownPicksByGameId.clear();
-      _pickSyncStates.clear();
-      _members.clear();
-      _resetStandingsState();
-      _entries.clear();
+      _arenaMembershipResolved = true;
+      _arenaHydrated = false;
+      _clearArenaSessionState();
+      _currentUserId = '';
+      _displayName = 'Member';
+      _errorMessage = null;
       unawaited(_cancelLeagueSubscriptions());
       notifyListeners();
       return;
     }
+    final needsMembershipLookup = !_signedIn || _currentUserId != user.uid;
     _signedIn = true;
     _currentUserId = user.uid;
     _displayName = user.displayName?.trim().isNotEmpty == true
         ? user.displayName!.trim()
         : _displayName;
+    if (needsMembershipLookup) {
+      _sessionRestoreGeneration += 1;
+      _sessionRestoreQueued = false;
+      _cancelSessionRestoreRetry();
+      _hasLeague = false;
+      _arenaMembershipResolved = false;
+      _arenaHydrated = false;
+      _clearArenaSessionState();
+      _errorMessage = null;
+      unawaited(_cancelLeagueSubscriptions());
+    }
     unawaited(_resumeExistingSession());
     notifyListeners();
   }
 
-  Future<void> _resumeExistingSession() async {
+  Future<void> _resumeExistingSession({
+    int? expectedGeneration,
+    String? expectedUid,
+  }) async {
     final repository = _repository;
-    if (repository == null || _restoringSession) return;
+    final generation = expectedGeneration ?? _sessionRestoreGeneration;
+    final uid = expectedUid ?? _currentUserId;
+    if (repository == null || !_isCurrentSessionRestore(generation, uid)) {
+      return;
+    }
+    if (_restoringSession) {
+      if (_activeSessionRestoreGeneration != generation ||
+          _activeSessionRestoreUid != uid) {
+        _sessionRestoreQueued = true;
+      }
+      return;
+    }
+    _sessionRestoreRetry?.cancel();
+    _sessionRestoreRetry = null;
     _restoringSession = true;
+    _activeSessionRestoreGeneration = generation;
+    _activeSessionRestoreUid = uid;
     try {
       final leagueIds = await repository.findActiveLeagueIds();
+      if (!_isCurrentSessionRestore(generation, uid)) return;
+      _arenaMembershipResolved = true;
       if (leagueIds.isEmpty) {
         _hasLeague = false;
+        _arenaHydrated = false;
         _setActiveLeagueId(null);
         _setActiveWeekId(null);
         await _cancelLeagueSubscriptions();
+        if (!_isCurrentSessionRestore(generation, uid)) return;
+        _sessionRestoreRetryAttempt = 0;
+        _errorMessage = null;
         return;
       }
       final preferred = _activeLeagueId;
-      final leagueId = preferred != null && leagueIds.contains(preferred)
-          ? preferred
-          : leagueIds.first;
-      _setActiveLeagueId(leagueId);
-      await _hydrateJoinedLeague(leagueId);
-      await _startLeagueSubscriptions(leagueId);
-      _hasLeague = true;
-      _errorMessage = null;
-    } on RepositoryException catch (error) {
-      _errorMessage = error.safeMessage;
+      final candidates = preferred != null && leagueIds.contains(preferred)
+          ? <String>[preferred, ...leagueIds.where((id) => id != preferred)]
+          : leagueIds;
+      RepositoryException? missingArena;
+      for (final leagueId in candidates) {
+        _setActiveLeagueId(leagueId);
+        // Membership is authoritative. Reserve the signed-in arena route
+        // before the slower Firestore hydration reads complete so a transient
+        // mobile network failure can never expose arena creation.
+        _hasLeague = true;
+        _arenaHydrated = false;
+        if (!_disposed) notifyListeners();
+        try {
+          await _hydrateJoinedLeague(leagueId);
+          if (!_isCurrentSessionRestore(generation, uid)) return;
+          await _startLeagueSubscriptions(leagueId);
+          if (!_isCurrentSessionRestore(generation, uid)) return;
+          _arenaHydrated = true;
+          _sessionRestoreRetryAttempt = 0;
+          _errorMessage = null;
+          return;
+        } on RepositoryException catch (error) {
+          if (error.code != 'not-found') rethrow;
+          missingArena = error;
+        }
+      }
+      throw missingArena ??
+          const RepositoryException(
+            'not-found',
+            'This arena is no longer available.',
+          );
+    } on RepositoryException {
+      if (!_isCurrentSessionRestore(generation, uid)) return;
+      _arenaHydrated = false;
+      _errorMessage = _hasLeague
+          ? 'Your arena is reconnecting. Your membership and draft are safe.'
+          : 'We’re reconnecting to your arena. Please keep this page open.';
+      _scheduleSessionRestoreRetry(generation: generation, uid: uid);
     } on Object {
-      _errorMessage =
-          'Your arena could not be restored. You can still join with a '
-          'current invite code.';
+      if (!_isCurrentSessionRestore(generation, uid)) return;
+      _arenaHydrated = false;
+      _errorMessage = _hasLeague
+          ? 'Your arena is reconnecting. Your membership and draft are safe.'
+          : 'We’re reconnecting to your arena. Please keep this page open.';
+      _scheduleSessionRestoreRetry(generation: generation, uid: uid);
     } finally {
       _restoringSession = false;
-      notifyListeners();
+      _activeSessionRestoreGeneration = -1;
+      _activeSessionRestoreUid = null;
+      if (_isCurrentSessionRestore(generation, uid)) notifyListeners();
+      if (_sessionRestoreQueued && !_disposed) {
+        _sessionRestoreQueued = false;
+        unawaited(_resumeExistingSession());
+      }
     }
+  }
+
+  Future<void> retryArenaRestore() async {
+    if (!_signedIn || _disposed) return;
+    _sessionRestoreRetry?.cancel();
+    _sessionRestoreRetry = null;
+    await _resumeExistingSession();
+  }
+
+  bool _isCurrentSessionRestore(int generation, String uid) =>
+      !_disposed &&
+      _signedIn &&
+      generation == _sessionRestoreGeneration &&
+      uid == _currentUserId &&
+      _auth?.currentUser?.uid == uid;
+
+  void _scheduleSessionRestoreRetry({
+    required int generation,
+    required String uid,
+  }) {
+    if (!_isCurrentSessionRestore(generation, uid) ||
+        _sessionRestoreRetry != null) {
+      return;
+    }
+    const retryDelays = <Duration>[
+      Duration(seconds: 2),
+      Duration(seconds: 5),
+      Duration(seconds: 10),
+      Duration(seconds: 30),
+      Duration(minutes: 1),
+    ];
+    final retryIndex = _sessionRestoreRetryAttempt < retryDelays.length
+        ? _sessionRestoreRetryAttempt
+        : retryDelays.length - 1;
+    final delay = retryDelays[retryIndex];
+    _sessionRestoreRetryAttempt += 1;
+    _sessionRestoreRetry = Timer(delay, () {
+      _sessionRestoreRetry = null;
+      if (_isCurrentSessionRestore(generation, uid)) {
+        unawaited(
+          _resumeExistingSession(
+            expectedGeneration: generation,
+            expectedUid: uid,
+          ),
+        );
+      }
+    });
+  }
+
+  void _cancelSessionRestoreRetry() {
+    _sessionRestoreRetry?.cancel();
+    _sessionRestoreRetry = null;
+    _sessionRestoreRetryAttempt = 0;
   }
 
   Future<void> _startLeagueSubscriptions(String leagueId) async {
@@ -2021,23 +2230,43 @@ final class AppController extends ChangeNotifier {
       }
       notifyListeners();
     }, onError: _handleLiveStreamError);
-    _membersSubscription = repository.watchMembers(leagueId).listen((members) {
-      _members
-        ..clear()
-        ..addAll(members);
-      final current = members.where((member) => member.uid == _currentUserId);
-      if (current.isNotEmpty) {
-        _displayName = current.first.displayName;
-      }
-      _reconcileActiveWeekGamesSubscription();
-      if (canDraftSlate &&
-          !_slatePublished &&
-          _currentCatalogResultsById.isEmpty &&
-          !_catalogLoading) {
-        unawaited(loadCatalog());
-      }
-      notifyListeners();
-    }, onError: _handleLiveStreamError);
+    _membersSubscription = repository
+        .watchMembers(leagueId)
+        .listen(
+          (members) {
+            if (!_isActiveStandingsContext(
+              leagueId,
+              standingsContextGeneration,
+            )) {
+              return;
+            }
+            _members
+              ..clear()
+              ..addAll(members);
+            final current = members.where(
+              (member) => member.uid == _currentUserId,
+            );
+            if (current.isNotEmpty) {
+              _displayName = current.first.displayName;
+            }
+            _reconcileActiveWeekGamesSubscription();
+            if (canDraftSlate &&
+                !_slatePublished &&
+                _currentCatalogResultsById.isEmpty &&
+                !_catalogLoading) {
+              unawaited(loadCatalog());
+            }
+            notifyListeners();
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (_isActiveStandingsContext(
+              leagueId,
+              standingsContextGeneration,
+            )) {
+              _handleLiveStreamError(error, stackTrace);
+            }
+          },
+        );
     _standingsSubscription = repository.watchStandings(leagueId).listen((
       standings,
     ) {
@@ -2047,14 +2276,30 @@ final class AppController extends ChangeNotifier {
       _retainStandingsSnapshot(standings);
       notifyListeners();
     }, onError: _handleLiveStreamError);
-    _historySubscription = repository.watchFinalizedWeeks(leagueId).listen((
-      weeks,
-    ) {
-      _historyWeeks
-        ..clear()
-        ..addAll(weeks);
-      notifyListeners();
-    }, onError: _handleLiveStreamError);
+    _historySubscription = repository
+        .watchFinalizedWeeks(leagueId)
+        .listen(
+          (weeks) {
+            if (!_isActiveStandingsContext(
+              leagueId,
+              standingsContextGeneration,
+            )) {
+              return;
+            }
+            _historyWeeks
+              ..clear()
+              ..addAll(weeks);
+            notifyListeners();
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (_isActiveStandingsContext(
+              leagueId,
+              standingsContextGeneration,
+            )) {
+              _handleLiveStreamError(error, stackTrace);
+            }
+          },
+        );
     final weekId = _activeWeekId;
     if (weekId != null) {
       await _startWeekSubscriptions(leagueId, weekId);
@@ -2399,6 +2644,7 @@ final class AppController extends ChangeNotifier {
   }
 
   void _handleLiveStreamError(Object error, StackTrace stackTrace) {
+    if (_disposed) return;
     debugPrint('Live Firestore stream paused: ${error.runtimeType}');
     if (kDebugMode) debugPrintStack(stackTrace: stackTrace);
     _offline = true;
@@ -2451,83 +2697,81 @@ final class AppController extends ChangeNotifier {
   }
 
   Future<void> _hydrateJoinedLeague(String leagueId) async {
+    final repository = _repository;
+    if (repository == null) return;
     final standingsContextGeneration = _standingsContextGeneration;
-    final league = await _repository
-        ?.watchLeague(leagueId)
-        .first
-        .timeout(const Duration(seconds: 6));
+    final league = await repository
+        .getLeague(leagueId)
+        .timeout(const Duration(seconds: 12));
     if (!_isActiveStandingsContext(leagueId, standingsContextGeneration)) {
       return;
     }
-    if (league != null) {
-      _leagueName = league.name;
-      _leagueTimezone = league.timezone;
-      _pickerParticipatesInPicks = league.pickerParticipatesInPicks;
-      _pickLockPolicy = league.pickLockPolicy;
-      _applyStandingsFence(league);
+    if (league == null) {
+      throw const RepositoryException(
+        'not-found',
+        'This arena is no longer available.',
+      );
     }
-    _setActiveWeekId(league?.currentWeekId);
-    if (league?.currentPickerUid != null) {
-      _currentPickerId = league!.currentPickerUid!;
+    _leagueName = league.name;
+    _leagueTimezone = league.timezone;
+    _pickerParticipatesInPicks = league.pickerParticipatesInPicks;
+    _pickLockPolicy = league.pickLockPolicy;
+    _applyStandingsFence(league);
+    _setActiveWeekId(league.currentWeekId);
+    if (league.currentPickerUid != null) {
+      _currentPickerId = league.currentPickerUid!;
     }
-    await _hydrateMembersAndStandings(
-      leagueId,
-      standingsContextGeneration: standingsContextGeneration,
+    final weekId = league.currentWeekId;
+    final hydrated = await Future.wait<Object?>([
+      repository.getMembers(leagueId).timeout(const Duration(seconds: 12)),
+      if (weekId == null)
+        Future<WeekSummary?>.value()
+      else
+        repository
+            .getWeek(leagueId, weekId)
+            .timeout(const Duration(seconds: 12)),
+    ]);
+    if (!_isActiveStandingsContext(leagueId, standingsContextGeneration)) {
+      return;
+    }
+    final liveMembers = hydrated[0]! as List<LeagueMember>;
+    final currentMembers = liveMembers.where(
+      (member) => member.uid == _currentUserId && member.isActive,
     );
-    if (!_isActiveStandingsContext(leagueId, standingsContextGeneration)) {
-      return;
+    if (currentMembers.isEmpty) {
+      throw const RepositoryException(
+        'failed-precondition',
+        'Your arena membership is temporarily unavailable.',
+      );
     }
-    final weekId = _activeWeekId;
-    if (weekId != null) {
-      final liveWeek = await _repository
-          ?.watchWeek(leagueId, weekId)
-          .first
-          .timeout(const Duration(seconds: 6));
-      if (liveWeek != null) {
-        _weekLabel = liveWeek.label;
-        _weekStatus = liveWeek.status;
-        _weekSequentialNumber = liveWeek.sequentialNumber;
-        _eligibleMemberCount = liveWeek.eligibleMemberCount;
-        _weekPickerParticipatesInPicks = liveWeek.pickerParticipatesInPicks;
-        _weekLockPolicy = liveWeek.lockPolicy;
-        _weekFinalized = liveWeek.isFinalized;
-        _lastNextPickerUid = liveWeek.isFinalized
-            ? liveWeek.nextPickerUid
-            : null;
-        _slatePublished = liveWeek.status != 'draft';
-        _weekStartAt = liveWeek.startAt;
-        _weekEndAt = liveWeek.endAt;
-        if (liveWeek.status != 'draft') {
-          _catalogPresentation = liveWeek.catalogPresentation;
-        }
-        if (liveWeek.pickerUid.isNotEmpty) {
-          _currentPickerId = liveWeek.pickerUid;
-        }
-      }
-      if (liveWeek != null && _mayWatchActiveWeekGames) {
-        final liveGames = await _repository
-            ?.watchWeekGames(leagueId, weekId)
-            .first
-            .timeout(const Duration(seconds: 6));
-        if (liveGames != null) {
-          _selectedWeekGames
-            ..clear()
-            ..addAll(liveGames);
-          _serverDraftGameIds
-            ..clear()
-            ..addAll(liveGames.map((game) => game.id));
-          _serverDraftGamesById
-            ..clear()
-            ..addEntries(liveGames.map((game) => MapEntry(game.id, game)));
-          _catalogGameCacheById.addEntries(
-            liveGames.map((game) => MapEntry(game.id, game)),
-          );
-          _selectedDraftGamesById
-            ..clear()
-            ..addEntries(liveGames.map((game) => MapEntry(game.id, game)));
-          _draftSyncState = DraftSyncState.saved;
-        }
-      }
+    _members
+      ..clear()
+      ..addAll(liveMembers);
+    _displayName = currentMembers.first.displayName;
+    if (weekId == null) return;
+    final liveWeek = hydrated[1] as WeekSummary?;
+    if (liveWeek == null) {
+      throw const RepositoryException(
+        'failed-precondition',
+        'The current week is temporarily unavailable.',
+      );
+    }
+    _weekLabel = liveWeek.label;
+    _weekStatus = liveWeek.status;
+    _weekSequentialNumber = liveWeek.sequentialNumber;
+    _eligibleMemberCount = liveWeek.eligibleMemberCount;
+    _weekPickerParticipatesInPicks = liveWeek.pickerParticipatesInPicks;
+    _weekLockPolicy = liveWeek.lockPolicy;
+    _weekFinalized = liveWeek.isFinalized;
+    _lastNextPickerUid = liveWeek.isFinalized ? liveWeek.nextPickerUid : null;
+    _slatePublished = liveWeek.status != 'draft';
+    _weekStartAt = liveWeek.startAt;
+    _weekEndAt = liveWeek.endAt;
+    if (liveWeek.status != 'draft') {
+      _catalogPresentation = liveWeek.catalogPresentation;
+    }
+    if (liveWeek.pickerUid.isNotEmpty) {
+      _currentPickerId = liveWeek.pickerUid;
     }
   }
 
@@ -2540,7 +2784,7 @@ final class AppController extends ChangeNotifier {
     final liveMembers = await _repository
         ?.watchMembers(leagueId)
         .first
-        .timeout(const Duration(seconds: 6));
+        .timeout(const Duration(seconds: 12));
     if (!_isActiveStandingsContext(leagueId, contextGeneration)) return;
     if (liveMembers != null && liveMembers.isNotEmpty) {
       _members
@@ -2556,7 +2800,7 @@ final class AppController extends ChangeNotifier {
     final liveStandings = await _repository
         ?.watchStandings(leagueId)
         .first
-        .timeout(const Duration(seconds: 6));
+        .timeout(const Duration(seconds: 12));
     if (!_isActiveStandingsContext(leagueId, contextGeneration)) return;
     if (liveStandings != null) {
       _retainStandingsSnapshot(liveStandings);
@@ -2597,6 +2841,10 @@ final class AppController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    _sessionRestoreGeneration += 1;
+    _sessionRestoreQueued = false;
+    _cancelSessionRestoreRetry();
     unawaited(_authSubscription?.cancel());
     unawaited(_cancelLeagueSubscriptions());
     super.dispose();

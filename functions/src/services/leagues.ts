@@ -37,6 +37,20 @@ const DEFAULT_SETTINGS: LeagueSettings = {
   providerBySport: {},
 };
 
+export function withCbsProviderForNewLeague(
+  settings: Partial<LeagueSettings>,
+  cbsEnabled: boolean,
+): Partial<LeagueSettings> {
+  if (!cbsEnabled) return settings;
+  return {
+    ...settings,
+    providerBySport: {
+      ...(settings.providerBySport ?? {}),
+      NCAAF: "cbsSports",
+    },
+  };
+}
+
 export async function ensureProfile(
   user: AuthenticatedUser,
   input: {
@@ -104,6 +118,19 @@ export async function createLeagueRecord(input: {
   const created = await db.runTransaction(async (transaction) => {
     const existing = await transaction.get(leagueReference);
     if (existing.exists) return false;
+    const activeMemberships = await transaction.get(
+      db
+        .collectionGroup("members")
+        .where("uid", "==", input.user.uid)
+        .where("status", "==", "active")
+        .limit(1),
+    );
+    if (!activeMemberships.empty) {
+      throw new HttpsError(
+        "already-exists",
+        "You already belong to an active arena.",
+      );
+    }
     transaction.create(leagueReference, {
       name: input.name,
       slug,

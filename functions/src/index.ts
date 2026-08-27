@@ -44,6 +44,7 @@ import {
   rotateInvite,
   updateMember,
   updateSettings,
+  withCbsProviderForNewLeague,
 } from "./services/leagues.js";
 import {
   assertCbsCollegeFootballActiveIdentity,
@@ -143,12 +144,17 @@ export const createLeague = callable(
   async (input, request, requestId) => {
     const user = requireUser(request);
     await ensureProfile(user, {});
+    const cbsConfiguration = await readCbsCollegeFootballConfiguration();
+    const settings = withCbsProviderForNewLeague(
+      definedSettings(input.settings),
+      cbsConfiguration.enabled,
+    );
     return createLeagueRecord({
       user,
       requestId,
       name: input.name,
       timezone: input.timezone,
-      settings: definedSettings(input.settings),
+      settings,
     });
   },
   {secrets: [INVITE_CODE_PEPPER]},

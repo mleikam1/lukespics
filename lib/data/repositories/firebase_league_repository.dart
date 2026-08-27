@@ -49,7 +49,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
           .collectionGroup('members')
           .where('uid', isEqualTo: uid)
           .where('status', isEqualTo: 'active')
-          .get();
+          .get(const GetOptions(source: Source.server));
       final joinedAtByLeagueId = <String, DateTime?>{};
       for (final membership in memberships.docs) {
         final leagueId = membership.reference.parent.parent?.id;
@@ -86,8 +86,63 @@ final class FirebaseLeagueRepository implements LeagueRepository {
     } on FirebaseException catch (error) {
       throw RepositoryException(
         error.code,
-        'Your arena memberships could not be restored. You can still join '
-        'with a current invite code.',
+        'We’re reconnecting to your arena. Please keep this page open.',
+      );
+    }
+  }
+
+  @override
+  Future<LeagueSummary?> getLeague(String leagueId) async {
+    try {
+      final snapshot = await _firestore
+          .collection('leagues')
+          .doc(leagueId)
+          .get(const GetOptions(source: Source.server));
+      final data = snapshot.data();
+      return data == null ? null : parseLeagueSummary(snapshot.id, data);
+    } on FirebaseException catch (error) {
+      throw RepositoryException(
+        error.code,
+        'We’re reconnecting to your arena. Please keep this page open.',
+      );
+    }
+  }
+
+  @override
+  Future<WeekSummary?> getWeek(String leagueId, String weekId) async {
+    try {
+      final snapshot = await _firestore
+          .collection('leagues')
+          .doc(leagueId)
+          .collection('weeks')
+          .doc(weekId)
+          .get(const GetOptions(source: Source.server));
+      final data = snapshot.data();
+      return data == null ? null : parseWeekSummary(snapshot.id, data);
+    } on FirebaseException catch (error) {
+      throw RepositoryException(
+        error.code,
+        'We’re reconnecting to your arena. Please keep this page open.',
+      );
+    }
+  }
+
+  @override
+  Future<List<LeagueMember>> getMembers(String leagueId) async {
+    try {
+      final snapshot = await _firestore
+          .collection('leagues')
+          .doc(leagueId)
+          .collection('members')
+          .orderBy('rotationOrder')
+          .get(const GetOptions(source: Source.server));
+      return snapshot.docs
+          .map((document) => _memberFromJson(document.id, document.data()))
+          .toList(growable: false);
+    } on FirebaseException catch (error) {
+      throw RepositoryException(
+        error.code,
+        'We’re reconnecting to your arena. Please keep this page open.',
       );
     }
   }
