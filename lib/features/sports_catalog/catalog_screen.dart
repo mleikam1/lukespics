@@ -1537,19 +1537,29 @@ class _CatalogGameCard extends StatelessWidget {
           ),
           child: InkWell(
             onTap: enabled ? onChanged : null,
+            excludeFromSemantics: !enabled,
             borderRadius: BorderRadius.circular(20),
             child: Padding(
               padding: const EdgeInsets.all(17),
               child: Row(
                 children: [
-                  Checkbox(
-                    key: Key('catalog-checkbox-${game.id}'),
-                    value: selected,
-                    onChanged: enabled ? (_) => onChanged() : null,
-                    semanticLabel:
-                        '${selected ? 'Remove' : 'Include'} '
-                        '${game.awayTeam.name} at ${game.homeTeam.name}',
-                  ),
+                  if (onConfirmKickoff != null)
+                    ExcludeSemantics(
+                      child: Checkbox(
+                        key: Key('catalog-checkbox-${game.id}'),
+                        value: selected,
+                        onChanged: null,
+                      ),
+                    )
+                  else
+                    Checkbox(
+                      key: Key('catalog-checkbox-${game.id}'),
+                      value: selected,
+                      onChanged: enabled ? (_) => onChanged() : null,
+                      semanticLabel:
+                          '${selected ? 'Remove' : 'Include'} '
+                          '${game.awayTeam.name} at ${game.homeTeam.name}',
+                    ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Column(

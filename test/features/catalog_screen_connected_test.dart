@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -913,6 +914,28 @@ void main() {
         tester.widget<OutlinedButton>(staleTbdKickoff).onPressed,
         isNotNull,
       );
+      final staleTbdKickoffSemantics = tester.getSemantics(staleTbdKickoff);
+      expect(
+        staleTbdKickoffSemantics.flagsCollection.isEnabled,
+        ui.Tristate.isTrue,
+      );
+      expect(
+        staleTbdKickoffSemantics.getSemanticsData().hasAction(
+          ui.SemanticsAction.tap,
+        ),
+        isTrue,
+      );
+      for (
+        var ancestor = staleTbdKickoffSemantics.parent;
+        ancestor != null;
+        ancestor = ancestor.parent
+      ) {
+        expect(
+          ancestor.flagsCollection.isEnabled,
+          isNot(ui.Tristate.isFalse),
+          reason: ancestor.toStringDeep(),
+        );
+      }
       await tester.ensureVisible(staleTbdKickoff);
       await tester.tap(staleTbdKickoff);
       await tester.pumpAndSettle();
