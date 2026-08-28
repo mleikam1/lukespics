@@ -70,11 +70,12 @@ acceptance.
 
 ## Current short-invite verification matrix — 2026-08-28
 
-These results were recorded on the short-code release candidate, which retains
-the CBS, completed-entry-lock, and remembered-session behavior already in
-production. The public source/build scans were rerun after the release build;
-none of these local, fixture, cache-backed, or emulator results is a deployment
-or live-provider claim.
+These results were recorded on deployed short-code implementation commit
+`cd9447b6c5cae74f8514604a32aa9d8c21d62b56`, which retains the CBS,
+completed-entry-lock, and remembered-session behavior already in production.
+The public source/build scans were rerun after the release build. These local,
+fixture, cache-backed, and emulator results validate the artifact but remain
+separate from the production observations recorded below.
 
 | Command | Current result | Evidence boundary |
 |---|---|---|
@@ -96,33 +97,33 @@ or live-provider claim.
 | `npm audit --prefix functions` | Review — 8 findings | Full graph has 4 high and 4 moderate dev-tooling findings |
 | `flutter pub outdated` | Inventory | 25 locked packages can upgrade; 2 direct constraints trail otherwise resolvable versions |
 
-## Production release verification — 2026-08-27
+## Production release verification — 2026-08-28
 
 - The exact Firebase safety check passed for `lukes-picks` project number
   `271408880910`; all 34 deployed Functions report `ACTIVE` on Node 22.
-- Code commit `9ed851575918ff5f499cafc93915e4edff077e37` passed both jobs in
-  <https://github.com/mleikam1/lukespics/actions/runs/33134634949>.
-- Firestore Rules, all five `READY` indexes, both invitation Functions, the
-  fixed preview, and exact preview-to-live promotion completed through the
-  guarded release wrapper.
-- Preview and live reference finalized Hosting version `4b9185befb59b39b`.
+- Code commit `cd9447b6c5cae74f8514604a32aa9d8c21d62b56` passed both jobs in
+  <https://github.com/mleikam1/lukespics/actions/runs/33173449230>.
+- The versioned short-code Functions were deployed first, followed by the fixed
+  preview and exact preview-to-live promotion through the guarded wrapper.
+- Preview and live reference finalized Hosting version `b1634e6f92103b26`.
   Live returns HTTP 200 and its
   `main.dart.js` SHA-256 is
-  `c931e4b2abb6f09462074db5714371df583acaf6ace758ad753f7d227343cd44`,
+  `bca6031b729c7bddf9a37eb426e68f30fa6c27debce3859bb6fbfc4779a2729f`,
   exactly matching the locally scanned release build and preview.
 - The post-cooldown Scheduler execution made one outbound request, received
   HTTP 200, and the latest subsequent automatic refresh left the parser-1.2.0
-  cache at `2026-08-28T01:24:19.701Z`: 99 games, 99 scheduled UTC kickoffs, 99
+  cache at `2026-08-28T12:06:18.777Z`: 99 games, 99 scheduled UTC kickoffs, 99
   effective lock instants, and zero TBD games.
-- A read-only production admin check after promotion found six arenas and one
-  completed entry; that entry's published games all retain scheduled kickoffs.
-- On the immediately preceding live artifact, a fresh production browser tab
-  restored the existing signed-in session
-  without a Google prompt. The connected Week 1 entry showed scheduled local
-  times, `Saved and locked`, and disabled pick buttons. Verification did not
-  mutate a slate, entry, or pick. The post-invite release received exact asset,
-  Function, index, cache, and entry-state verification; the locked local Mac
-  prevented a second authenticated visual pass after promotion.
+- A read-only production admin check after promotion scanned six league records
+  and six weeks. The one completed entry has a valid `submittedAt`, matching
+  saved and required pick counts, and no consistency mismatch. All five games
+  in that completed-entry week have `scheduledAtUtc`, `effectiveLockAtUtc`, and
+  `timeTbd != true`.
+- On the current live artifact, a fresh browser session and a subsequent reload
+  both restored directly to `/dashboard` without a Google prompt. The
+  emulator-backed exact-tree browser suite separately displayed local game
+  times, `Saved and locked`, and disabled pick buttons. Production verification
+  did not create or change an invitation, slate, entry, or pick.
 
 ## Current dependency audit snapshot — 2026-08-25
 

@@ -1,8 +1,9 @@
 # Release checklist
 
 This checklist records the arena-invitation and CBS/entry-lock production
-release plus the independent SportsDataIO NFL/MLB activation boundary as of
-2026-08-27. Checked items state their evidence boundary explicitly.
+release, the 2026-08-28 short-code follow-up, and the independent SportsDataIO
+NFL/MLB activation boundary. Checked items state their evidence boundary
+explicitly.
 
 ## Current release boundary
 
@@ -28,14 +29,17 @@ Production must stay `manual` while any unchecked activation item remains.
 ## Arena invitation release — 2026-08-27
 
 - [x] Only an arena owner can issue or revoke a modern invitation.
-- [x] Raw 144-bit bearer codes are returned only in the owner's issuance
-      response, including an idempotent retry, never stored or logged, and are
-      represented server-side only by HMAC lookup and bounded metadata.
+- [x] Raw bearer codes are returned only in the owner's issuance response,
+      including an idempotent retry, never stored or logged, and are represented
+      server-side only by HMAC lookup and bounded metadata. This release used
+      144-bit version-1 codes; the follow-up below adds version-2 short codes
+      without weakening storage privacy or invalidating version 1.
 - [x] The first modern invitation atomically retires the original legacy code;
       later modern links remain independent and expire after 14 days or 50
       successful joins by default.
-- [x] Join is explicit, case-sensitive, idempotent for the same member, and
-      rejects a second active-arena membership.
+- [x] Join is explicit, idempotent for the same member, and rejects a second
+      active-arena membership. Version-1 codes remain exact-case; version-2
+      short codes accept lowercase entry through uppercase canonicalization.
 - [x] Web links keep the bearer token in a fragment, survive authentication and
       arena restoration, prefill the form, and scrub the fragment after join.
 - [x] The platform share sheet exposes Messages without storing phone numbers
@@ -51,8 +55,9 @@ Production must stay `manual` while any unchecked activation item remains.
       private cache and completed-entry state were reverified without changing
       a slate or pick.
 - [ ] The authenticated live owner invitation UI has been visually rerun after
-      promotion. The local Mac was locked; the immediately preceding live
-      artifact remains the latest direct session/time/locked-entry browser proof.
+      promotion. The local Mac was locked; the earlier
+      `0adbfa2f2e38a95e310551a58e2e383906f1f8db` artifact remains the latest
+      direct production time/locked-entry UI proof.
 
 ## Short invitation-code follow-up — 2026-08-28
 
@@ -75,10 +80,19 @@ Production must stay `manual` while any unchecked activation item remains.
       production dependency audit pass; the latter reports zero production
       vulnerabilities. The full development graph retains the recorded four
       high and four moderate toolchain findings.
-- [ ] The exact short-code implementation commit has passed both CI jobs.
-- [ ] The guarded Functions-first, preview, and exact preview-to-live release has
-      completed, with live asset identity and read-only production state
-      reverified afterward.
+- [x] Implementation commit
+      `cd9447b6c5cae74f8514604a32aa9d8c21d62b56` passed both CI jobs in run
+      `33173449230`.
+- [x] The guarded Functions-first, preview, and exact preview-to-live release
+      completed. All 34 Functions are `ACTIVE` on Node 22; preview and live use
+      Hosting version `b1634e6f92103b26`; and the live, preview, and local
+      `main.dart.js` SHA-256 is
+      `bca6031b729c7bddf9a37eb426e68f30fa6c27debce3859bb6fbfc4779a2729f`.
+      Read-only production verification retained parser 1.2.0, 99 scheduled
+      kickoffs, 99 effective locks, zero TBD games, and one fully consistent
+      completed entry. A fresh browser session and reload both restored directly
+      to `/dashboard` without a Google prompt. No invite, slate, entry, or pick
+      was created or changed.
 
 ## CBS additive release boundary — 2026-08-27
 

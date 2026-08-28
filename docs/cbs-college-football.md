@@ -229,14 +229,14 @@ normalized summaries, and never persist HTML.
 
 ## Deployment and rollback
 
-### Verified production release — 2026-08-27
+### Verified production release — 2026-08-28
 
-The guarded release deployed code commit
-`9ed851575918ff5f499cafc93915e4edff077e37` to Firebase project `lukes-picks`
-(`271408880910`). Rules and indexes deployed, 34/34 Functions are `ACTIVE` on
-Node 22, and Hosting version `4b9185befb59b39b` is live at
+The guarded short-code follow-up deployed implementation commit
+`cd9447b6c5cae74f8514604a32aa9d8c21d62b56` to Firebase project `lukes-picks`
+(`271408880910`). All 34 Functions are `ACTIVE` on Node 22, and Hosting version
+`b1634e6f92103b26` is live at
 <https://lukes-picks.web.app>. The live `main.dart.js` SHA-256 is
-`c931e4b2abb6f09462074db5714371df583acaf6ace758ad753f7d227343cd44`.
+`bca6031b729c7bddf9a37eb426e68f30fa6c27debce3859bb6fbfc4779a2729f`.
 
 The private production config is enabled for FBS 2026 regular-season Week 1
 with automatic refresh, parser 1.2.0, a 120-minute per-page cooldown, and a
@@ -244,19 +244,22 @@ with automatic refresh, parser 1.2.0, a 120-minute per-page cooldown, and a
 made exactly one outbound request and received HTTP 200. At
 `2026-08-27T21:24:28.753Z`, the normalized cache contained 99 games, 99
 confirmed UTC kickoffs, 99 effective lock instants, and zero TBD games. The
-latest automatic refresh succeeded at `2026-08-28T01:24:19.701Z` with the same
-99 scheduled games and zero TBD games. On the immediately preceding live
-artifact, a fresh production tab restored the signed-in session without a
-Google prompt and showed the completed Week 1 entry with local times and
-disabled, saved-and-locked choices. The invitation promotion preserved the
-private cache and completed-entry state; verification did not change a slate or
-pick.
+latest automatic refresh succeeded at `2026-08-28T12:06:18.777Z` with the same
+99 scheduled games and zero TBD games. On the earlier
+`0adbfa2f2e38a95e310551a58e2e383906f1f8db` live artifact, a fresh production
+tab restored the signed-in session without a Google prompt and showed the
+completed Week 1 entry with local times and disabled, saved-and-locked choices.
+On the current artifact, a fresh session and reload again restored directly to
+`/dashboard`; a read-only private check
+found one completed entry with matching saved/required counts and all five
+published games fully timed and non-TBD. The short-code promotion preserved the
+private cache and completed-entry state; verification did not create an invite
+or change a slate, entry, or pick.
 
-This establishes the current live schedule/cache and completed-entry state. The
-immediately preceding artifact separately establishes browser-observed session
-restoration, displayed times, and entry locking; those UI observations were not
-rerun after the invitation promotion. Neither establishes a real completed CBS
-game through result grading and standings.
+This establishes the current live schedule/cache, session-restoration, and
+completed-entry state. The emulator-backed exact-tree browser suite separately
+establishes displayed times and permanent entry locking. Neither establishes a
+real completed CBS game through result grading and standings.
 
 Confirm Blaze billing, Cloud Scheduler API availability, scheduler service
 agent permissions, and the exact authorized Firebase project before deploying.
