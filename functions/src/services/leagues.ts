@@ -23,6 +23,7 @@ import {
   sanitizedIp,
   sha256,
   slugify,
+  stableJson,
 } from "../utils.js";
 
 const DEFAULT_SETTINGS: LeagueSettings = {
@@ -36,6 +37,36 @@ const DEFAULT_SETTINGS: LeagueSettings = {
   providerName: "manual",
   providerBySport: {},
 };
+
+export const DEFAULT_ARENA_INVITE_LIFETIME_MS = 14 * 24 * 60 * 60_000;
+export const DEFAULT_ARENA_INVITE_MAX_USES = 50;
+const REVOKED_INVITE_RETENTION_MS = 90 * 24 * 60 * 60_000;
+
+type ArenaInviteIdentity = {
+  leagueId: string;
+  actorUid: string;
+  requestId: string;
+};
+
+export function arenaInviteCodeForRequest(
+  input: ArenaInviteIdentity,
+  pepper: string,
+): string {
+  const digest = opaqueHash(stableJson({
+    purpose: "arena-invite-code",
+    version: 1,
+    ...input,
+  }), pepper);
+  return Buffer.from(digest.slice(0, 36), "hex").toString("base64url");
+}
+
+export function arenaInviteIdForRequest(input: ArenaInviteIdentity): string {
+  return `invite-${sha256({
+    purpose: "arena-invite-id",
+    version: 1,
+    ...input,
+  }).slice(0, 32)}`;
+}
 
 export function withCbsProviderForNewLeague(
   settings: Partial<LeagueSettings>,
@@ -89,6 +120,24 @@ function inviteReferences(codeHash: string, leagueId: string): {
       .doc(leagueId)
       .collection("private")
       .doc("invite"),
+  };
+}
+
+function independentInviteReferences(input: {
+  codeHash: string;
+  leagueId: string;
+  inviteId: string;
+}): {
+  mapping: DocumentReference;
+  metadata: DocumentReference;
+} {
+  return {
+    mapping: db.collection("joinCodeMappings").doc(input.codeHash),
+    metadata: db
+      .collection("leagues")
+      .doc(input.leagueId)
+      .collection("privateInvites")
+      .doc(input.inviteId),
   };
 }
 
@@ -265,8 +314,8 @@ export async function joinByInvite(input: {
     const expiresAt = mapping?.expiresAt;
     if (
       !mappingSnapshot.exists ||
-      mapping?.active !== true ||
-      (expiresAt instanceof Timestamp && expiresAt.toMillis() <= Date.now())
+      typeof mapping?.leagueId !== "string" ||
+      mapping.leagueId.length === 0
     ) {
       throw new HttpsError("not-found", "Invite code is invalid or expired.");
     }
@@ -274,21 +323,37 @@ export async function joinByInvite(input: {
       typeof mapping.useCount === "number" ? mapping.useCount : 0;
     const maxUses =
       typeof mapping.maxUses === "number" ? mapping.maxUses : null;
-    if (maxUses !== null && useCount >= maxUses) {
-      throw new HttpsError("not-found", "Invite code is invalid or expired.");
-    }
-    const leagueId = String(mapping.leagueId);
+    const leagueId = mapping.leagueId;
     const leagueReference = db.collection("leagues").doc(leagueId);
+    const inviteId =
+      typeof mapping.inviteId === "string" ? mapping.inviteId : null;
+    const inviteCounterReference = inviteId === null
+      ? leagueReference.collection("private").doc("invite")
+      : leagueReference.collection("privateInvites").doc(inviteId);
     const memberReference = leagueReference
       .collection("members")
       .doc(input.user.uid);
-    const [leagueSnapshot, memberSnapshot, orderedMembers] = await Promise.all([
+    const [
+      leagueSnapshot,
+      memberSnapshot,
+      orderedMembers,
+      inviteCounterSnapshot,
+      activeMemberships,
+    ] = await Promise.all([
       transaction.get(leagueReference),
       transaction.get(memberReference),
       transaction.get(
         leagueReference
           .collection("members")
           .orderBy("rotationOrder", "desc")
+          .limit(1),
+      ),
+      transaction.get(inviteCounterReference),
+      transaction.get(
+        db
+          .collectionGroup("members")
+          .where("uid", "==", input.user.uid)
+          .where("status", "==", "active")
           .limit(1),
       ),
     ]);
@@ -298,6 +363,33 @@ export async function joinByInvite(input: {
     }
     if (memberSnapshot.data()?.status === "active") {
       return {leagueId, newlyJoined: false};
+    }
+    const inviteCounter = inviteCounterSnapshot.data();
+    const counterHash = inviteId === null
+      ? inviteCounter?.inviteCodeHash
+      : inviteCounter?.codeHash;
+    const counterExpiresAt = inviteCounter?.expiresAt;
+    if (
+      !inviteCounterSnapshot.exists ||
+      inviteCounter?.active !== true ||
+      counterHash !== codeHash ||
+      (counterExpiresAt instanceof Timestamp &&
+        counterExpiresAt.toMillis() <= Date.now())
+    ) {
+      throw new HttpsError("not-found", "Invite code is invalid or expired.");
+    }
+    if (
+      mapping.active !== true ||
+      (expiresAt instanceof Timestamp && expiresAt.toMillis() <= Date.now()) ||
+      (maxUses !== null && useCount >= maxUses)
+    ) {
+      throw new HttpsError("not-found", "Invite code is invalid or expired.");
+    }
+    if (!activeMemberships.empty) {
+      throw new HttpsError(
+        "already-exists",
+        "You already belong to an active arena.",
+      );
     }
 
     let eligibleFromWeekId: string | null = null;
@@ -334,13 +426,10 @@ export async function joinByInvite(input: {
       useCount: useCount + 1,
       lastUsedAt: FieldValue.serverTimestamp(),
     });
-    transaction.update(
-      leagueReference.collection("private").doc("invite"),
-      {
-        useCount: useCount + 1,
-        lastUsedAt: FieldValue.serverTimestamp(),
-      },
-    );
+    transaction.update(inviteCounterReference, {
+      useCount: useCount + 1,
+      lastUsedAt: FieldValue.serverTimestamp(),
+    });
     writeAuditInTransaction(transaction, {
       leagueId,
       eventType: "member_joined",
@@ -394,7 +483,7 @@ export async function rotateInvite(input: {
   expiresAt: Date | null;
   maxUses: number | null;
 }): Promise<{inviteCode: string}> {
-  await requireAdmin(input.leagueId, input.actorUid);
+  await requireOwner(input.leagueId, input.actorUid);
   const code = createInviteCode();
   const codeHash = opaqueHash(code, getInvitePepper());
   const references = inviteReferences(codeHash, input.leagueId);
@@ -444,6 +533,253 @@ export async function rotateInvite(input: {
     });
   });
   return {inviteCode: code};
+}
+
+export async function issueArenaInviteRecord(input: {
+  leagueId: string;
+  actorUid: string;
+  requestId: string;
+  expiresAt?: Date;
+  maxUses: number;
+}): Promise<{
+  inviteId: string;
+  inviteCode: string;
+  expiresAt: string;
+  maxUses: number;
+}> {
+  await requireOwner(input.leagueId, input.actorUid);
+  const pepper = getInvitePepper();
+  const identity = {
+    leagueId: input.leagueId,
+    actorUid: input.actorUid,
+    requestId: input.requestId,
+  };
+  const inviteId = arenaInviteIdForRequest(identity);
+  const inviteCode = arenaInviteCodeForRequest(identity, pepper);
+  const codeHash = opaqueHash(inviteCode, pepper);
+  const references = independentInviteReferences({
+    codeHash,
+    leagueId: input.leagueId,
+    inviteId,
+  });
+  const requestedExpiresAt = input.expiresAt;
+  const legacyConfigReference = db
+    .collection("leagues")
+    .doc(input.leagueId)
+    .collection("private")
+    .doc("invite");
+
+  const result = await db.runTransaction(async (transaction) => {
+    const [metadataSnapshot, mappingSnapshot, legacyConfigSnapshot] =
+      await Promise.all([
+        transaction.get(references.metadata),
+        transaction.get(references.mapping),
+        transaction.get(legacyConfigReference),
+      ]);
+    const legacyConfig = legacyConfigSnapshot.data();
+    const legacyCodeHash = legacyConfig?.inviteCodeHash;
+    const legacyMappingReference = typeof legacyCodeHash === "string"
+      ? db.collection("joinCodeMappings").doc(legacyCodeHash)
+      : null;
+    const legacyMappingSnapshot = legacyMappingReference === null
+      ? null
+      : await transaction.get(legacyMappingReference);
+    const retireLegacyInvite = (): void => {
+      if (legacyConfig?.active !== true) return;
+      if (
+        legacyMappingReference === null ||
+        legacyMappingSnapshot === null ||
+        !legacyMappingSnapshot.exists ||
+        legacyMappingSnapshot.data()?.leagueId !== input.leagueId
+      ) {
+        throw new HttpsError(
+          "failed-precondition",
+          "The existing arena invite could not be retired safely.",
+        );
+      }
+      const retirement = {
+        active: false,
+        retiredAt: FieldValue.serverTimestamp(),
+        retiredBy: input.actorUid,
+        retiredRequestId: input.requestId,
+      };
+      transaction.update(legacyConfigReference, retirement);
+      transaction.update(legacyMappingReference, retirement);
+    };
+    const metadata = metadataSnapshot.data();
+    if (metadata !== undefined) {
+      const storedExpiresAt = metadata.expiresAt;
+      if (
+        metadata.inviteId !== inviteId ||
+        metadata.codeHash !== codeHash ||
+        metadata.createdBy !== input.actorUid ||
+        metadata.issuanceRequestId !== input.requestId ||
+        !(storedExpiresAt instanceof Timestamp) ||
+        metadata.maxUses !== input.maxUses ||
+        !mappingSnapshot.exists ||
+        mappingSnapshot.data()?.leagueId !== input.leagueId ||
+        mappingSnapshot.data()?.inviteId !== inviteId
+      ) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This invite request conflicts with an existing invite.",
+        );
+      }
+      if (
+        requestedExpiresAt !== undefined &&
+        storedExpiresAt.toMillis() !== requestedExpiresAt.valueOf()
+      ) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This invite request conflicts with an existing invite.",
+        );
+      }
+      retireLegacyInvite();
+      return {
+        expiresAt: storedExpiresAt.toDate(),
+        maxUses: Number(metadata.maxUses),
+      };
+    }
+
+    if (mappingSnapshot.exists) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This invite request conflicts with an existing invite.",
+      );
+    }
+    const expiresAt = requestedExpiresAt ??
+      new Date(Date.now() + DEFAULT_ARENA_INVITE_LIFETIME_MS);
+    if (expiresAt.valueOf() <= Date.now()) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Invite expiration must be in the future.",
+      );
+    }
+    const expiresAtTimestamp = Timestamp.fromDate(expiresAt);
+    retireLegacyInvite();
+    transaction.create(references.metadata, {
+      inviteId,
+      codeHash,
+      inviteKind: "independent",
+      active: true,
+      expiresAt: expiresAtTimestamp,
+      maxUses: input.maxUses,
+      useCount: 0,
+      createdAt: FieldValue.serverTimestamp(),
+      createdBy: input.actorUid,
+      issuanceRequestId: input.requestId,
+    });
+    transaction.create(references.mapping, {
+      leagueId: input.leagueId,
+      inviteId,
+      inviteKind: "independent",
+      active: true,
+      expiresAt: expiresAtTimestamp,
+      maxUses: input.maxUses,
+      useCount: 0,
+      createdAt: FieldValue.serverTimestamp(),
+      createdBy: input.actorUid,
+    });
+    writeAuditInTransaction(transaction, {
+      leagueId: input.leagueId,
+      eventType: "invite_issued",
+      actorUid: input.actorUid,
+      target: `privateInvites/${inviteId}`,
+      requestId: input.requestId,
+      after: {
+        inviteId,
+        expiresAt: expiresAt.toISOString(),
+        maxUses: input.maxUses,
+        legacyInviteRetired: legacyConfig?.active === true,
+      },
+    });
+    return {expiresAt, maxUses: input.maxUses};
+  });
+
+  return {
+    inviteId,
+    inviteCode,
+    expiresAt: result.expiresAt.toISOString(),
+    maxUses: result.maxUses,
+  };
+}
+
+export async function revokeArenaInviteRecord(input: {
+  leagueId: string;
+  actorUid: string;
+  requestId: string;
+  inviteId: string;
+}): Promise<{inviteId: string; revoked: true}> {
+  await requireOwner(input.leagueId, input.actorUid);
+  const metadataReference = db
+    .collection("leagues")
+    .doc(input.leagueId)
+    .collection("privateInvites")
+    .doc(input.inviteId);
+  await db.runTransaction(async (transaction) => {
+    const metadataSnapshot = await transaction.get(metadataReference);
+    const metadata = metadataSnapshot.data();
+    if (!metadataSnapshot.exists || metadata?.inviteKind !== "independent") {
+      throw new HttpsError("not-found", "Invite not found.");
+    }
+    const codeHash = metadata.codeHash;
+    if (typeof codeHash !== "string") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Invite metadata is invalid.",
+      );
+    }
+    const mappingReference = db.collection("joinCodeMappings").doc(codeHash);
+    const mappingSnapshot = await transaction.get(mappingReference);
+    const mapping = mappingSnapshot.data();
+    if (metadata.active !== true) {
+      if (mappingSnapshot.exists && mapping?.active === true) {
+        transaction.update(mappingReference, {
+          active: false,
+          revokedAt: FieldValue.serverTimestamp(),
+          revokedBy: input.actorUid,
+          revokedRequestId: input.requestId,
+        });
+      }
+      return;
+    }
+    if (
+      !mappingSnapshot.exists ||
+      mapping?.leagueId !== input.leagueId ||
+      mapping.inviteId !== input.inviteId
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Invite metadata is invalid.",
+      );
+    }
+    const purgeAt = Timestamp.fromMillis(
+      Date.now() + REVOKED_INVITE_RETENTION_MS,
+    );
+    transaction.update(metadataReference, {
+      active: false,
+      revokedAt: FieldValue.serverTimestamp(),
+      revokedBy: input.actorUid,
+      revokedRequestId: input.requestId,
+      purgeAt,
+    });
+    transaction.update(mappingReference, {
+      active: false,
+      revokedAt: FieldValue.serverTimestamp(),
+      revokedBy: input.actorUid,
+      revokedRequestId: input.requestId,
+      purgeAt,
+    });
+    writeAuditInTransaction(transaction, {
+      leagueId: input.leagueId,
+      eventType: "invite_revoked",
+      actorUid: input.actorUid,
+      target: `privateInvites/${input.inviteId}`,
+      requestId: input.requestId,
+      after: {inviteId: input.inviteId, active: false},
+    });
+  });
+  return {inviteId: input.inviteId, revoked: true};
 }
 
 export async function updateSettings(input: {

@@ -497,6 +497,39 @@ async function joinArena(user, inviteCode) {
   return joined;
 }
 
+async function joinArenaFromLink(user, inviteCode) {
+  await user.page.goto(
+    `${BASE_URL}/arena/join#invite=${encodeURIComponent(inviteCode)}`,
+    {waitUntil: "domcontentloaded"},
+  );
+  await enableFlutterSemantics(user.page);
+  await expectText(user.page, "Join an arena");
+  const inviteField = textbox(user.page, "Invite code");
+  // An unfocused Flutter semantics textbox can expose an empty proxy value
+  // even while the framework-rendered field visibly contains controller text.
+  // Activate the editable DOM element before asserting the deep-link prefill.
+  await inviteField.click();
+  await user.page.waitForTimeout(200);
+  assert.equal(
+    await inviteField.inputValue(),
+    inviteCode,
+    "The invite link did not prefill the exact case-sensitive code.",
+  );
+  const joinResponsePromise = callableResponse(
+    user.page,
+    "joinLeagueByCode",
+  );
+  await button(user.page, "Join arena").click();
+  const joined = await parseCallable(await joinResponsePromise);
+  await expectDashboard(user.page);
+  assert.equal(
+    new URL(user.page.url()).hash,
+    "",
+    "The successful join did not scrub the invite fragment.",
+  );
+  return joined;
+}
+
 async function signOutSignInAndRestore(user) {
   const originalUid = user.uid;
   await navigate(user.page, "Settings", "Settings");
@@ -550,10 +583,20 @@ async function clickPick(page, teamName) {
     })
     .first();
   await choice.waitFor({state: "attached"});
-  const [response] = await Promise.all([
-    callableResponse(page, "submitOrConfirmEntry"),
-    choice.click({force: true}),
-  ]);
+  const responsePromise = callableResponse(page, "submitOrConfirmEntry");
+  try {
+    await choice.click({force: true});
+  } catch (error) {
+    // CanvasKit can briefly report stale semantics geometry after route
+    // animation, even though the rendered choice is visibly in the viewport.
+    // Dispatch the same DOM click action through the attached semantics node
+    // when Playwright rejects only that transient coordinate calculation.
+    if (!String(error).includes("Element is outside of the viewport")) {
+      throw error;
+    }
+    await choice.evaluate((element) => (element as HTMLElement).click());
+  }
+  const response = await responsePromise;
   const result = await parseCallable(response);
   assert.ok(result.savedPickCount >= 1);
   return result;
@@ -973,9 +1016,29 @@ async function run() {
       return {...league, ...week};
     });
 
+    const modernInvite = await step(
+      "owner creates a private invitation link",
+      async () => {
+        await navigate(owner.page, "Members", "Members and rotation");
+        const issueResponsePromise = callableResponse(
+          owner.page,
+          "issueArenaInvite",
+        );
+        await button(owner.page, "Create invite").click();
+        const issued = await parseCallable(await issueResponsePromise);
+        assert.match(issued.inviteCode, /^[A-Za-z0-9_-]{24}$/);
+        assert.equal(issued.maxUses, 50);
+        await expectText(owner.page, "Text or share invite");
+        return issued;
+      },
+    );
+
     await step("two members join and refresh restores membership", async () => {
-      const joinedA = await joinArena(memberA, arena.inviteCode);
-      const joinedB = await joinArena(memberB, arena.inviteCode);
+      const joinedA = await joinArenaFromLink(
+        memberA,
+        modernInvite.inviteCode,
+      );
+      const joinedB = await joinArena(memberB, modernInvite.inviteCode);
       assert.equal(joinedA.leagueId, arena.leagueId);
       assert.equal(joinedB.leagueId, arena.leagueId);
       await signOutSignInAndRestore(memberB);
@@ -1277,7 +1340,8 @@ async function run() {
 
     console.log(
       "\n[E2E] PASS connected browser lifecycle: 3 isolated users, " +
-        "create/join/MLB filters/cross-query draft retention/reload/review " +
+        "create/invite-link/join/MLB filters/cross-query draft retention/" +
+        "reload/review " +
         "removal/single-game publish/picks/privacy/lock/late rejection/" +
         "reveal/manual result/finalize/standings/rotation/next week/" +
         "picker participation.",

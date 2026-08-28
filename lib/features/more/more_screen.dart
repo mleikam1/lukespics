@@ -20,6 +20,8 @@ class MoreScreen extends ConsumerWidget {
           '/catalog',
         ),
       ('Week history', Icons.history_rounded, '/history'),
+      if (controller.canInviteMembers)
+        ('Invite people', Icons.group_add_rounded, '/members'),
       ('Members & rotation', Icons.groups_rounded, '/members'),
       if (controller.canAdmin)
         ('Commissioner review', Icons.rule_rounded, '/admin'),

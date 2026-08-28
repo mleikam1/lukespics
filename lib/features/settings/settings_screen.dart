@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/responsive/breakpoints.dart';
@@ -145,75 +144,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 8),
-                if (controller.inviteCode != null) ...[
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'CURRENT INVITE CODE',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: 1,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              SelectableText(
-                                controller.inviteCode!,
-                                style: Theme.of(context).textTheme.titleLarge,
-                              ),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Copy invite code',
-                          onPressed: () async {
-                            await Clipboard.setData(
-                              ClipboardData(text: controller.inviteCode!),
-                            );
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Invite code copied.'),
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.copy_rounded),
-                        ),
-                        IconButton(
-                          tooltip: 'Rotate invite code',
-                          onPressed: () async {
-                            final rotated = await controller.rotateInviteCode();
-                            if (!context.mounted) return;
-                            if (rotated) {
-                              _showSuccess(
-                                context,
-                                'Invite code rotated. The prior code is invalid.',
-                              );
-                            } else {
-                              _showFailure(
-                                context,
-                                controller,
-                                'The invite code could not be rotated.',
-                              );
-                            }
-                          },
-                          icon: const Icon(Icons.refresh_rounded),
-                        ),
-                      ],
-                    ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.group_add_rounded),
+                  title: const Text('Invite people'),
+                  subtitle: const Text(
+                    'Send a private arena link by Messages or another app.',
                   ),
-                  const SizedBox(height: 10),
-                ],
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => context.go('/members'),
+                ),
+                const SizedBox(height: 8),
                 _RuleSnapshot(
                   pickerParticipates:
                       controller.pickerParticipatesInCurrentWeek,

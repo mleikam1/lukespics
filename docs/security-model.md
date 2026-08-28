@@ -69,9 +69,22 @@ pick. Reveal documents are backend-written and member-readable after reveal.
 ## Callable functions
 
 Protected functions require Firebase Auth. Sensitive operations also require
-owner/commissioner membership. Join attempts use hashed lookup, input
-normalization, per-identity/IP-safe throttling where available, and generic
-failure messages. Provider refreshes use role checks and quota guards.
+owner/commissioner membership. Invite issuance and revocation are owner-only.
+Modern invite codes are deterministic 144-bit HMAC bearer values scoped to the
+arena, owner, and idempotency request; the raw code is returned to the owner but
+is never stored or logged. Modern links expire after 14 days or 50 successful
+joins by default, and the first modern issuance atomically retires the legacy
+singleton invite. Join attempts use hashed lookup, exact-case input
+normalization, per-user and privacy-safe network throttling, generic invalid or
+expired failures, and a server-enforced one-active-arena rule. Same-arena
+retries remain idempotent even after the final permitted use. Provider
+refreshes use role checks and quota guards.
+
+Shared web links put the bearer value in the URL fragment rather than the query
+string so Firebase Hosting requests and HTTP referrers do not receive it. The
+router preserves a validated fragment through sign-in and removes it after a
+successful join. Fragment values can remain in browser history, so analytics
+must continue to exclude URLs and invite values.
 
 App Check support is built in but hard enforcement must be staged after valid
 tokens are observed for each platform.

@@ -44,6 +44,14 @@ This document is authoritative for the MVP.
 
 ## Rotation and membership
 
+- Only the arena owner can create or disable invitation links. A modern link
+  expires after 14 days or 50 successful joins, whichever comes first.
+- Invitation links are private bearer credentials. New links may coexist so an
+  owner can invite several groups without breaking a link already sent; each
+  link can be disabled independently while its handle is available.
+- Opening an invitation while signed out preserves the exact case-sensitive
+  code through Google sign-in, but joining still requires an explicit
+  confirmation. A user can belong to only one active arena.
 - Rotation is explicitly ordered and skips inactive members.
 - New members append to the end and normally become eligible the next week if
   the current slate is already published.

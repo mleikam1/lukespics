@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/invites/arena_invite.dart';
 import '../data/demo/demo_repository.dart';
 import '../features/admin/admin_review_screen.dart';
 import '../features/auth/sign_in_screen.dart';
@@ -18,43 +19,55 @@ import '../features/standings/standings_screen.dart';
 import '../features/weekly_slate/slate_review_screen.dart';
 import 'responsive_shell.dart';
 
-GoRouter createAppRouter(
-  AppController controller, {
-  String initialLocation = '/',
-}) {
+GoRouter createAppRouter(AppController controller, {String? initialLocation}) {
   return GoRouter(
     initialLocation: initialLocation,
+    overridePlatformDefaultLocation: initialLocation != null,
     refreshListenable: controller,
     redirect: (context, state) {
       final location = state.matchedLocation;
+      final inviteCode = inviteCodeFromUri(state.uri);
       final isLegal = location.startsWith('/legal');
       final isSignIn = location == '/sign-in';
       final isArena = location.startsWith('/arena');
       final isRestoringArena = location == '/restoring-arena';
 
       if (!controller.signedIn && !isSignIn && !isLegal) {
-        return '/sign-in';
+        return _locationWithInvite('/sign-in', inviteCode);
       }
       if (controller.signedIn &&
           controller.restoringArena &&
           !isRestoringArena &&
           !isLegal) {
-        return '/restoring-arena';
+        return _locationWithInvite('/restoring-arena', inviteCode);
       }
       if (controller.signedIn &&
           !controller.restoringArena &&
           isRestoringArena) {
-        return controller.hasLeague ? '/dashboard' : '/arena';
+        return controller.hasLeague
+            ? '/dashboard'
+            : _locationWithInvite(
+                inviteCode == null ? '/arena' : '/arena/join',
+                inviteCode,
+              );
       }
       if (controller.signedIn && isSignIn) {
-        return controller.hasLeague ? '/dashboard' : '/arena';
+        return controller.hasLeague
+            ? '/dashboard'
+            : _locationWithInvite(
+                inviteCode == null ? '/arena' : '/arena/join',
+                inviteCode,
+              );
       }
       if (controller.signedIn &&
           !controller.hasLeague &&
           !isArena &&
           !isRestoringArena &&
           !isLegal) {
-        return '/arena';
+        return _locationWithInvite(
+          inviteCode == null ? '/arena' : '/arena/join',
+          inviteCode,
+        );
       }
       if (controller.signedIn && controller.hasLeague && isArena) {
         return '/dashboard';
@@ -71,8 +84,13 @@ GoRouter createAppRouter(
       }
       if (location == '/') {
         return controller.signedIn
-            ? (controller.hasLeague ? '/dashboard' : '/arena')
-            : '/sign-in';
+            ? (controller.hasLeague
+                  ? '/dashboard'
+                  : _locationWithInvite(
+                      inviteCode == null ? '/arena' : '/arena/join',
+                      inviteCode,
+                    ))
+            : _locationWithInvite('/sign-in', inviteCode);
       }
       return null;
     },
@@ -93,8 +111,10 @@ GoRouter createAppRouter(
           ),
           GoRoute(
             path: 'join',
-            builder: (context, state) =>
-                const ArenaGatewayScreen(initialMode: ArenaMode.join),
+            builder: (context, state) => ArenaGatewayScreen(
+              initialMode: ArenaMode.join,
+              initialInviteCode: inviteCodeFromUri(state.uri),
+            ),
           ),
         ],
       ),
@@ -169,6 +189,11 @@ GoRouter createAppRouter(
       ),
     ],
   );
+}
+
+String _locationWithInvite(String path, String? inviteCode) {
+  if (inviteCode == null) return path;
+  return Uri(path: path, fragment: 'invite=$inviteCode').toString();
 }
 
 class _UnknownRoute extends StatelessWidget {

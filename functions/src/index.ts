@@ -15,6 +15,7 @@ import {
   deleteAccountSchema,
   ensureUserProfileSchema,
   gameMutationSchema,
+  issueArenaInviteSchema,
   joinLeagueSchema,
   leagueMutationSchema,
   leaveLeagueSchema,
@@ -24,6 +25,7 @@ import {
   reasonSchema,
   revealLockedPicksSchema,
   reorderRotationSchema,
+  revokeArenaInviteSchema,
   rotateInviteCodeSchema,
   saveDraftSlateSchema,
   selectedGamesSchema,
@@ -38,9 +40,11 @@ import {
   anonymizeAccount,
   createLeagueRecord,
   ensureProfile,
+  issueArenaInviteRecord,
   joinByInvite,
   leaveLeagueRecord,
   reorderRotation,
+  revokeArenaInviteRecord,
   rotateInvite,
   updateMember,
   updateSettings,
@@ -205,6 +209,38 @@ export const rotateInviteCode = callable(
     });
   },
   {secrets: [INVITE_CODE_PEPPER]},
+);
+
+export const issueArenaInvite = callable(
+  "issueArenaInvite",
+  issueArenaInviteSchema,
+  async (input, request, requestId) => {
+    const user = requireUser(request);
+    return issueArenaInviteRecord({
+      leagueId: input.leagueId,
+      actorUid: user.uid,
+      requestId,
+      ...(input.expiresAt === undefined
+        ? {}
+        : {expiresAt: input.expiresAt}),
+      maxUses: input.maxUses,
+    });
+  },
+  {secrets: [INVITE_CODE_PEPPER]},
+);
+
+export const revokeArenaInvite = callable(
+  "revokeArenaInvite",
+  revokeArenaInviteSchema,
+  async (input, request, requestId) => {
+    const user = requireUser(request);
+    return revokeArenaInviteRecord({
+      leagueId: input.leagueId,
+      actorUid: user.uid,
+      requestId,
+      inviteId: input.inviteId,
+    });
+  },
 );
 
 export const updateLeagueSettings = callable(

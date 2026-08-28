@@ -17,6 +17,13 @@
   <link rel="manifest" href="manifest.json">
   <title>Luke’s Picks</title>
   <script>
+    // Flutter's web bootstrap can normalize the platform route before Dart
+    // starts, which drops a fragment-based private invite. Capture the exact
+    // same-origin route first so the app can hand it to GoRouter after auth
+    // and Firebase initialization finish.
+    window.__lukesPicksInitialLocation =
+      window.location.pathname + window.location.search + window.location.hash;
+
     // Keep durable Firebase Auth state on one user-facing origin. Firebase's
     // alternate Hosting hostname remains available for the OAuth handler, but
     // top-level visits should always return to the canonical live app.

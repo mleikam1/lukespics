@@ -9,6 +9,7 @@ league rules and display names.
 | `leagues/{leagueId}` | Arena metadata and settings | Active members read; privileged writes via Functions |
 | `leagues/{leagueId}/members/{uid}` | League-safe profile, role/status, rotation order | Active members read |
 | `leagues/{leagueId}/private/invite` | Hashed invite configuration | Server only |
+| `leagues/{leagueId}/privateInvites/{inviteId}` | Hashed, expiring independent-invite metadata and counters; never the raw code | Server only |
 | `leagues/{leagueId}/weeks/{weekId}` | Explicit week, picker, snapshots, status, winners | Active members read |
 | `.../weeks/{weekId}/games/{gameId}` | Canonical selected-game snapshot and result | While the week is `draft`: assigned picker and owner/commissioner only; afterward active members read; server writes |
 | `.../weeks/{weekId}/entries/{uid}` | Public completion and graded summary; `submittedAt` permanently seals a completed entry | Active members read; server writes |
@@ -25,7 +26,7 @@ league rules and display names.
 | `providerCircuitStates/{provider}` | Provider-scoped circuit-breaker state across UTC day rollover | Server only |
 | `providerLocks/{key}` | Distributed refresh lease | Server only |
 | `providerManualRefreshLimits/{id}` | Server-side manual refresh throttle | Server only |
-| `joinCodeMappings/{hash}` | Non-queryable join lookup | Server only |
+| `joinCodeMappings/{hash}` | Non-queryable legacy or independent join lookup, expiry, revocation state, and use counter | Server only |
 | `joinAttemptLimits/{id}` | Hashed join-attempt throttle state | Server only |
 | `systemConfig/sportsDataIoCatalog` | Default-off NFL/MLB catalog, entitlement metadata, and kill switch | Server only |
 | `systemConfig/cbsCollegeFootball` | Default-off CBS FBS active-week identity and trusted UTC week-start cadence boundary, refresh policy, request cap, parser version, and kill switches | Server only |

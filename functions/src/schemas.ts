@@ -218,6 +218,15 @@ export const rotateInviteCodeSchema = leagueMutationSchema.extend({
   maxUses: z.number().int().positive().max(10000).nullable().default(null),
 });
 
+export const issueArenaInviteSchema = leagueMutationSchema.extend({
+  expiresAt: dateSchema.optional(),
+  maxUses: z.number().int().positive().max(10000).default(50),
+});
+
+export const revokeArenaInviteSchema = leagueMutationSchema.extend({
+  inviteId: idSchema,
+});
+
 export const updateLeagueSettingsSchema = leagueMutationSchema.extend({
   settings: leagueSettingsPatchSchema.refine(
     (value) => Object.keys(value).length > 0,

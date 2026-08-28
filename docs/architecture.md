@@ -196,6 +196,14 @@ client-side bypass. After lock, trusted backend code copies only reveal-safe
 fields to `reveals/{gameId}/picks/{uid}`. Email remains in private
 `users/{uid}` and never appears in league membership documents.
 
+Arena admission uses owner-only callable Functions. The server stores only an
+HMAC lookup and bounded invite metadata; Flutter receives the raw bearer code
+only in the issuance response. Shared web links carry it in a URL fragment,
+survive the authentication/restoration redirects, require an explicit Join
+action, and are scrubbed from the route after success. Native and mobile-web
+clients use the platform share sheet so Messages can be selected without
+collecting phone numbers or requesting SMS permissions.
+
 ## Resilience
 
 - Manual data permits production operation while SportsDataIO is inactive.

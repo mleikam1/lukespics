@@ -169,11 +169,28 @@ final class FirebaseLeagueRepository implements LeagueRepository {
     required String inviteCode,
     String? nickname,
   }) async {
-    final result = await _call('joinLeagueByCode', {
-      'inviteCode': inviteCode,
-      if (nickname != null) 'nickname': nickname,
-    });
-    return _string(result, 'leagueId');
+    try {
+      final result = await _call('joinLeagueByCode', {
+        'inviteCode': inviteCode,
+        if (nickname != null) 'nickname': nickname,
+      });
+      return _string(result, 'leagueId');
+    } on RepositoryException catch (error) {
+      if (error.code == 'not-found') {
+        throw const RepositoryException(
+          'not-found',
+          'This invite is invalid, expired, or disabled. Ask the arena owner '
+              'for a new link.',
+        );
+      }
+      if (error.code == 'resource-exhausted') {
+        throw const RepositoryException(
+          'resource-exhausted',
+          'Too many invite attempts. Wait a few minutes, then try again.',
+        );
+      }
+      rethrow;
+    }
   }
 
   @override
@@ -184,6 +201,41 @@ final class FirebaseLeagueRepository implements LeagueRepository {
       'maxUses': null,
     });
     return _string(result, 'inviteCode');
+  }
+
+  @override
+  Future<ArenaInvite> issueArenaInvite({
+    required String leagueId,
+    String? requestId,
+  }) async {
+    final result = await _call('issueArenaInvite', {
+      'leagueId': leagueId,
+    }, requestId: requestId);
+    final expiresAt = _dateOrNull(result['expiresAt']);
+    if (expiresAt == null) {
+      throw const RepositoryException(
+        'invalid-response',
+        'The server returned incomplete invite data.',
+      );
+    }
+    return ArenaInvite(
+      id: _string(result, 'inviteId'),
+      code: _string(result, 'inviteCode'),
+      expiresAt: expiresAt,
+      maxUses: _int(result, 'maxUses'),
+    );
+  }
+
+  @override
+  Future<void> revokeArenaInvite({
+    required String leagueId,
+    required String inviteId,
+    String? requestId,
+  }) async {
+    await _call('revokeArenaInvite', {
+      'leagueId': leagueId,
+      'inviteId': inviteId,
+    }, requestId: requestId);
   }
 
   @override

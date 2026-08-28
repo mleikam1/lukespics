@@ -7,6 +7,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 
+import '../core/navigation/browser_location.dart';
 import '../core/widgets/brand_mark.dart';
 import '../core/firebase/firebase_bootstrap.dart';
 import '../firebase_options.dart';
@@ -175,6 +176,7 @@ class LukesPicksBootstrap extends StatefulWidget {
 }
 
 class _LukesPicksBootstrapState extends State<LukesPicksBootstrap> {
+  late final String? _initialLocation = browserInitialLocation();
   late Future<BootstrapResult> _bootstrap = AppBootstrap.initialize();
 
   void _retry() {
@@ -196,7 +198,10 @@ class _LukesPicksBootstrapState extends State<LukesPicksBootstrap> {
               onRetry: _retry,
             );
           }
-          return LukesPicksApp(bootstrap: result);
+          return LukesPicksApp(
+            bootstrap: result,
+            initialLocation: _initialLocation,
+          );
         }
         return MaterialApp(
           debugShowCheckedModeBanner: false,

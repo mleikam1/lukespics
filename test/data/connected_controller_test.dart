@@ -224,7 +224,7 @@ void main() {
     retryMemberships.complete(const []);
   });
 
-  test('successful sign-out clears a private invite code', () async {
+  test('successful sign-out clears private invite state', () async {
     _stubArena(
       repository,
       catalogGames: const [],
@@ -232,8 +232,18 @@ void main() {
       weekStatus: 'draft',
     );
     when(
-      () => repository.rotateInviteCode(leagueId: 'league-1'),
-    ).thenAnswer((_) async => 'PRIVATE-CODE');
+      () => repository.issueArenaInvite(
+        leagueId: 'league-1',
+        requestId: any(named: 'requestId'),
+      ),
+    ).thenAnswer(
+      (_) async => ArenaInvite(
+        id: 'invite-private',
+        code: 'PrivateInviteCode123456',
+        expiresAt: DateTime.utc(2026, 9, 10),
+        maxUses: 50,
+      ),
+    );
     when(auth.signOut).thenAnswer((_) async {});
     final controller = AppController.connected(
       runtimeMode: AppRuntimeMode.firebaseEmulator,
@@ -243,13 +253,118 @@ void main() {
     addTearDown(controller.dispose);
     await _flush();
     expect(await controller.joinArena('ABC12345'), isTrue);
-    expect(await controller.rotateInviteCode(), isTrue);
-    expect(controller.inviteCode, 'PRIVATE-CODE');
+    expect(await controller.issueArenaInvite(), isTrue);
+    expect(controller.activeInviteId, 'invite-private');
 
     await controller.signOut();
 
     expect(controller.signedIn, isFalse);
     expect(controller.inviteCode, isNull);
+    expect(controller.activeInviteId, isNull);
+    expect(controller.inviteExpiresAt, isNull);
+    expect(controller.inviteMaxUses, isNull);
+  });
+
+  test('owner issues and revokes an independent expiring invite', () async {
+    _stubArena(
+      repository,
+      catalogGames: const [],
+      selectedGames: const [],
+      weekStatus: 'draft',
+    );
+    final expiresAt = DateTime.utc(2026, 9, 10);
+    final revokeCompleter = Completer<void>();
+    when(
+      () => repository.issueArenaInvite(
+        leagueId: 'league-1',
+        requestId: any(named: 'requestId'),
+      ),
+    ).thenAnswer(
+      (_) async => ArenaInvite(
+        id: 'invite-1',
+        code: 'AbCdEfGhIjKlMnOpQrStUvWx',
+        expiresAt: expiresAt,
+        maxUses: 50,
+      ),
+    );
+    when(
+      () => repository.revokeArenaInvite(
+        leagueId: 'league-1',
+        inviteId: 'invite-1',
+        requestId: any(named: 'requestId'),
+      ),
+    ).thenAnswer((_) => revokeCompleter.future);
+    final controller = AppController.connected(
+      runtimeMode: AppRuntimeMode.firebaseEmulator,
+      repository: repository,
+      auth: auth,
+    );
+    addTearDown(controller.dispose);
+    await _flush();
+    expect(await controller.joinArena('ABC12345'), isTrue);
+
+    expect(await controller.issueArenaInvite(), isTrue);
+    expect(controller.inviteCode, 'AbCdEfGhIjKlMnOpQrStUvWx');
+    expect(controller.activeInviteId, 'invite-1');
+    expect(controller.inviteExpiresAt, expiresAt);
+    expect(controller.inviteMaxUses, 50);
+
+    final revoke = controller.revokeArenaInvite();
+    await _flush();
+    expect(await controller.issueArenaInvite(), isFalse);
+    revokeCompleter.complete();
+    expect(await revoke, isTrue);
+    expect(controller.inviteCode, isNull);
+    expect(controller.activeInviteId, isNull);
+    verify(
+      () => repository.revokeArenaInvite(
+        leagueId: 'league-1',
+        inviteId: 'invite-1',
+        requestId: any(named: 'requestId'),
+      ),
+    ).called(1);
+    verify(
+      () => repository.issueArenaInvite(
+        leagueId: 'league-1',
+        requestId: any(named: 'requestId'),
+      ),
+    ).called(1);
+  });
+
+  test('failed independent invite issuance preserves displayed code', () async {
+    _stubArena(
+      repository,
+      catalogGames: const [],
+      selectedGames: const [],
+      weekStatus: 'draft',
+    );
+    when(
+      () => repository.rotateInviteCode(leagueId: 'league-1'),
+    ).thenAnswer((_) async => 'ExistingInviteCode12345');
+    when(
+      () => repository.issueArenaInvite(
+        leagueId: 'league-1',
+        requestId: any(named: 'requestId'),
+      ),
+    ).thenThrow(
+      const RepositoryException(
+        'unavailable',
+        'Invite service is temporarily unavailable.',
+      ),
+    );
+    final controller = AppController.connected(
+      runtimeMode: AppRuntimeMode.firebaseEmulator,
+      repository: repository,
+      auth: auth,
+    );
+    addTearDown(controller.dispose);
+    await _flush();
+    expect(await controller.joinArena('ABC12345'), isTrue);
+    expect(await controller.rotateInviteCode(), isTrue);
+
+    expect(await controller.issueArenaInvite(), isFalse);
+    expect(controller.inviteCode, 'ExistingInviteCode12345');
+    expect(controller.errorMessage, contains('temporarily unavailable'));
   });
 
   test('auth account change clears and fences prior history', () async {

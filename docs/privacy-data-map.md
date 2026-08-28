@@ -10,6 +10,7 @@ Starter operational documentation; not attorney-approved.
 | Revealed choices | reveal docs | Post-lock transparency | Active league members |
 | Scores/statistics | entries/standings | Competition results | Active league members |
 | Audit events | audit logs | Integrity/admin review | Owner/commissioner |
+| Hashed invite lookup and bounded metadata | server-only invite collections | Private arena admission, expiry, use limits, and revocation | Trusted backend only |
 | Provider cache/usage | server collections | Schedule/results and quota safety | Backend |
 | Unconfirmed offline choice | Device memory/local app state | User-visible retry before lock | Current user only; never counted until server confirmation |
 | Team-mark URL | Normalized game/team metadata | Optional team identification | Members only when host/rights gate permits |
@@ -17,6 +18,7 @@ Starter operational documentation; not attorney-approved.
 
 Analytics collection is compile-time opt-in through `ENABLE_ANALYTICS` and is
 disabled by default. When enabled, events never include raw email, invite code,
+invite URL/fragment,
 API key, or private team choice. Logs use
 request/function/league/week/provider identifiers and safe error codes.
 

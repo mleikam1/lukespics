@@ -47,6 +47,9 @@ overall standings.
 - Co-winners are supported.
 - Finalization, standings rebuild, and picker rotation are idempotent.
 - Inactive members retain history and are skipped by future rotation.
+- Owners can send private, expiring arena links through Messages or another
+  sharing app. Invitees sign in, confirm the join, and enter the member/picker
+  pool at the end of the rotation.
 - Interrupted finalization follow-ups repair only finalized weeks and coordinate
   safely with audited reopen; an inactive recorded next picker advances to the
   next active member before Week creation.

@@ -6,6 +6,7 @@ import '../../core/responsive/breakpoints.dart';
 import '../../core/widgets/ui.dart';
 import '../../data/demo/demo_repository.dart';
 import '../../data/models/member.dart';
+import 'arena_invite_card.dart';
 
 class MembersScreen extends ConsumerWidget {
   const MembersScreen({super.key});
@@ -25,6 +26,10 @@ class MembersScreen extends ConsumerWidget {
               'inactive members. New members join at the end.',
         ),
         const SizedBox(height: 20),
+        if (controller.canInviteMembers) ...[
+          ArenaInviteCard(controller: controller),
+          const SizedBox(height: 18),
+        ],
         const SectionCard(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,

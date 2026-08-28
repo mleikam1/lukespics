@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/navigation/browser_location.dart';
 import '../data/demo/demo_repository.dart';
 import 'bootstrap.dart';
 import 'router.dart';
@@ -12,12 +13,12 @@ class LukesPicksApp extends StatefulWidget {
     super.key,
     required this.bootstrap,
     this.controller,
-    this.initialLocation = '/',
+    this.initialLocation,
   });
 
   final BootstrapResult bootstrap;
   final AppController? controller;
-  final String initialLocation;
+  final String? initialLocation;
 
   @override
   State<LukesPicksApp> createState() => _LukesPicksAppState();
@@ -45,7 +46,7 @@ class _LukesPicksAppState extends State<LukesPicksApp> {
 class _AppView extends ConsumerStatefulWidget {
   const _AppView({required this.initialLocation});
 
-  final String initialLocation;
+  final String? initialLocation;
 
   @override
   ConsumerState<_AppView> createState() => _AppViewState();
@@ -54,7 +55,7 @@ class _AppView extends ConsumerStatefulWidget {
 class _AppViewState extends ConsumerState<_AppView> {
   late final GoRouter _router = createAppRouter(
     ref.read(appControllerProvider),
-    initialLocation: widget.initialLocation,
+    initialLocation: widget.initialLocation ?? browserInitialLocation(),
   );
 
   @override

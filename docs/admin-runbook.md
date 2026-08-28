@@ -62,7 +62,9 @@ slate is not reopened for ordinary picker edits.
 
 - `Recalculate week`: full authoritative entry recomputation
 - `Rebuild standings`: full aggregate recomputation from finalized weeks
-- `Rotate invite code`: invalidates the old join lookup
+- `Invite people`: creates a private 14-day/50-join link for Messages or another
+  share target; the displayed link can be disabled without affecting other
+  modern links already sent
 - Member deactivation: preserves history and skips future rotation
 
 Never modify score or standing documents manually in production.

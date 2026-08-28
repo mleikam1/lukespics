@@ -163,6 +163,13 @@ final class AppController extends ChangeNotifier {
   String? _activeLeagueId;
   String? _activeWeekId;
   String? _inviteCode;
+  String? _activeInviteId;
+  DateTime? _inviteExpiresAt;
+  int? _inviteMaxUses;
+  String? _inviteIssueRequestId;
+  String? _inviteRevokeRequestId;
+  bool _inviteIssueInFlight = false;
+  bool _inviteRevokeInFlight = false;
   StreamSubscription<User?>? _authSubscription;
   StreamSubscription<LeagueSummary?>? _leagueSubscription;
   StreamSubscription<WeekSummary?>? _weekSubscription;
@@ -255,6 +262,9 @@ final class AppController extends ChangeNotifier {
   String? get activeLeagueId => _activeLeagueId;
   String? get activeWeekId => _activeWeekId;
   String? get inviteCode => _inviteCode;
+  String? get activeInviteId => _activeInviteId;
+  DateTime? get inviteExpiresAt => _inviteExpiresAt;
+  int? get inviteMaxUses => _inviteMaxUses;
   bool get isDemo => runtimeMode == AppRuntimeMode.demo;
   String get currentUserId => _currentUserId;
   String get currentPickerId => _currentPickerId;
@@ -293,6 +303,7 @@ final class AppController extends ChangeNotifier {
   LeagueRole get currentRole => currentMember.role;
   bool get canAdmin =>
       currentRole == LeagueRole.owner || currentRole == LeagueRole.commissioner;
+  bool get canInviteMembers => currentRole == LeagueRole.owner;
   bool get isCurrentUserPicker => _currentUserId == currentPickerId;
   bool get canDraftSlate => isCurrentUserPicker || canAdmin;
   bool get _mayWatchActiveWeekGames => switch (_weekStatus) {
@@ -619,6 +630,9 @@ final class AppController extends ChangeNotifier {
         );
         _setActiveLeagueId(created.leagueId);
         _inviteCode = created.inviteCode;
+        _activeInviteId = null;
+        _inviteExpiresAt = null;
+        _inviteMaxUses = null;
         _hasLeague = true;
         _arenaMembershipResolved = true;
         _arenaHydrated = false;
@@ -832,6 +846,13 @@ final class AppController extends ChangeNotifier {
     _resetStandingsState();
     _historyWeeks.clear();
     _inviteCode = null;
+    _activeInviteId = null;
+    _inviteExpiresAt = null;
+    _inviteMaxUses = null;
+    _inviteIssueRequestId = null;
+    _inviteRevokeRequestId = null;
+    _inviteIssueInFlight = false;
+    _inviteRevokeInFlight = false;
     _currentPickerId = '';
     _leagueName = 'Luke’s Picks Arena';
     _leagueTimezone = 'UTC';
@@ -1583,18 +1604,119 @@ final class AppController extends ChangeNotifier {
     if (_repository == null) {
       _inviteCode =
           'DEMO-${DateTime.now().second.toString().padLeft(2, '0')}XP';
+      _activeInviteId = null;
+      _inviteExpiresAt = null;
+      _inviteMaxUses = null;
       notifyListeners();
       return true;
     }
     if (leagueId == null) return false;
     try {
       _inviteCode = await _repository.rotateInviteCode(leagueId: leagueId);
+      _activeInviteId = null;
+      _inviteExpiresAt = null;
+      _inviteMaxUses = null;
       notifyListeners();
       return true;
     } on RepositoryException catch (error) {
       _errorMessage = error.safeMessage;
       notifyListeners();
       return false;
+    }
+  }
+
+  Future<bool> issueArenaInvite() async {
+    final leagueId = _activeLeagueId;
+    final actorUid = _currentUserId;
+    if (_inviteIssueInFlight || _inviteRevokeInFlight) return false;
+    _errorMessage = null;
+    if (!canInviteMembers) return false;
+    _inviteIssueInFlight = true;
+    try {
+      if (_repository == null) {
+        final suffix = DateTime.now().microsecondsSinceEpoch.toString();
+        _inviteCode = 'DemoInvite${suffix.padLeft(15, '0')}';
+        _activeInviteId = 'demo-invite-$suffix';
+        _inviteExpiresAt = DateTime.now().toUtc().add(const Duration(days: 14));
+        _inviteMaxUses = 50;
+        notifyListeners();
+        return true;
+      }
+      if (leagueId == null) return false;
+      _inviteIssueRequestId ??=
+          'invite_${_requestIdSegment(leagueId)}_'
+          '${DateTime.now().microsecondsSinceEpoch}';
+      final invite = await _repository.issueArenaInvite(
+        leagueId: leagueId,
+        requestId: _inviteIssueRequestId,
+      );
+      if (_activeLeagueId != leagueId ||
+          _currentUserId != actorUid ||
+          !_signedIn) {
+        return false;
+      }
+      _inviteCode = invite.code;
+      _activeInviteId = invite.id;
+      _inviteExpiresAt = invite.expiresAt;
+      _inviteMaxUses = invite.maxUses;
+      _inviteIssueRequestId = null;
+      notifyListeners();
+      return true;
+    } on RepositoryException catch (error) {
+      _errorMessage = error.safeMessage;
+      notifyListeners();
+      return false;
+    } finally {
+      _inviteIssueInFlight = false;
+    }
+  }
+
+  Future<bool> revokeArenaInvite() async {
+    final leagueId = _activeLeagueId;
+    final inviteId = _activeInviteId;
+    final actorUid = _currentUserId;
+    if (_inviteIssueInFlight || _inviteRevokeInFlight) return false;
+    if (inviteId == null || !canInviteMembers) return false;
+    _inviteRevokeInFlight = true;
+    try {
+      if (_repository == null) {
+        _inviteCode = null;
+        _activeInviteId = null;
+        _inviteExpiresAt = null;
+        _inviteMaxUses = null;
+        notifyListeners();
+        return true;
+      }
+      if (leagueId == null) return false;
+      _inviteRevokeRequestId ??=
+          'revoke_${_requestIdSegment(inviteId)}_'
+          '${DateTime.now().microsecondsSinceEpoch}';
+      await _repository.revokeArenaInvite(
+        leagueId: leagueId,
+        inviteId: inviteId,
+        requestId: _inviteRevokeRequestId,
+      );
+      if (_activeLeagueId != leagueId ||
+          _currentUserId != actorUid ||
+          !_signedIn) {
+        return false;
+      }
+      if (_activeInviteId == inviteId) {
+        _inviteCode = null;
+        _activeInviteId = null;
+        _inviteExpiresAt = null;
+        _inviteMaxUses = null;
+      }
+      _inviteRevokeRequestId = null;
+      _errorMessage = null;
+      notifyListeners();
+      return true;
+    } on RepositoryException catch (error) {
+      _errorMessage = error.safeMessage;
+      notifyListeners();
+      return false;
+    } finally {
+      _inviteRevokeInFlight = false;
     }
   }
 
@@ -1902,10 +2024,8 @@ final class AppController extends ChangeNotifier {
       return false;
     }
     _hasLeague = false;
-    _setActiveLeagueId(null);
-    _setActiveWeekId(null);
-    _inviteCode = null;
     await _cancelLeagueSubscriptions();
+    _clearArenaSessionState();
     notifyListeners();
     return true;
   }
@@ -1917,6 +2037,7 @@ final class AppController extends ChangeNotifier {
       await _cancelLeagueSubscriptions();
       _signedIn = false;
       _hasLeague = false;
+      _clearArenaSessionState();
       notifyListeners();
       return true;
     } on RepositoryException catch (error) {

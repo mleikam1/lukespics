@@ -80,20 +80,50 @@ class ArenaRestoreScreen extends ConsumerWidget {
 }
 
 class ArenaGatewayScreen extends ConsumerStatefulWidget {
-  const ArenaGatewayScreen({super.key, this.initialMode = ArenaMode.choose});
+  const ArenaGatewayScreen({
+    super.key,
+    this.initialMode = ArenaMode.choose,
+    this.initialInviteCode,
+  });
 
   final ArenaMode initialMode;
+  final String? initialInviteCode;
 
   @override
   ConsumerState<ArenaGatewayScreen> createState() => _ArenaGatewayScreenState();
 }
 
 class _ArenaGatewayScreenState extends ConsumerState<ArenaGatewayScreen> {
-  late ArenaMode _mode = widget.initialMode;
+  late ArenaMode _mode;
   final _arenaName = TextEditingController(text: 'Luke’s Picks Arena');
-  final _inviteCode = TextEditingController();
+  late final TextEditingController _inviteCode;
   bool _pickerParticipates = false;
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _mode = widget.initialMode;
+    _inviteCode = TextEditingController(text: widget.initialInviteCode ?? '');
+  }
+
+  @override
+  void didUpdateWidget(covariant ArenaGatewayScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialMode != widget.initialMode) {
+      _mode = widget.initialMode;
+    }
+    final nextInviteCode = widget.initialInviteCode;
+    if (nextInviteCode != null &&
+        nextInviteCode != oldWidget.initialInviteCode &&
+        (_inviteCode.text.isEmpty ||
+            _inviteCode.text == oldWidget.initialInviteCode)) {
+      _inviteCode.value = TextEditingValue(
+        text: nextInviteCode,
+        selection: TextSelection.collapsed(offset: nextInviteCode.length),
+      );
+    }
+  }
 
   @override
   void dispose() {
@@ -291,12 +321,17 @@ class _ArenaGatewayScreenState extends ConsumerState<ArenaGatewayScreen> {
             const Text('Ask the owner or commissioner for the current code.'),
             const SizedBox(height: 24),
             TextField(
+              key: const Key('arena-invite-code-field'),
               controller: _inviteCode,
-              textCapitalization: TextCapitalization.characters,
+              keyboardType: TextInputType.visiblePassword,
+              textCapitalization: TextCapitalization.none,
               autocorrect: false,
+              enableSuggestions: false,
+              smartDashesType: SmartDashesType.disabled,
+              smartQuotesType: SmartQuotesType.disabled,
               decoration: const InputDecoration(
                 labelText: 'Invite code',
-                hintText: 'LUKE-7H3K',
+                hintText: 'Paste your 24-character invite code',
                 prefixIcon: Icon(Icons.key_rounded),
               ),
             ),

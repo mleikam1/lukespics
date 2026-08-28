@@ -212,6 +212,27 @@ async function seed(): Promise<void> {
       setDoc(doc(firestore, "sportsCache/internal"), {
         secret: "server-only",
       }),
+      setDoc(doc(firestore, "leagues/alpha/private/invite"), {
+        inviteCodeHash: "legacy-hash",
+        active: true,
+      }),
+      setDoc(
+        doc(firestore, "leagues/alpha/privateInvites/invite-private"),
+        {
+          inviteId: "invite-private",
+          codeHash: "independent-hash",
+          active: true,
+        },
+      ),
+      setDoc(doc(firestore, "joinCodeMappings/independent-hash"), {
+        leagueId: "alpha",
+        inviteId: "invite-private",
+        active: true,
+      }),
+      setDoc(doc(firestore, "joinAttemptLimits/user-member"), {
+        scope: "user",
+        attempts: 1,
+      }),
       setDoc(
         doc(
           firestore,
@@ -541,6 +562,26 @@ describe("Firestore security boundary", () => {
 
   it("denies direct access to server-internal collections", async () => {
     const owner = environment.authenticatedContext("owner").firestore();
+    await assertFails(
+      getDoc(doc(owner, "leagues/alpha/private/invite")),
+    );
+    await assertFails(
+      getDoc(
+        doc(owner, "leagues/alpha/privateInvites/invite-private"),
+      ),
+    );
+    await assertFails(
+      updateDoc(
+        doc(owner, "leagues/alpha/privateInvites/invite-private"),
+        {active: false},
+      ),
+    );
+    await assertFails(
+      getDoc(doc(owner, "joinCodeMappings/independent-hash")),
+    );
+    await assertFails(
+      getDoc(doc(owner, "joinAttemptLimits/user-member")),
+    );
     await assertFails(getDoc(doc(owner, "sportsCache/internal")));
     await assertFails(
       getDoc(

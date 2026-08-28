@@ -51,6 +51,17 @@ abstract interface class LeagueRepository {
 
   Future<String> rotateInviteCode({required String leagueId});
 
+  Future<ArenaInvite> issueArenaInvite({
+    required String leagueId,
+    String? requestId,
+  });
+
+  Future<void> revokeArenaInvite({
+    required String leagueId,
+    required String inviteId,
+    String? requestId,
+  });
+
   Future<void> updateLeagueSettings({
     required String leagueId,
     required Map<String, Object?> settings,
@@ -216,6 +227,20 @@ final class CreatedLeague {
 
   final String leagueId;
   final String inviteCode;
+}
+
+final class ArenaInvite {
+  const ArenaInvite({
+    required this.id,
+    required this.code,
+    required this.expiresAt,
+    required this.maxUses,
+  });
+
+  final String id;
+  final String code;
+  final DateTime expiresAt;
+  final int maxUses;
 }
 
 final class CreatedWeek {

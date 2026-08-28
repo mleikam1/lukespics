@@ -102,6 +102,10 @@ service cloud.firestore {
         allow read, write: if false;
       }
 
+      match /privateInvites/{document=**} {
+        allow read, write: if false;
+      }
+
       match /weeks/{weekId} {
         allow read: if isActiveMember(leagueId);
         allow write: if false;

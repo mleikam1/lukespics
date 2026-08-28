@@ -25,6 +25,28 @@ their evidence boundary explicitly.
 
 Production must stay `manual` while any unchecked activation item remains.
 
+## Arena invitation release — 2026-08-27
+
+- [x] Only an arena owner can issue or revoke a modern invitation.
+- [x] Raw 144-bit bearer codes are returned once, never stored or logged, and
+      are represented server-side only by HMAC lookup and bounded metadata.
+- [x] The first modern invitation atomically retires the original legacy code;
+      later modern links remain independent and expire after 14 days or 50
+      successful joins by default.
+- [x] Join is explicit, case-sensitive, idempotent for the same member, and
+      rejects a second active-arena membership.
+- [x] Web links keep the bearer token in a fragment, survive authentication and
+      arena restoration, prefill the form, and scrub the fragment after join.
+- [x] The platform share sheet exposes Messages without storing phone numbers
+      or requesting SMS permission; clipboard fallback remains available.
+- [x] Flutter 152/152, Functions 208/208, Rules 12/12, Functions integration
+      15/15, and the connected three-user browser lifecycle pass.
+- [ ] The exact invite release commit has passed both CI jobs.
+- [ ] Rules, 34 Functions, preview Hosting, and exact preview-to-live promotion
+      have completed through the guarded release wrapper.
+- [ ] The authenticated live owner UI and existing CBS/session/locked-entry
+      behavior have been reverified after promotion.
+
 ## CBS additive release boundary — 2026-08-27
 
 - [x] `cbsSports` is server-only and scoped to `NCAAF` / `ncaaf` / `FBS`.

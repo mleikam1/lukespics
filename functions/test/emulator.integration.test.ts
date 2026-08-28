@@ -148,6 +148,438 @@ afterAll(async () => {
 
 describe("emulator pick'em lifecycle", () => {
   it(
+    "issues owner-only idempotent invites without storing their raw codes",
+    async () => {
+      if (maintenanceAdminApp === undefined) {
+        throw new Error("Integration admin is unavailable.");
+      }
+      const owner = await createSignedInApp("invite-contract-owner");
+      const member = await createSignedInApp("invite-contract-member");
+      const adminDb = getAdminFirestore(maintenanceAdminApp);
+      const created = await call<{leagueId: string; inviteCode: string}>(
+        owner,
+        "createLeague",
+        {
+          requestId: requestId("invite-contract-create"),
+          name: "Invite Contract Arena",
+          timezone: "America/Chicago",
+          settings: {providerName: "manual"},
+        },
+      );
+      await call(member, "joinLeagueByCode", {
+        requestId: requestId("invite-contract-join"),
+        inviteCode: created.inviteCode,
+      });
+
+      const issuanceRequestId = requestId("invite-contract-issue");
+      const issued = await call<{
+        inviteId: string;
+        inviteCode: string;
+        expiresAt: string;
+        maxUses: number;
+      }>(owner, "issueArenaInvite", {
+        requestId: issuanceRequestId,
+        leagueId: created.leagueId,
+      });
+      const retried = await call<typeof issued>(owner, "issueArenaInvite", {
+        requestId: issuanceRequestId,
+        leagueId: created.leagueId,
+      });
+
+      expect(retried).toEqual(issued);
+      expect(issued.inviteCode).toMatch(/^[A-Za-z0-9_-]{24}$/);
+      expect(issued.maxUses).toBe(50);
+      const lifetime = Date.parse(issued.expiresAt) - Date.now();
+      expect(lifetime).toBeGreaterThan(13 * 24 * 60 * 60_000);
+      expect(lifetime).toBeLessThanOrEqual(14 * 24 * 60 * 60_000);
+
+      const metadata = await adminDb.doc(
+        `leagues/${created.leagueId}/privateInvites/${issued.inviteId}`,
+      ).get();
+      const mappings = await adminDb.collection("joinCodeMappings")
+        .where("inviteId", "==", issued.inviteId)
+        .get();
+      const audits = await adminDb
+        .collection(`leagues/${created.leagueId}/auditLogs`)
+        .get();
+      const legacyMetadata = await adminDb.doc(
+        `leagues/${created.leagueId}/private/invite`,
+      ).get();
+      const legacyCodeHash = legacyMetadata.data()?.inviteCodeHash;
+      expect(typeof legacyCodeHash).toBe("string");
+      const legacyMapping = await adminDb.doc(
+        `joinCodeMappings/${String(legacyCodeHash)}`,
+      ).get();
+      expect(metadata.data()).toMatchObject({
+        inviteId: issued.inviteId,
+        inviteKind: "independent",
+        active: true,
+        maxUses: 50,
+        useCount: 0,
+        createdBy: String(getAuth(owner).currentUser?.uid),
+        issuanceRequestId,
+      });
+      expect(mappings.docs).toHaveLength(1);
+      expect(mappings.docs[0]?.data()).toMatchObject({
+        leagueId: created.leagueId,
+        inviteId: issued.inviteId,
+        inviteKind: "independent",
+        active: true,
+        maxUses: 50,
+        useCount: 0,
+      });
+      expect(legacyMetadata.data()).toMatchObject({
+        active: false,
+        retiredBy: String(getAuth(owner).currentUser?.uid),
+        retiredRequestId: issuanceRequestId,
+      });
+      expect(legacyMapping.data()).toMatchObject({
+        leagueId: created.leagueId,
+        active: false,
+        retiredBy: String(getAuth(owner).currentUser?.uid),
+        retiredRequestId: issuanceRequestId,
+      });
+      const storedInviteState = JSON.stringify({
+        metadata: metadata.data(),
+        mapping: mappings.docs[0]?.data(),
+        audits: audits.docs.map((audit) => audit.data()),
+      });
+      expect(storedInviteState).not.toContain(issued.inviteCode);
+      expect(metadata.data()).not.toHaveProperty("inviteCode");
+      expect(mappings.docs[0]?.data()).not.toHaveProperty("inviteCode");
+
+      await expect(
+        httpsCallable(
+          getFunctions(member, "us-central1"),
+          "issueArenaInvite",
+        )({
+          requestId: requestId("invite-contract-member-issue"),
+          leagueId: created.leagueId,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        httpsCallable(
+          getFunctions(member, "us-central1"),
+          "rotateInviteCode",
+        )({
+          requestId: requestId("invite-contract-member-rotate"),
+          leagueId: created.leagueId,
+          expiresAt: null,
+          maxUses: null,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        httpsCallable(
+          getFunctions(member, "us-central1"),
+          "revokeArenaInvite",
+        )({
+          requestId: requestId("invite-contract-member-revoke"),
+          leagueId: created.leagueId,
+          inviteId: issued.inviteId,
+        }),
+      ).rejects.toThrow();
+    },
+    120_000,
+  );
+
+  it(
+    "revokes only the selected independent invite",
+    async () => {
+      const owner = await createSignedInApp("invite-revoke-owner");
+      const revokedRecipient = await createSignedInApp(
+        "invite-revoke-recipient",
+      );
+      const activeRecipient = await createSignedInApp(
+        "invite-active-recipient",
+      );
+      const legacyRecipient = await createSignedInApp(
+        "invite-legacy-recipient",
+      );
+      const created = await call<{leagueId: string; inviteCode: string}>(
+        owner,
+        "createLeague",
+        {
+          requestId: requestId("invite-revoke-create"),
+          name: "Invite Revoke Arena",
+          timezone: "America/Chicago",
+          settings: {providerName: "manual"},
+        },
+      );
+      const first = await call<{
+        inviteId: string;
+        inviteCode: string;
+      }>(owner, "issueArenaInvite", {
+        requestId: requestId("invite-revoke-first"),
+        leagueId: created.leagueId,
+      });
+      const second = await call<{
+        inviteId: string;
+        inviteCode: string;
+      }>(owner, "issueArenaInvite", {
+        requestId: requestId("invite-revoke-second"),
+        leagueId: created.leagueId,
+      });
+      expect(first.inviteId).not.toBe(second.inviteId);
+      expect(first.inviteCode).not.toBe(second.inviteCode);
+
+      await call(owner, "revokeArenaInvite", {
+        requestId: requestId("invite-revoke-selected"),
+        leagueId: created.leagueId,
+        inviteId: first.inviteId,
+      });
+      await expect(
+        httpsCallable(
+          getFunctions(revokedRecipient, "us-central1"),
+          "joinLeagueByCode",
+        )({
+          requestId: requestId("invite-revoke-denied-join"),
+          inviteCode: first.inviteCode,
+        }),
+      ).rejects.toThrow();
+      await call(activeRecipient, "joinLeagueByCode", {
+        requestId: requestId("invite-revoke-active-join"),
+        inviteCode: second.inviteCode,
+      });
+      await expect(
+        httpsCallable(
+          getFunctions(legacyRecipient, "us-central1"),
+          "joinLeagueByCode",
+        )({
+          requestId: requestId("invite-revoke-legacy-join"),
+          inviteCode: created.inviteCode,
+        }),
+      ).rejects.toThrow();
+
+      if (maintenanceAdminApp === undefined) {
+        throw new Error("Integration admin is unavailable.");
+      }
+      const adminDb = getAdminFirestore(maintenanceAdminApp);
+      const [firstMetadata, secondMetadata, legacyMetadata] =
+        await Promise.all([
+          adminDb.doc(
+            `leagues/${created.leagueId}/privateInvites/${first.inviteId}`,
+          ).get(),
+          adminDb.doc(
+            `leagues/${created.leagueId}/privateInvites/${second.inviteId}`,
+          ).get(),
+          adminDb.doc(
+            `leagues/${created.leagueId}/private/invite`,
+          ).get(),
+        ]);
+      expect(firstMetadata.data()).toMatchObject({active: false, useCount: 0});
+      expect(secondMetadata.data()).toMatchObject({active: true, useCount: 1});
+      expect(legacyMetadata.data()).toMatchObject({active: false, useCount: 0});
+    },
+    120_000,
+  );
+
+  it(
+    "admits exactly one concurrent recipient on a one-use invite",
+    async () => {
+      const owner = await createSignedInApp("invite-max-owner");
+      const recipientA = await createSignedInApp("invite-max-recipient-a");
+      const recipientB = await createSignedInApp("invite-max-recipient-b");
+      const created = await call<{leagueId: string}>(owner, "createLeague", {
+        requestId: requestId("invite-max-create"),
+        name: "Invite Max Arena",
+        timezone: "America/Chicago",
+        settings: {providerName: "manual"},
+      });
+      const issued = await call<{
+        inviteId: string;
+        inviteCode: string;
+      }>(owner, "issueArenaInvite", {
+        requestId: requestId("invite-max-issue"),
+        leagueId: created.leagueId,
+        maxUses: 1,
+      });
+
+      const joins = await Promise.allSettled([
+        httpsCallable(
+          getFunctions(recipientA, "us-central1"),
+          "joinLeagueByCode",
+        )({
+          requestId: requestId("invite-max-join-a"),
+          inviteCode: issued.inviteCode,
+        }),
+        httpsCallable(
+          getFunctions(recipientB, "us-central1"),
+          "joinLeagueByCode",
+        )({
+          requestId: requestId("invite-max-join-b"),
+          inviteCode: issued.inviteCode,
+        }),
+      ]);
+      expect(joins.filter((join) => join.status === "fulfilled")).toHaveLength(
+        1,
+      );
+      expect(joins.filter((join) => join.status === "rejected")).toHaveLength(
+        1,
+      );
+      const admittedRecipient = joins[0].status === "fulfilled"
+        ? recipientA
+        : recipientB;
+      const idempotentRetry = await call<{leagueId: string}>(
+        admittedRecipient,
+        "joinLeagueByCode",
+        {
+          requestId: requestId("invite-max-retry"),
+          inviteCode: issued.inviteCode,
+        },
+      );
+      expect(idempotentRetry.leagueId).toBe(created.leagueId);
+
+      if (maintenanceAdminApp === undefined) {
+        throw new Error("Integration admin is unavailable.");
+      }
+      const adminDb = getAdminFirestore(maintenanceAdminApp);
+      const metadata = await adminDb.doc(
+        `leagues/${created.leagueId}/privateInvites/${issued.inviteId}`,
+      ).get();
+      const members = await adminDb
+        .collection(`leagues/${created.leagueId}/members`)
+        .where("role", "==", "member")
+        .where("status", "==", "active")
+        .get();
+      expect(metadata.data()?.useCount).toBe(1);
+      expect(members.docs).toHaveLength(1);
+    },
+    120_000,
+  );
+
+  it(
+    "rejects past issuance and expired independent codes",
+    async () => {
+      const owner = await createSignedInApp("invite-expiry-owner");
+      const recipient = await createSignedInApp("invite-expiry-recipient");
+      const created = await call<{leagueId: string}>(owner, "createLeague", {
+        requestId: requestId("invite-expiry-create"),
+        name: "Invite Expiry Arena",
+        timezone: "America/Chicago",
+        settings: {providerName: "manual"},
+      });
+      await expect(
+        httpsCallable(
+          getFunctions(owner, "us-central1"),
+          "issueArenaInvite",
+        )({
+          requestId: requestId("invite-expiry-past"),
+          leagueId: created.leagueId,
+          expiresAt: new Date(Date.now() - 60_000).toISOString(),
+        }),
+      ).rejects.toThrow();
+      const issued = await call<{
+        inviteId: string;
+        inviteCode: string;
+      }>(owner, "issueArenaInvite", {
+        requestId: requestId("invite-expiry-issue"),
+        leagueId: created.leagueId,
+        expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+      });
+
+      if (maintenanceAdminApp === undefined) {
+        throw new Error("Integration admin is unavailable.");
+      }
+      const adminDb = getAdminFirestore(maintenanceAdminApp);
+      const mappings = await adminDb.collection("joinCodeMappings")
+        .where("inviteId", "==", issued.inviteId)
+        .get();
+      expect(mappings.docs).toHaveLength(1);
+      const expiredAt = Timestamp.fromMillis(Date.now() - 1);
+      await Promise.all([
+        adminDb.doc(
+          `leagues/${created.leagueId}/privateInvites/${issued.inviteId}`,
+        ).update({expiresAt: expiredAt}),
+        mappings.docs[0]?.ref.update({expiresAt: expiredAt}),
+      ]);
+      await expect(
+        httpsCallable(
+          getFunctions(recipient, "us-central1"),
+          "joinLeagueByCode",
+        )({
+          requestId: requestId("invite-expiry-join"),
+          inviteCode: issued.inviteCode,
+        }),
+      ).rejects.toThrow();
+    },
+    120_000,
+  );
+
+  it(
+    "keeps same-arena joins idempotent and rejects a second active arena",
+    async () => {
+      const ownerA = await createSignedInApp("single-arena-owner-a");
+      const ownerB = await createSignedInApp("single-arena-owner-b");
+      const recipient = await createSignedInApp("single-arena-recipient");
+      const arenaA = await call<{leagueId: string; inviteCode: string}>(
+        ownerA,
+        "createLeague",
+        {
+          requestId: requestId("single-arena-create-a"),
+          name: "Single Arena A",
+          timezone: "America/Chicago",
+          settings: {providerName: "manual"},
+        },
+      );
+      const arenaB = await call<{leagueId: string; inviteCode: string}>(
+        ownerB,
+        "createLeague",
+        {
+          requestId: requestId("single-arena-create-b"),
+          name: "Single Arena B",
+          timezone: "America/Chicago",
+          settings: {providerName: "manual"},
+        },
+      );
+      const firstJoin = await call<{leagueId: string}>(
+        recipient,
+        "joinLeagueByCode",
+        {
+          requestId: requestId("single-arena-first-join"),
+          inviteCode: arenaA.inviteCode,
+        },
+      );
+      const retryJoin = await call<{leagueId: string}>(
+        recipient,
+        "joinLeagueByCode",
+        {
+          requestId: requestId("single-arena-retry-join"),
+          inviteCode: arenaA.inviteCode,
+        },
+      );
+      expect(firstJoin.leagueId).toBe(arenaA.leagueId);
+      expect(retryJoin.leagueId).toBe(arenaA.leagueId);
+
+      await expect(
+        httpsCallable(
+          getFunctions(recipient, "us-central1"),
+          "joinLeagueByCode",
+        )({
+          requestId: requestId("single-arena-second-join"),
+          inviteCode: arenaB.inviteCode,
+        }),
+      ).rejects.toThrow(/already belong to an active arena/i);
+
+      if (maintenanceAdminApp === undefined) {
+        throw new Error("Integration admin is unavailable.");
+      }
+      const uid = String(getAuth(recipient).currentUser?.uid);
+      const adminDb = getAdminFirestore(maintenanceAdminApp);
+      const memberships = await adminDb.collectionGroup("members")
+        .where("uid", "==", uid)
+        .where("status", "==", "active")
+        .get();
+      const legacyInvite = await adminDb.doc(
+        `leagues/${arenaA.leagueId}/private/invite`,
+      ).get();
+      expect(memberships.docs).toHaveLength(1);
+      expect(memberships.docs[0]?.ref.parent.parent?.id).toBe(arenaA.leagueId);
+      expect(legacyInvite.data()?.useCount).toBe(1);
+    },
+    120_000,
+  );
+
+  it(
     "creates, joins, protects, scores, finalizes, corrects, and advances once",
     async () => {
       const owner = await createSignedInApp("integration-owner");
