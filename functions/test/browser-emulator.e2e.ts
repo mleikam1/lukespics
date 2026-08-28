@@ -513,7 +513,7 @@ async function joinArenaFromLink(user, inviteCode) {
   assert.equal(
     await inviteField.inputValue(),
     inviteCode,
-    "The invite link did not prefill the exact case-sensitive code.",
+    "The invite link did not prefill the canonical invite code.",
   );
   const joinResponsePromise = callableResponse(
     user.page,
@@ -1026,7 +1026,10 @@ async function run() {
         );
         await button(owner.page, "Create invite").click();
         const issued = await parseCallable(await issueResponsePromise);
-        assert.match(issued.inviteCode, /^[A-Za-z0-9_-]{24}$/);
+        assert.match(
+          issued.inviteCode,
+          /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/,
+        );
         assert.equal(issued.maxUses, 50);
         await expectText(owner.page, "Text or share invite");
         return issued;

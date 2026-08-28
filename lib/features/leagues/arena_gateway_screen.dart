@@ -331,7 +331,8 @@ class _ArenaGatewayScreenState extends ConsumerState<ArenaGatewayScreen> {
               smartQuotesType: SmartQuotesType.disabled,
               decoration: const InputDecoration(
                 labelText: 'Invite code',
-                hintText: 'Paste your 24-character invite code',
+                hintText: 'Enter your 8-character code',
+                helperText: 'Older invitation codes still work.',
                 prefixIcon: Icon(Icons.key_rounded),
               ),
             ),

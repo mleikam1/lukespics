@@ -15,7 +15,8 @@ class _MockFirebaseAuth extends Mock implements FirebaseAuth {}
 
 class _MockUser extends Mock implements User {}
 
-const _inviteCode = 'AbCdEfGhIjKlMnOpQrStUvWx';
+const _inviteCode = 'K7M4PX9R';
+const _legacyInviteCode = 'AbCdEfGhIjKlMnOpQrStUvWx';
 
 void main() {
   Future<void> pumpDemo(
@@ -58,24 +59,33 @@ void main() {
     expect(controller.hasLeague, isFalse);
   });
 
-  testWidgets(
-    'join field preserves invite case and disables smart transforms',
-    (tester) async {
-      await pumpDemo(
-        tester,
-        controller: AppController.demo(signedIn: true),
-        initialLocation: '/arena/join#invite=$_inviteCode',
-      );
+  testWidgets('join field uses canonical code and disables smart transforms', (
+    tester,
+  ) async {
+    await pumpDemo(
+      tester,
+      controller: AppController.demo(signedIn: true),
+      initialLocation: '/arena/join#invite=$_inviteCode',
+    );
 
-      final field = inviteField(tester);
-      expect(field.controller!.text, _inviteCode);
-      expect(field.textCapitalization, TextCapitalization.none);
-      expect(field.autocorrect, isFalse);
-      expect(field.enableSuggestions, isFalse);
-      expect(field.smartDashesType, SmartDashesType.disabled);
-      expect(field.smartQuotesType, SmartQuotesType.disabled);
-    },
-  );
+    final field = inviteField(tester);
+    expect(field.controller!.text, _inviteCode);
+    expect(field.textCapitalization, TextCapitalization.none);
+    expect(field.autocorrect, isFalse);
+    expect(field.enableSuggestions, isFalse);
+    expect(field.smartDashesType, SmartDashesType.disabled);
+    expect(field.smartQuotesType, SmartQuotesType.disabled);
+  });
+
+  testWidgets('lowercase short fragment prefills as uppercase', (tester) async {
+    await pumpDemo(
+      tester,
+      controller: AppController.demo(signedIn: true),
+      initialLocation: '/arena/join#invite=${_inviteCode.toLowerCase()}',
+    );
+
+    expect(inviteField(tester).controller!.text, _inviteCode);
+  });
 
   testWidgets('successful invite confirmation navigates to a scrubbed route', (
     tester,
@@ -107,7 +117,23 @@ void main() {
     });
   }
 
-  for (final invalidValue in ['short', List<String>.filled(65, 'A').join()]) {
+  testWidgets('preserves a compatible mixed-case legacy query invite', (
+    tester,
+  ) async {
+    await pumpDemo(
+      tester,
+      controller: AppController.demo(signedIn: true),
+      initialLocation: '/arena/join?code=$_legacyInviteCode',
+    );
+
+    expect(inviteField(tester).controller!.text, _legacyInviteCode);
+  });
+
+  for (final invalidValue in [
+    'short',
+    'ABCDEFGHI',
+    List<String>.filled(65, 'A').join(),
+  ]) {
     testWidgets('ignores invalid deep-link invite ${invalidValue.length}', (
       tester,
     ) async {

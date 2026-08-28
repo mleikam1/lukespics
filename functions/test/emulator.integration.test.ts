@@ -40,6 +40,7 @@ import {
   cbsCollegeFootballCacheDocumentId,
   cbsCollegeFootballGamesContentHash,
 } from "../src/services/cbsCollegeFootballSchedule.js";
+import {arenaInviteCodeForRequest} from "../src/services/leagues.js";
 import {repairFinalizedWeekFollowUps} from "../src/services/scoring.js";
 import {
   MAX_GAME_RESCHEDULE_OFFSET_MS,
@@ -49,6 +50,7 @@ import {
   revealLockedPicks,
   submitEntry,
 } from "../src/services/weeks.js";
+import {opaqueHash} from "../src/utils.js";
 
 const projectId = "demo-lukes-picks-local";
 const apps: FirebaseApp[] = [];
@@ -180,14 +182,18 @@ describe("emulator pick'em lifecycle", () => {
       }>(owner, "issueArenaInvite", {
         requestId: issuanceRequestId,
         leagueId: created.leagueId,
+        codeFormatVersion: 2,
       });
       const retried = await call<typeof issued>(owner, "issueArenaInvite", {
         requestId: issuanceRequestId,
         leagueId: created.leagueId,
+        codeFormatVersion: 2,
       });
 
       expect(retried).toEqual(issued);
-      expect(issued.inviteCode).toMatch(/^[A-Za-z0-9_-]{24}$/);
+      expect(issued.inviteCode).toMatch(
+        /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/,
+      );
       expect(issued.maxUses).toBe(50);
       const lifetime = Date.parse(issued.expiresAt) - Date.now();
       expect(lifetime).toBeGreaterThan(13 * 24 * 60 * 60_000);
@@ -213,6 +219,8 @@ describe("emulator pick'em lifecycle", () => {
       expect(metadata.data()).toMatchObject({
         inviteId: issued.inviteId,
         inviteKind: "independent",
+        codeFormatVersion: 2,
+        derivationIndex: 0,
         active: true,
         maxUses: 50,
         useCount: 0,
@@ -224,6 +232,8 @@ describe("emulator pick'em lifecycle", () => {
         leagueId: created.leagueId,
         inviteId: issued.inviteId,
         inviteKind: "independent",
+        codeFormatVersion: 2,
+        derivationIndex: 0,
         active: true,
         maxUses: 50,
         useCount: 0,
@@ -255,6 +265,7 @@ describe("emulator pick'em lifecycle", () => {
         )({
           requestId: requestId("invite-contract-member-issue"),
           leagueId: created.leagueId,
+          codeFormatVersion: 2,
         }),
       ).rejects.toThrow();
       await expect(
@@ -311,6 +322,7 @@ describe("emulator pick'em lifecycle", () => {
       }>(owner, "issueArenaInvite", {
         requestId: requestId("invite-revoke-first"),
         leagueId: created.leagueId,
+        codeFormatVersion: 2,
       });
       const second = await call<{
         inviteId: string;
@@ -318,6 +330,7 @@ describe("emulator pick'em lifecycle", () => {
       }>(owner, "issueArenaInvite", {
         requestId: requestId("invite-revoke-second"),
         leagueId: created.leagueId,
+        codeFormatVersion: 2,
       });
       expect(first.inviteId).not.toBe(second.inviteId);
       expect(first.inviteCode).not.toBe(second.inviteCode);
@@ -338,7 +351,7 @@ describe("emulator pick'em lifecycle", () => {
       ).rejects.toThrow();
       await call(activeRecipient, "joinLeagueByCode", {
         requestId: requestId("invite-revoke-active-join"),
-        inviteCode: second.inviteCode,
+        inviteCode: second.inviteCode.toLowerCase(),
       });
       await expect(
         httpsCallable(
@@ -374,6 +387,169 @@ describe("emulator pick'em lifecycle", () => {
   );
 
   it(
+    "avoids short-code collisions and preserves version-one retries",
+    async () => {
+      if (maintenanceAdminApp === undefined) {
+        throw new Error("Integration admin is unavailable.");
+      }
+      const owner = await createSignedInApp("invite-version-owner");
+      const adminDb = getAdminFirestore(maintenanceAdminApp);
+      const created = await call<{leagueId: string}>(owner, "createLeague", {
+        requestId: requestId("invite-version-create"),
+        name: "Invite Version Arena",
+        timezone: "America/Chicago",
+        settings: {providerName: "manual"},
+      });
+      const actorUid = String(getAuth(owner).currentUser?.uid);
+      const shortRequestId = requestId("invite-version-short");
+      const identity = {
+        leagueId: created.leagueId,
+        actorUid,
+        requestId: shortRequestId,
+      };
+      const emulatorPepper =
+        "emulator-only-invite-pepper-000000000000";
+      const firstCandidate = arenaInviteCodeForRequest(
+        identity,
+        emulatorPepper,
+        2,
+        0,
+      );
+      const secondCandidate = arenaInviteCodeForRequest(
+        identity,
+        emulatorPepper,
+        2,
+        1,
+      );
+      const occupiedHash = opaqueHash(firstCandidate, emulatorPepper);
+      await adminDb.doc(`joinCodeMappings/${occupiedHash}`).set({
+        leagueId: "occupied-by-collision-test",
+        active: false,
+      });
+
+      const shortIssued = await call<{
+        inviteId: string;
+        inviteCode: string;
+      }>(owner, "issueArenaInvite", {
+        requestId: shortRequestId,
+        leagueId: created.leagueId,
+        codeFormatVersion: 2,
+      });
+      expect(shortIssued.inviteCode).toBe(secondCandidate);
+      const shortMetadata = await adminDb.doc(
+        `leagues/${created.leagueId}/privateInvites/${shortIssued.inviteId}`,
+      ).get();
+      expect(shortMetadata.data()).toMatchObject({
+        codeFormatVersion: 2,
+        derivationIndex: 1,
+      });
+
+      const legacyRequestId = requestId("invite-version-legacy");
+      const legacyIssued = await call<{
+        inviteId: string;
+        inviteCode: string;
+      }>(owner, "issueArenaInvite", {
+        requestId: legacyRequestId,
+        leagueId: created.leagueId,
+      });
+      expect(legacyIssued.inviteCode).toMatch(/^[A-Za-z0-9_-]{24}$/);
+      const legacyMetadataReference = adminDb.doc(
+        `leagues/${created.leagueId}/privateInvites/${legacyIssued.inviteId}`,
+      );
+      const legacyMappings = await adminDb.collection("joinCodeMappings")
+        .where("inviteId", "==", legacyIssued.inviteId)
+        .get();
+      expect(legacyMappings.docs).toHaveLength(1);
+      await Promise.all([
+        legacyMetadataReference.update({
+          codeFormatVersion: FieldValue.delete(),
+          derivationIndex: FieldValue.delete(),
+        }),
+        legacyMappings.docs[0]?.ref.update({
+          codeFormatVersion: FieldValue.delete(),
+          derivationIndex: FieldValue.delete(),
+        }),
+      ]);
+      const legacyRetry = await call<typeof legacyIssued>(
+        owner,
+        "issueArenaInvite",
+        {
+          requestId: legacyRequestId,
+          leagueId: created.leagueId,
+        },
+      );
+      expect(legacyRetry).toEqual(legacyIssued);
+    },
+    120_000,
+  );
+
+  it("limits authenticated guesses for valid-looking short codes", async () => {
+    const member = await createSignedInApp("invite-rate-limit-member");
+    const join = httpsCallable(
+      getFunctions(member, "us-central1"),
+      "joinLeagueByCode",
+    );
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(join({
+        requestId: requestId(`invite-rate-limit-${attempt}`),
+        inviteCode: `ZZZZZZZ${attempt + 2}`,
+      })).rejects.toMatchObject({code: "functions/not-found"});
+    }
+    await expect(join({
+      requestId: requestId("invite-rate-limit-blocked"),
+      inviteCode: "ZZZZZZZ7",
+    })).rejects.toMatchObject({code: "functions/resource-exhausted"});
+  }, 120_000);
+
+  it(
+    "allows ten distinct members to join from one shared network",
+    async () => {
+      if (maintenanceAdminApp === undefined) {
+        throw new Error("Integration admin is unavailable.");
+      }
+      const owner = await createSignedInApp("shared-network-owner");
+      const created = await call<{leagueId: string}>(owner, "createLeague", {
+        requestId: requestId("shared-network-create"),
+        name: "Shared Network Arena",
+        timezone: "America/Chicago",
+        settings: {providerName: "manual"},
+      });
+      const issued = await call<{inviteCode: string}>(
+        owner,
+        "issueArenaInvite",
+        {
+          requestId: requestId("shared-network-issue"),
+          leagueId: created.leagueId,
+          codeFormatVersion: 2,
+        },
+      );
+      const recipients = await Promise.all(
+        Array.from({length: 10}, (_, index) =>
+          createSignedInApp(`shared-network-member-${index}`)),
+      );
+
+      for (const [index, recipient] of recipients.entries()) {
+        await expect(call<{leagueId: string}>(
+          recipient,
+          "joinLeagueByCode",
+          {
+            requestId: requestId(`shared-network-join-${index}`),
+            inviteCode: issued.inviteCode,
+          },
+        )).resolves.toEqual({leagueId: created.leagueId});
+      }
+
+      const limits = await getAdminFirestore(maintenanceAdminApp)
+        .collection("joinAttemptLimits")
+        .where("scope", "==", "network")
+        .get();
+      expect(limits.size).toBe(1);
+      expect(limits.docs[0]?.data().attempts).toBe(10);
+    },
+    120_000,
+  );
+
+  it(
     "admits exactly one concurrent recipient on a one-use invite",
     async () => {
       const owner = await createSignedInApp("invite-max-owner");
@@ -392,6 +568,7 @@ describe("emulator pick'em lifecycle", () => {
         requestId: requestId("invite-max-issue"),
         leagueId: created.leagueId,
         maxUses: 1,
+        codeFormatVersion: 2,
       });
 
       const joins = await Promise.allSettled([
@@ -466,6 +643,7 @@ describe("emulator pick'em lifecycle", () => {
           requestId: requestId("invite-expiry-past"),
           leagueId: created.leagueId,
           expiresAt: new Date(Date.now() - 60_000).toISOString(),
+          codeFormatVersion: 2,
         }),
       ).rejects.toThrow();
       const issued = await call<{
@@ -475,6 +653,7 @@ describe("emulator pick'em lifecycle", () => {
         requestId: requestId("invite-expiry-issue"),
         leagueId: created.leagueId,
         expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+        codeFormatVersion: 2,
       });
 
       if (maintenanceAdminApp === undefined) {

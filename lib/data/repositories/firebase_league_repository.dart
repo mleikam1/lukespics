@@ -210,6 +210,7 @@ final class FirebaseLeagueRepository implements LeagueRepository {
   }) async {
     final result = await _call('issueArenaInvite', {
       'leagueId': leagueId,
+      'codeFormatVersion': 2,
     }, requestId: requestId);
     final expiresAt = _dateOrNull(result['expiresAt']);
     if (expiresAt == null) {

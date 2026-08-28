@@ -96,8 +96,9 @@ class _ArenaInviteCardState extends ConsumerState<ArenaInviteCard> {
                   SelectableText(
                     inviteCode,
                     key: const Key('arena-invite-code'),
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w900,
+                      letterSpacing: 2,
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -297,7 +298,7 @@ String _invitePolicy(AppController controller) {
   final expiresAt = controller.inviteExpiresAt;
   final maxUses = controller.inviteMaxUses;
   if (expiresAt == null && maxUses == null) {
-    return 'Use this exact case-sensitive code.';
+    return 'Keep this invite private.';
   }
   final parts = <String>[];
   if (expiresAt != null) {

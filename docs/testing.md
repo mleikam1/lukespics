@@ -68,26 +68,27 @@ saves and publishes the game, the member reads it, and the member submits a
 pick. It does not contact CBS, exercise a live result, or establish production
 acceptance.
 
-## Current CBS and arena-invite verification matrix — 2026-08-27
+## Current short-invite verification matrix — 2026-08-28
 
-These results were recorded on the current CBS and arena-invite tree. The public
-source/build scans were rerun after the release build; none of these local,
-fixture, cache-backed, or emulator results is a deployment or live-provider
-claim.
+These results were recorded on the short-code release candidate, which retains
+the CBS, completed-entry-lock, and remembered-session behavior already in
+production. The public source/build scans were rerun after the release build;
+none of these local, fixture, cache-backed, or emulator results is a deployment
+or live-provider claim.
 
 | Command | Current result | Evidence boundary |
 |---|---|---|
 | `dart format --output=none --set-exit-if-changed .` | Pass | Flutter source and tests are formatted |
 | `flutter analyze --no-pub` | Pass | No analyzer issues on the current Flutter tree |
-| `flutter test --no-pub` | Pass — 152/152 | Includes CBS active controls, completed-entry locking, invite routing/prefill, owner invite controls, share fallback, expiry/revocation state, auth-session fencing, and repository parsing |
+| `flutter test --no-pub` | Pass — 156/156 | Includes short-code canonicalization, legacy exact-case compatibility, CBS active controls, completed-entry locking, invite routing/prefill, owner invite controls, share fallback, expiry/revocation state, auth-session fencing, and repository parsing |
 | `flutter build web --release` | Pass | Current release web artifact compiled successfully |
 | `npm --prefix functions run lint` | Pass | ESLint completed with zero allowed warnings |
 | `npm --prefix functions run typecheck` | Pass | TypeScript no-emit check completed |
 | `npm --prefix functions run build` | Pass | Node 22 Functions TypeScript compiled |
-| `npm --prefix functions test` | Pass — 208/208 | CBS parser/cache/contracts plus invite token/schema, atomic completed-entry sealing, provider, lifecycle, and scoring coverage |
+| `npm --prefix functions test` | Pass — 209/209 | CBS parser/cache/contracts plus versioned invite derivation/schema, atomic completed-entry sealing, provider, lifecycle, and scoring coverage |
 | `npm --prefix functions run test:rules` | Pass — 12/12 | Firestore emulator confirms CBS state and independent invite internals remain client-denied |
-| `npm --prefix functions run test:integration` | Pass — 15/15 | Includes authenticated invite issuance/retry/revocation/expiry/concurrency, cached-CBS lifecycle, authorization, and capacity checks without CBS network access |
-| `./scripts/test_browser_e2e.sh` | Pass | Connected three-user lifecycle creates a modern invite, joins from a fragment link and exact code, restores membership, adds both members to rotation, and completes the weekly flow under safe provider flags |
+| `npm --prefix functions run test:integration` | Pass — 18/18 | Includes authenticated short-code issuance and lowercase join, deterministic collision fallback, pre-release version-1 retry compatibility, five-attempt per-account throttling, ten distinct members on one shared network, invite revocation/expiry/concurrency, cached-CBS lifecycle, authorization, and capacity checks without CBS network access |
+| `./scripts/test_browser_e2e.sh` | Pass | Connected three-user lifecycle creates an eight-character invite, joins from its fragment link and manual code, restores membership, locks the completed entry, adds both members to rotation, and completes two weeks under safe provider flags |
 | `./scripts/check_public_source.sh` | Pass | Credential and public-source policy scan passed |
 | `./scripts/check_public_build.sh build/web` | Pass | Fresh public release-build scan passed |
 | `git diff --check` | Pass | Final changed-tree whitespace check passed |

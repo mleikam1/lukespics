@@ -1,20 +1,28 @@
-const arenaInviteMinimumLength = 16;
+const modernArenaInviteCodeLength = 8;
+const legacyArenaInviteMinimumLength = 16;
 const arenaInviteMaximumLength = 64;
-const _arenaInvitePattern = r'^[A-Za-z0-9_-]+$';
+const _modernArenaInvitePattern = r'^[A-Za-z0-9]{8}$';
+const _legacyArenaInvitePattern = r'^[A-Za-z0-9_-]{16,64}$';
 
-final RegExp _arenaInviteExpression = RegExp(_arenaInvitePattern);
+final RegExp _modernArenaInviteExpression = RegExp(_modernArenaInvitePattern);
+final RegExp _legacyArenaInviteExpression = RegExp(_legacyArenaInvitePattern);
 
-/// Returns the exact case-sensitive bearer token when it matches the server
-/// contract. Invalid or oversized URL values are discarded before routing.
+/// Canonicalizes a modern short code to uppercase while preserving the exact
+/// case of compatible legacy bearer tokens. Invalid URL values are discarded.
 String? normalizeArenaInviteCode(String? value) {
   final trimmed = value?.trim();
-  if (trimmed == null ||
-      trimmed.length < arenaInviteMinimumLength ||
-      trimmed.length > arenaInviteMaximumLength ||
-      !_arenaInviteExpression.hasMatch(trimmed)) {
+  if (trimmed == null || trimmed.length > arenaInviteMaximumLength) {
     return null;
   }
-  return trimmed;
+  if (trimmed.length == modernArenaInviteCodeLength &&
+      _modernArenaInviteExpression.hasMatch(trimmed)) {
+    return trimmed.toUpperCase();
+  }
+  if (trimmed.length >= legacyArenaInviteMinimumLength &&
+      _legacyArenaInviteExpression.hasMatch(trimmed)) {
+    return trimmed;
+  }
+  return null;
 }
 
 /// Reads the current fragment-based invite format and older query-based links.
@@ -62,8 +70,7 @@ String buildArenaInviteMessage({
       ? 'my arena'
       : arenaName.trim();
   final link = buildArenaInviteUri(normalized);
-  return "You're invited to join $safeArenaName on Luke’s Picks. "
-      'Open this private link, sign in with Google, then tap Join arena:\n'
+  return 'Join $safeArenaName on Luke’s Picks:\n'
       '$link\n\n'
-      'Invite code: $normalized';
+      'Code: $normalized';
 }

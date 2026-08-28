@@ -282,7 +282,7 @@ void main() {
     ).thenAnswer(
       (_) async => ArenaInvite(
         id: 'invite-1',
-        code: 'AbCdEfGhIjKlMnOpQrStUvWx',
+        code: 'K7M4PX9R',
         expiresAt: expiresAt,
         maxUses: 50,
       ),
@@ -301,10 +301,16 @@ void main() {
     );
     addTearDown(controller.dispose);
     await _flush();
-    expect(await controller.joinArena('ABC12345'), isTrue);
+    expect(await controller.joinArena('k7m4px9r'), isTrue);
+    verify(
+      () => repository.joinLeagueByCode(
+        inviteCode: 'K7M4PX9R',
+        nickname: any(named: 'nickname'),
+      ),
+    ).called(1);
 
     expect(await controller.issueArenaInvite(), isTrue);
-    expect(controller.inviteCode, 'AbCdEfGhIjKlMnOpQrStUvWx');
+    expect(controller.inviteCode, 'K7M4PX9R');
     expect(controller.activeInviteId, 'invite-1');
     expect(controller.inviteExpiresAt, expiresAt);
     expect(controller.inviteMaxUses, 50);

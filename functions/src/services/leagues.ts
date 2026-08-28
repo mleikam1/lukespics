@@ -40,7 +40,15 @@ const DEFAULT_SETTINGS: LeagueSettings = {
 
 export const DEFAULT_ARENA_INVITE_LIFETIME_MS = 14 * 24 * 60 * 60_000;
 export const DEFAULT_ARENA_INVITE_MAX_USES = 50;
+export const SHORT_ARENA_INVITE_CODE_LENGTH = 8;
+const SHORT_ARENA_INVITE_ALPHABET =
+  "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const SHORT_ARENA_INVITE_CANDIDATE_COUNT = 4;
 const REVOKED_INVITE_RETENTION_MS = 90 * 24 * 60 * 60_000;
+const USER_JOIN_ATTEMPT_LIMIT = 5;
+const NETWORK_JOIN_ATTEMPT_LIMIT = 20;
+
+export type ArenaInviteCodeFormatVersion = 1 | 2;
 
 type ArenaInviteIdentity = {
   leagueId: string;
@@ -51,13 +59,22 @@ type ArenaInviteIdentity = {
 export function arenaInviteCodeForRequest(
   input: ArenaInviteIdentity,
   pepper: string,
+  codeFormatVersion: ArenaInviteCodeFormatVersion = 2,
+  derivationIndex = 0,
 ): string {
   const digest = opaqueHash(stableJson({
     purpose: "arena-invite-code",
-    version: 1,
+    version: codeFormatVersion,
+    ...(codeFormatVersion === 1 ? {} : {derivationIndex}),
     ...input,
   }), pepper);
-  return Buffer.from(digest.slice(0, 36), "hex").toString("base64url");
+  if (codeFormatVersion === 1) {
+    return Buffer.from(digest.slice(0, 36), "hex").toString("base64url");
+  }
+  return [...Buffer.from(digest, "hex")
+    .subarray(0, SHORT_ARENA_INVITE_CODE_LENGTH)]
+    .map((byte) => SHORT_ARENA_INVITE_ALPHABET.charAt(byte & 31))
+    .join("");
 }
 
 export function arenaInviteIdForRequest(input: ArenaInviteIdentity): string {
@@ -276,7 +293,10 @@ async function recordJoinAttempt(
           : 0;
       return {windowStartedAt, currentWindow, attempts};
     });
-    if (states.some((state) => state.attempts >= 5)) {
+    if (states.some((state, index) =>
+      state.attempts >= (index === 0
+        ? USER_JOIN_ATTEMPT_LIMIT
+        : NETWORK_JOIN_ATTEMPT_LIMIT))) {
       throw new HttpsError(
         "resource-exhausted",
         "Too many join attempts. Try again later.",
@@ -541,6 +561,7 @@ export async function issueArenaInviteRecord(input: {
   requestId: string;
   expiresAt?: Date;
   maxUses: number;
+  codeFormatVersion: ArenaInviteCodeFormatVersion;
 }): Promise<{
   inviteId: string;
   inviteCode: string;
@@ -555,13 +576,32 @@ export async function issueArenaInviteRecord(input: {
     requestId: input.requestId,
   };
   const inviteId = arenaInviteIdForRequest(identity);
-  const inviteCode = arenaInviteCodeForRequest(identity, pepper);
-  const codeHash = opaqueHash(inviteCode, pepper);
-  const references = independentInviteReferences({
-    codeHash,
-    leagueId: input.leagueId,
-    inviteId,
+  const candidateCount = input.codeFormatVersion === 1
+    ? 1
+    : SHORT_ARENA_INVITE_CANDIDATE_COUNT;
+  const candidates = Array.from({length: candidateCount}, (_, index) => {
+    const inviteCode = arenaInviteCodeForRequest(
+      identity,
+      pepper,
+      input.codeFormatVersion,
+      index,
+    );
+    const codeHash = opaqueHash(inviteCode, pepper);
+    return {
+      inviteCode,
+      codeHash,
+      derivationIndex: index,
+      references: independentInviteReferences({
+        codeHash,
+        leagueId: input.leagueId,
+        inviteId,
+      }),
+    };
   });
+  const metadataReference = candidates[0]?.references.metadata;
+  if (metadataReference === undefined) {
+    throw new HttpsError("internal", "Invite generation is unavailable.");
+  }
   const requestedExpiresAt = input.expiresAt;
   const legacyConfigReference = db
     .collection("leagues")
@@ -570,12 +610,36 @@ export async function issueArenaInviteRecord(input: {
     .doc("invite");
 
   const result = await db.runTransaction(async (transaction) => {
-    const [metadataSnapshot, mappingSnapshot, legacyConfigSnapshot] =
+    const [metadataSnapshot, legacyConfigSnapshot, ...mappingSnapshots] =
       await Promise.all([
-        transaction.get(references.metadata),
-        transaction.get(references.mapping),
+        transaction.get(metadataReference),
         transaction.get(legacyConfigReference),
+        ...candidates.map(async (candidate) =>
+          transaction.get(candidate.references.mapping)),
       ]);
+    const metadata = metadataSnapshot.data();
+    const storedCodeFormatVersion = metadata?.codeFormatVersion ?? 1;
+    const storedDerivationIndex = metadata?.derivationIndex ?? 0;
+    const candidateIndex = metadata === undefined
+      ? mappingSnapshots.findIndex((snapshot) => !snapshot.exists)
+      : storedCodeFormatVersion === input.codeFormatVersion &&
+          Number.isInteger(storedDerivationIndex) &&
+          storedDerivationIndex >= 0 &&
+          storedDerivationIndex < candidates.length
+        ? Number(storedDerivationIndex)
+        : -1;
+    if (candidateIndex < 0) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This invite request conflicts with an existing invite.",
+      );
+    }
+    const candidate = candidates[candidateIndex];
+    const mappingSnapshot = mappingSnapshots[candidateIndex];
+    if (candidate === undefined || mappingSnapshot === undefined) {
+      throw new HttpsError("internal", "Invite generation is unavailable.");
+    }
+    const {codeHash, derivationIndex, inviteCode, references} = candidate;
     const legacyConfig = legacyConfigSnapshot.data();
     const legacyCodeHash = legacyConfig?.inviteCodeHash;
     const legacyMappingReference = typeof legacyCodeHash === "string"
@@ -606,19 +670,23 @@ export async function issueArenaInviteRecord(input: {
       transaction.update(legacyConfigReference, retirement);
       transaction.update(legacyMappingReference, retirement);
     };
-    const metadata = metadataSnapshot.data();
     if (metadata !== undefined) {
       const storedExpiresAt = metadata.expiresAt;
+      const mappedCodeFormatVersion =
+        mappingSnapshot.data()?.codeFormatVersion ?? 1;
       if (
         metadata.inviteId !== inviteId ||
         metadata.codeHash !== codeHash ||
+        storedCodeFormatVersion !== input.codeFormatVersion ||
+        storedDerivationIndex !== derivationIndex ||
         metadata.createdBy !== input.actorUid ||
         metadata.issuanceRequestId !== input.requestId ||
         !(storedExpiresAt instanceof Timestamp) ||
         metadata.maxUses !== input.maxUses ||
         !mappingSnapshot.exists ||
         mappingSnapshot.data()?.leagueId !== input.leagueId ||
-        mappingSnapshot.data()?.inviteId !== inviteId
+        mappingSnapshot.data()?.inviteId !== inviteId ||
+        mappedCodeFormatVersion !== input.codeFormatVersion
       ) {
         throw new HttpsError(
           "failed-precondition",
@@ -636,17 +704,12 @@ export async function issueArenaInviteRecord(input: {
       }
       retireLegacyInvite();
       return {
+        inviteCode,
         expiresAt: storedExpiresAt.toDate(),
         maxUses: Number(metadata.maxUses),
       };
     }
 
-    if (mappingSnapshot.exists) {
-      throw new HttpsError(
-        "failed-precondition",
-        "This invite request conflicts with an existing invite.",
-      );
-    }
     const expiresAt = requestedExpiresAt ??
       new Date(Date.now() + DEFAULT_ARENA_INVITE_LIFETIME_MS);
     if (expiresAt.valueOf() <= Date.now()) {
@@ -660,6 +723,8 @@ export async function issueArenaInviteRecord(input: {
     transaction.create(references.metadata, {
       inviteId,
       codeHash,
+      codeFormatVersion: input.codeFormatVersion,
+      derivationIndex,
       inviteKind: "independent",
       active: true,
       expiresAt: expiresAtTimestamp,
@@ -672,6 +737,8 @@ export async function issueArenaInviteRecord(input: {
     transaction.create(references.mapping, {
       leagueId: input.leagueId,
       inviteId,
+      codeFormatVersion: input.codeFormatVersion,
+      derivationIndex,
       inviteKind: "independent",
       active: true,
       expiresAt: expiresAtTimestamp,
@@ -688,17 +755,19 @@ export async function issueArenaInviteRecord(input: {
       requestId: input.requestId,
       after: {
         inviteId,
+        codeFormatVersion: input.codeFormatVersion,
+        derivationIndex,
         expiresAt: expiresAt.toISOString(),
         maxUses: input.maxUses,
         legacyInviteRetired: legacyConfig?.active === true,
       },
     });
-    return {expiresAt, maxUses: input.maxUses};
+    return {inviteCode, expiresAt, maxUses: input.maxUses};
   });
 
   return {
     inviteId,
-    inviteCode,
+    inviteCode: result.inviteCode,
     expiresAt: result.expiresAt.toISOString(),
     maxUses: result.maxUses,
   };

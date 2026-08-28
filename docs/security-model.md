@@ -70,15 +70,27 @@ pick. Reveal documents are backend-written and member-readable after reveal.
 
 Protected functions require Firebase Auth. Sensitive operations also require
 owner/commissioner membership. Invite issuance and revocation are owner-only.
-Modern invite codes are deterministic 144-bit HMAC bearer values scoped to the
-arena, owner, and idempotency request; the raw code is returned to the owner but
-is never stored or logged. Modern links expire after 14 days or 50 successful
-joins by default, and the first modern issuance atomically retires the legacy
-singleton invite. Join attempts use hashed lookup, exact-case input
-normalization, per-user and privacy-safe network throttling, generic invalid or
-expired failures, and a server-enforced one-active-arena rule. Same-arena
-retries remain idempotent even after the final permitted use. Provider
-refreshes use role checks and quota guards.
+New clients explicitly request version-2 invite codes: deterministic,
+eight-character uppercase bearer values drawn from a 32-character alphabet
+that omits `0`, `1`, `I`, and `O`. Each value carries 40 bits, and issuance can
+select from four deterministic HMAC-derived candidates inside the same
+transaction if a lookup mapping is already occupied. Cached clients that omit
+the version continue to receive the original version-1 144-bit, 24-character
+value, and every previously issued version-1 link remains valid. The raw code
+is returned to the owner but is never stored or logged.
+
+Modern links expire after 14 days or 50 successful joins by default, and the
+first modern issuance atomically retires the legacy singleton invite. New
+eight-character input is case-insensitive and canonicalized to uppercase;
+compatible 16- to 64-character legacy input remains exact-case. Join requires
+Firebase Auth, uses hashed lookup, permits no more than five attempts per
+15-minute window for one authenticated user and 20 attempts for one
+privacy-safe network key, returns generic invalid or expired failures, and
+enforces one active arena per user. The separate network allowance lets the
+intended ten-person group join from one household or shared Wi-Fi while the
+per-account guessing limit remains strict. Same-arena retries remain idempotent
+even after the final permitted use. Provider refreshes use role checks and
+quota guards.
 
 Shared web links put the bearer value in the URL fragment rather than the query
 string so Firebase Hosting requests and HTTP referrers do not receive it. The

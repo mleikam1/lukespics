@@ -1,6 +1,7 @@
 import {describe, expect, it} from "vitest";
 import {
   issueArenaInviteSchema,
+  joinLeagueSchema,
   revokeArenaInviteSchema,
 } from "../src/schemas.js";
 import {
@@ -17,15 +18,20 @@ const identity = {
 const pepper = "unit-test-invite-pepper-at-least-32-characters";
 
 describe("arena invite contract", () => {
-  it("derives a stable 144-bit URL-safe code without embedding identifiers", () => {
+  it("derives a stable human-safe 40-bit code without identifiers", () => {
     const code = arenaInviteCodeForRequest(identity, pepper);
 
-    expect(code).toHaveLength(24);
-    expect(code).toMatch(/^[A-Za-z0-9_-]{24}$/);
+    expect(code).toHaveLength(8);
+    expect(code).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/);
     expect(code).toBe(arenaInviteCodeForRequest(identity, pepper));
+    expect(arenaInviteCodeForRequest(identity, pepper, 2, 1)).not.toBe(code);
     expect(code).not.toContain(identity.leagueId);
     expect(code).not.toContain(identity.actorUid);
     expect(code).not.toContain(identity.requestId);
+
+    const legacyCode = arenaInviteCodeForRequest(identity, pepper, 1);
+    expect(legacyCode).toMatch(/^[A-Za-z0-9_-]{24}$/);
+    expect(legacyCode).toBe("vsJfKiKISml2wmlJ2rEoALUS");
   });
 
   it("domain-separates codes and invite identifiers by their full identity", () => {
@@ -57,6 +63,14 @@ describe("arena invite contract", () => {
     });
     expect(issued.maxUses).toBe(DEFAULT_ARENA_INVITE_MAX_USES);
     expect(issued.expiresAt).toBeUndefined();
+    expect(issued.codeFormatVersion).toBeUndefined();
+
+    const shortIssued = issueArenaInviteSchema.parse({
+      requestId: "issue-request-0002",
+      leagueId: "league-alpha",
+      codeFormatVersion: 2,
+    });
+    expect(shortIssued.codeFormatVersion).toBe(2);
 
     expect(revokeArenaInviteSchema.parse({
       requestId: "revoke-request-0001",
@@ -68,5 +82,27 @@ describe("arena invite contract", () => {
       leagueId: "league-alpha",
       maxUses: 0,
     })).toThrow();
+  });
+
+  it("canonicalizes short codes and preserves legacy code case", () => {
+    const short = joinLeagueSchema.parse({
+      requestId: "join-request-0001",
+      inviteCode: "k7m4px9r",
+    });
+    expect(short.inviteCode).toBe("K7M4PX9R");
+
+    const legacyCode = "AbCdEfGhIjKlMnOpQrStUvWx";
+    const legacy = joinLeagueSchema.parse({
+      requestId: "join-request-0002",
+      inviteCode: legacyCode,
+    });
+    expect(legacy.inviteCode).toBe(legacyCode);
+
+    for (const invalid of ["ABC123", "ABCDEFGHI", "ABCD-234", "bad code!"]) {
+      expect(() => joinLeagueSchema.parse({
+        requestId: "join-request-invalid",
+        inviteCode: invalid,
+      })).toThrow();
+    }
   });
 });

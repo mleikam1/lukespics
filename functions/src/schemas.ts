@@ -197,13 +197,23 @@ export const createLeagueSchema = mutationBaseSchema.extend({
   settings: leagueSettingsPatchSchema.default({}),
 });
 
+const modernInviteCodePattern = /^[A-Za-z0-9]{8}$/;
+const legacyInviteCodePattern = /^[A-Za-z0-9_-]{16,64}$/;
+
 export const joinLeagueSchema = mutationBaseSchema.extend({
   inviteCode: z
     .string()
     .trim()
-    .min(16)
+    .min(8)
     .max(64)
-    .regex(/^[A-Za-z0-9_-]+$/),
+    .transform((value) => modernInviteCodePattern.test(value)
+      ? value.toUpperCase()
+      : value)
+    .refine(
+      (value) => modernInviteCodePattern.test(value) ||
+        legacyInviteCodePattern.test(value),
+      "Invite code format is invalid.",
+    ),
   nickname: z.string().trim().min(1).max(80).optional(),
 });
 
@@ -221,6 +231,7 @@ export const rotateInviteCodeSchema = leagueMutationSchema.extend({
 export const issueArenaInviteSchema = leagueMutationSchema.extend({
   expiresAt: dateSchema.optional(),
   maxUses: z.number().int().positive().max(10000).default(50),
+  codeFormatVersion: z.literal(2).optional(),
 });
 
 export const revokeArenaInviteSchema = leagueMutationSchema.extend({

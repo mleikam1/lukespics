@@ -54,6 +54,32 @@ Production must stay `manual` while any unchecked activation item remains.
       promotion. The local Mac was locked; the immediately preceding live
       artifact remains the latest direct session/time/locked-entry browser proof.
 
+## Short invitation-code follow-up — 2026-08-28
+
+- [x] New Flutter clients explicitly request version-2 eight-character codes
+      drawn from the human-safe 32-character alphabet; lowercase entry is
+      canonicalized to uppercase.
+- [x] Cached clients that omit a format version continue to receive the original
+      version-1 24-character code, and existing long codes remain exact-case
+      compatible at the join boundary.
+- [x] Four deterministic HMAC candidates provide transactional collision
+      fallback without persisting or logging a raw code. The existing pepper,
+      invite ID derivation, expiry, use limit, authorization, and one-arena
+      policy remain unchanged.
+- [x] Flutter 156/156, Functions 209/209, Rules 12/12, Functions integration
+      18/18, and the connected emulator-backed three-user browser lifecycle
+      pass. The integration suite covers collision fallback, a pre-deployment
+      version-1 retry, lowercase join, the five-attempt per-account throttle,
+      and ten distinct members joining from one shared network.
+- [x] The production web build, source scan, build scan, whitespace check, and
+      production dependency audit pass; the latter reports zero production
+      vulnerabilities. The full development graph retains the recorded four
+      high and four moderate toolchain findings.
+- [ ] The exact short-code implementation commit has passed both CI jobs.
+- [ ] The guarded Functions-first, preview, and exact preview-to-live release has
+      completed, with live asset identity and read-only production state
+      reverified afterward.
+
 ## CBS additive release boundary — 2026-08-27
 
 - [x] `cbsSports` is server-only and scoped to `NCAAF` / `ncaaf` / `FBS`.

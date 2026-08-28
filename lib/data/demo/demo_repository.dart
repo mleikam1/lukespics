@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/bootstrap.dart';
+import '../../core/invites/arena_invite.dart';
 import '../../core/firebase/browser_e2e_location.dart';
 import '../../core/firebase/app_telemetry.dart';
 import '../models/game.dart';
@@ -20,6 +21,16 @@ import '../repositories/league_repository.dart';
 final appControllerProvider = ChangeNotifierProvider<AppController>(
   (ref) => AppController.demo(),
 );
+
+String _newDemoInviteCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  var value = DateTime.now().microsecondsSinceEpoch;
+  return List<String>.generate(8, (_) {
+    final character = alphabet[value & 31];
+    value ~/= 32;
+    return character;
+  }).join();
+}
 
 enum PickSyncState { idle, saving, synced, offline, rejected }
 
@@ -44,7 +55,7 @@ final class AppController extends ChangeNotifier {
        _telemetry = AppTelemetry(enabled: false) {
     _seed();
     _entryLockedForWeek = entryLocked;
-    if (_hasLeague) _inviteCode = 'DEMO-7H3K';
+    if (_hasLeague) _inviteCode = 'D3M27H3K';
   }
 
   AppController.connected({
@@ -683,7 +694,8 @@ final class AppController extends ChangeNotifier {
   }
 
   Future<bool> joinArena(String inviteCode) async {
-    if (inviteCode.trim().length < 6) {
+    final normalizedInviteCode = normalizeArenaInviteCode(inviteCode);
+    if (normalizedInviteCode == null) {
       _errorMessage = 'Enter the full invite code.';
       notifyListeners();
       return false;
@@ -693,7 +705,7 @@ final class AppController extends ChangeNotifier {
         await Future<void>.delayed(const Duration(milliseconds: 140));
       } else {
         final joinedLeagueId = await _repository.joinLeagueByCode(
-          inviteCode: inviteCode.trim(),
+          inviteCode: normalizedInviteCode,
           nickname: _displayName,
         );
         _setActiveLeagueId(joinedLeagueId);
@@ -1602,8 +1614,7 @@ final class AppController extends ChangeNotifier {
   Future<bool> rotateInviteCode() async {
     final leagueId = _activeLeagueId;
     if (_repository == null) {
-      _inviteCode =
-          'DEMO-${DateTime.now().second.toString().padLeft(2, '0')}XP';
+      _inviteCode = _newDemoInviteCode();
       _activeInviteId = null;
       _inviteExpiresAt = null;
       _inviteMaxUses = null;
@@ -1635,7 +1646,7 @@ final class AppController extends ChangeNotifier {
     try {
       if (_repository == null) {
         final suffix = DateTime.now().microsecondsSinceEpoch.toString();
-        _inviteCode = 'DemoInvite${suffix.padLeft(15, '0')}';
+        _inviteCode = _newDemoInviteCode();
         _activeInviteId = 'demo-invite-$suffix';
         _inviteExpiresAt = DateTime.now().toUtc().add(const Duration(days: 14));
         _inviteMaxUses = 50;

@@ -224,6 +224,7 @@ export const issueArenaInvite = callable(
         ? {}
         : {expiresAt: input.expiresAt}),
       maxUses: input.maxUses,
+      codeFormatVersion: input.codeFormatVersion ?? 1,
     });
   },
   {secrets: [INVITE_CODE_PEPPER]},

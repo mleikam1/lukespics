@@ -49,9 +49,12 @@ This document is authoritative for the MVP.
 - Invitation links are private bearer credentials. New links may coexist so an
   owner can invite several groups without breaking a link already sent; each
   link can be disabled independently while its handle is available.
-- Opening an invitation while signed out preserves the exact case-sensitive
-  code through Google sign-in, but joining still requires an explicit
-  confirmation. A user can belong to only one active arena.
+- Newly issued links use an eight-character uppercase code without `0`, `1`,
+  `I`, or `O`. Members can type a new short code in either case. Previously
+  issued long codes and links remain valid and retain their exact case.
+- Opening an invitation while signed out preserves its canonical code through
+  Google sign-in, but joining still requires an explicit confirmation. A user
+  can belong to only one active arena.
 - Rotation is explicitly ordered and skips inactive members.
 - New members append to the end and normally become eligible the next week if
   the current slate is already published.

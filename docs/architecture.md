@@ -204,6 +204,14 @@ action, and are scrubbed from the route after success. Native and mobile-web
 clients use the platform share sheet so Messages can be selected without
 collecting phone numbers or requesting SMS permissions.
 
+Invite issuance is format-versioned across Functions and Flutter deployments.
+The current client requests an eight-character, 40-bit, human-safe version-2
+code and accepts it case-insensitively. A deterministic four-candidate HMAC
+derivation resolves the bounded short-code collision case transactionally.
+Cached clients that omit the version continue to receive version-1
+24-character codes, and the join boundary preserves exact-case support for all
+existing version-1 links.
+
 ## Resilience
 
 - Manual data permits production operation while SportsDataIO is inactive.

@@ -61,12 +61,16 @@ void main() {
 
     await tester.tap(find.byKey(const Key('create-arena-invite')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('arena-invite-code')), findsOneWidget);
+    final codeFinder = find.byKey(const Key('arena-invite-code'));
+    expect(codeFinder, findsOneWidget);
+    final code = tester.widget<SelectableText>(codeFinder).data!;
+    expect(code, matches(RegExp(r'^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$')));
 
     await tester.tap(find.byKey(const Key('share-arena-invite')));
     await tester.pumpAndSettle();
 
     expect(gateway.text, contains('lukes-picks.web.app/arena/join#invite='));
+    expect(gateway.text, contains('Code: $code'));
     expect(gateway.title, contains('Luke’s Picks Arena'));
     expect(gateway.origin, isNotNull);
     expect(gateway.origin!.isEmpty, isFalse);
