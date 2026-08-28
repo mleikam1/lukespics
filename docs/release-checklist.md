@@ -1,8 +1,8 @@
 # Release checklist
 
-This checklist records the CBS/entry-lock production release and the independent
-SportsDataIO NFL/MLB activation boundary as of 2026-08-27. Checked items state
-their evidence boundary explicitly.
+This checklist records the arena-invitation and CBS/entry-lock production
+release plus the independent SportsDataIO NFL/MLB activation boundary as of
+2026-08-27. Checked items state their evidence boundary explicitly.
 
 ## Current release boundary
 
@@ -28,8 +28,9 @@ Production must stay `manual` while any unchecked activation item remains.
 ## Arena invitation release — 2026-08-27
 
 - [x] Only an arena owner can issue or revoke a modern invitation.
-- [x] Raw 144-bit bearer codes are returned once, never stored or logged, and
-      are represented server-side only by HMAC lookup and bounded metadata.
+- [x] Raw 144-bit bearer codes are returned only in the owner's issuance
+      response, including an idempotent retry, never stored or logged, and are
+      represented server-side only by HMAC lookup and bounded metadata.
 - [x] The first modern invitation atomically retires the original legacy code;
       later modern links remain independent and expire after 14 days or 50
       successful joins by default.
@@ -40,12 +41,18 @@ Production must stay `manual` while any unchecked activation item remains.
 - [x] The platform share sheet exposes Messages without storing phone numbers
       or requesting SMS permission; clipboard fallback remains available.
 - [x] Flutter 152/152, Functions 208/208, Rules 12/12, Functions integration
-      15/15, and the connected three-user browser lifecycle pass.
-- [ ] The exact invite release commit has passed both CI jobs.
-- [ ] Rules, 34 Functions, preview Hosting, and exact preview-to-live promotion
+      15/15, and the connected emulator-backed three-user browser lifecycle
+      pass.
+- [x] The exact invite release commit passed both CI jobs in run `33134634949`.
+- [x] Rules, 34 Functions, preview Hosting, and exact preview-to-live promotion
       have completed through the guarded release wrapper.
-- [ ] The authenticated live owner UI and existing CBS/session/locked-entry
-      behavior have been reverified after promotion.
+- [x] Preview and live reference the same finalized Hosting version, and their
+      `main.dart.js` hash exactly matches the scanned local release build;
+      private cache and completed-entry state were reverified without changing
+      a slate or pick.
+- [ ] The authenticated live owner invitation UI has been visually rerun after
+      promotion. The local Mac was locked; the immediately preceding live
+      artifact remains the latest direct session/time/locked-entry browser proof.
 
 ## CBS additive release boundary — 2026-08-27
 
@@ -74,7 +81,7 @@ Production must stay `manual` while any unchecked activation item remains.
 - [ ] Historical evidence that the CBS config was first created with both
       switches false was not established during this release; current verified
       state is enabled with automatic refresh.
-- [x] Rules, indexes, 32 Node 22 Functions, preview Hosting, and live Hosting
+- [x] Rules, indexes, 34 Node 22 Functions, preview Hosting, and live Hosting
       were deployed through the exact guarded project scripts.
 - [x] A connected production arena loaded a published CBS Week 1 slate with
       confirmed kickoff times; its already-completed entry restored as saved
@@ -179,7 +186,7 @@ and redeploy prior Functions only if still necessary.
 - [ ] A separate written team-mark entitlement and narrow host operation were
       approved. Until then this must remain unchecked.
 
-## Current CBS-tree deterministic validation — 2026-08-27
+## Recorded pre-invitation CBS-tree deterministic validation — 2026-08-27
 
 - [x] Flutter format and analyze passed; unit/widget tests passed 136/136.
 - [x] The Flutter web release build completed and the fresh public-build scan
@@ -192,7 +199,7 @@ and redeploy prior Functions only if still necessary.
 - [x] The connected browser-to-emulator lifecycle passed with safe provider
       flags.
 - [x] Source policy, secret, public-build, and changed-tree whitespace checks
-      passed on the current tree.
+      passed on that CBS release tree.
 - [ ] An authenticated live CBS game completed the production picker-to-results
       flow. This remains deliberately incomplete.
 

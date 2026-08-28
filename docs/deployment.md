@@ -22,7 +22,7 @@ Production SportsDataIO routing must remain `manual`. Do not describe the
 current live site as SportsDataIO-backed until an authorized activation and the
 complete process below have both passed.
 
-## Current CBS college-football kickoff update — 2026-08-27
+## Current CBS and arena-invitation production release — 2026-08-27
 
 The server-only `cbsSports` NCAAF/FBS adapter is already part of the production
 surface. A bounded reread of the same public 2026 regular-season Week 1
@@ -30,15 +30,24 @@ scoreboard found the exact kickoff epochs and Eastern display times inside the
 page's inert base64 `reduxPreloadedState`. Parser 1.2.0 decodes only that exact
 inline definition, never evaluates it, cross-checks both time representations
 against the visible card and requested week, and adds no endpoint or request.
-That rollout completed on 2026-08-27. The guarded project check resolved
+The invitation rollout completed on 2026-08-27. The guarded project check resolved
 `lukes-picks` (`271408880910`, lifecycle `ACTIVE`); Rules and indexes deployed;
-32/32 Functions are `ACTIVE` on Node 22; and Hosting version
-`cc6cb19ea8f74056` is live at <https://lukes-picks.web.app>. The live bundle
+34/34 Functions are `ACTIVE` on Node 22; and Hosting version
+`4b9185befb59b39b` is live at <https://lukes-picks.web.app>. The live bundle
 SHA-256 is
-`6e8a4aa8b42db5bb084e2be1260074cfaad9de7edae003cabc79daa1f8a57541`.
+`c931e4b2abb6f09462074db5714371df583acaf6ace758ad753f7d227343cd44`.
 The Functions release command's only nonzero condition was the optional
 Artifact Registry cleanup-policy setup after every Function update completed;
-the independent Cloud Functions readback confirmed all 32 revisions `ACTIVE`.
+the independent Cloud Functions readback confirmed all 34 revisions `ACTIVE`.
+
+Commit `9ed851575918ff5f499cafc93915e4edff077e37` passed both jobs in CI run
+<https://github.com/mleikam1/lukespics/actions/runs/33134634949>. It adds the
+owner-only `issueArenaInvite` and `revokeArenaInvite` callables, independent
+private invitation records, fragment-based join links, explicit authenticated
+join confirmation, and native/system sharing that includes Messages without
+collecting phone numbers or requesting SMS permission. The preview release at
+`2026-08-28T02:07:35.445Z` and live promotion at
+`2026-08-28T02:10:30.514Z` reference the same finalized Hosting version.
 
 The private CBS configuration is enabled with automatic refresh, parser 1.2.0,
 FBS 2026 regular-season Week 1, a 120-minute minimum refresh interval, and a
@@ -46,15 +55,19 @@ FBS 2026 regular-season Week 1, a 120-minute minimum refresh interval, and a
 Scheduler trigger at `2026-08-27T21:24:20.878604Z` made exactly one CBS request,
 received HTTP 200, and completed successfully. The cache committed at
 `2026-08-27T21:24:28.753Z` with 99 games, 99 confirmed UTC kickoffs, 99
-effective lock instants, zero TBD games, no error, and parser 1.2.0. The next
-normal refresh was scheduled for `2026-08-28T00:24:28.753Z`.
+effective lock instants, zero TBD games, no error, and parser 1.2.0. The latest
+normal hourly refresh subsequently succeeded at `2026-08-28T01:24:19.701Z`
+with the same 99 scheduled games and zero TBD games.
 
 A fresh production browser tab restored the existing Google session directly
 to the connected dashboard. The Week 1 entry displayed local kickoff times,
 `Saved and locked`, and disabled all team choices. No published slate, entry,
 or pick was changed during verification. Code commit
-`0adbfa2f2e38a95e310551a58e2e383906f1f8db` passed CI run
-<https://github.com/mleikam1/lukespics/actions/runs/33112892405>.
+`0adbfa2f2e38a95e310551a58e2e383906f1f8db` is the direct authenticated
+session/time/lock browser proof. After the invitation promotion, exact live
+asset identity plus read-only Function, index, cache, and completed-entry checks
+passed; the locked local workstation prevented a second authenticated visual
+pass.
 
 The deployment is additive: `getCollegeFootballSchedule` and
 `refreshCollegeFootballScheduleAdmin` are callable Functions, and

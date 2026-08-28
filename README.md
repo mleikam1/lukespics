@@ -6,14 +6,17 @@ winners, picks stay private until lock, and final results update weekly and
 overall standings.
 
 > Status as of 2026-08-27: commit
-> `0adbfa2f2e38a95e310551a58e2e383906f1f8db` is deployed only to the guarded
+> `9ed851575918ff5f499cafc93915e4edff077e37` is deployed only to the guarded
 > Firebase project `lukes-picks` (`271408880910`). Firestore Rules and indexes
-> deployed successfully, and all 32 Functions are `ACTIVE` on Node 22. Hosting
-> version `cc6cb19ea8f74056` was deployed to the
+> deployed successfully, and all 34 Functions are `ACTIVE` on Node 22. Hosting
+> version `4b9185befb59b39b` was deployed to the
 > `connected-picker-flow` preview and cloned to live at
 > <https://lukes-picks.web.app>. Live returns HTTP 200 and serves
 > `main.dart.js` SHA-256
-> `6e8a4aa8b42db5bb084e2be1260074cfaad9de7edae003cabc79daa1f8a57541`.
+> `c931e4b2abb6f09462074db5714371df583acaf6ace758ad753f7d227343cd44`.
+> Owners can now create private expiring arena links and send them through the
+> system share sheet, including Messages; recipients sign in, explicitly join,
+> and enter the active member and picker-rotation pool.
 >
 > The shared release contains the dormant SportsDataIO adapter, but production
 > arenas remain `manual` for that provider. Its kill switch and entitlement gate
@@ -22,12 +25,16 @@ overall standings.
 > fixture complete only. Remote provider marks remain off.
 >
 > The server-only `cbsSports` schedule integration is enabled for 2026 FBS
-> regular-season Week 1 with automatic refresh and parser 1.2.0. At
-> `2026-08-27T21:24:28.753Z`, one permitted post-cooldown request returned HTTP
-> 200 and refreshed 99 normalized games: all 99 have confirmed UTC kickoffs and
-> effective lock instants, and zero are TBD. A fresh production browser tab
-> restored the existing Google session without a prompt; the completed entry
-> displayed scheduled local times, `Saved and locked`, and disabled choices.
+> regular-season Week 1 with automatic refresh and parser 1.2.0. The permitted
+> post-cooldown manual run returned HTTP 200, and the latest automatic refresh
+> committed at `2026-08-28T01:24:19.701Z`: all 99 normalized games have
+> confirmed UTC kickoffs and effective lock instants, and zero are TBD. On the
+> immediately preceding live artifact, a fresh production browser tab restored
+> the existing Google session without a prompt; the completed entry displayed
+> scheduled local times, `Saved and locked`, and disabled choices. The invite
+> promotion preserved that backend state and was verified by exact live-asset
+> identity; the locked local workstation prevented a second authenticated visual
+> pass after promotion.
 > The remaining CBS acceptance boundary is a real completed game through final
 > result, grading, and standings.
 
@@ -338,22 +345,30 @@ rights are a separate gate; neutral initials remain production-safe.
 The current production release record is:
 
 - implementation commit:
-  `0adbfa2f2e38a95e310551a58e2e383906f1f8db`;
-- successful CI: <https://github.com/mleikam1/lukespics/actions/runs/33112892405>;
+  `9ed851575918ff5f499cafc93915e4edff077e37`;
+- successful CI: <https://github.com/mleikam1/lukespics/actions/runs/33134634949>;
 - preview: <https://lukes-picks--connected-picker-flow-9abhuudi.web.app>;
 - live: <https://lukes-picks.web.app>;
-- Hosting version: `cc6cb19ea8f74056`, cloned live at
-  `2026-08-27T20:27:35.519Z`;
+- Hosting version: `4b9185befb59b39b`, finalized at
+  `2026-08-28T02:07:35.771386Z` and cloned live at
+  `2026-08-28T02:10:30.514Z`;
 - deployed `main.dart.js` SHA-256:
-  `6e8a4aa8b42db5bb084e2be1260074cfaad9de7edae003cabc79daa1f8a57541`;
-- Functions: 32/32 `ACTIVE`, all Node 22;
+  `c931e4b2abb6f09462074db5714371df583acaf6ace758ad753f7d227343cd44`;
+- Functions: 34/34 `ACTIVE`, all Node 22;
 - CBS cache: parser 1.2.0, 99/99 scheduled kickoffs, 99/99 effective lock
-  instants, zero TBD, last successful fetch `2026-08-27T21:24:28.753Z`;
+  instants, zero TBD, latest successful automatic fetch
+  `2026-08-28T01:24:19.701Z`;
 - scheduler: enabled hourly in UTC; the verified forced run made one outbound
-  request, received HTTP 200, and completed successfully; and
-- authenticated UI: fresh-tab session restoration reached the connected
+  request, received HTTP 200, and completed successfully;
+- arena invitations: owner-only issue/revoke, 14-day or 50-join default limit,
+  fragment deep-link join, Messages/system sharing, and private server-side
+  token lookup are live; and
+- authenticated UI evidence on the immediately preceding artifact: fresh-tab
+  session restoration reached the connected
   dashboard without a Google prompt, then the Week 1 entry showed local game
-  times and permanently disabled saved choices.
+  times and permanently disabled saved choices. Post-promotion Hosting bytes and
+  private server state were reverified; an authenticated visual rerun was not
+  possible while the local workstation was locked.
 
 The CBS implementation requires no new composite Firestore index. See
 [release-checklist.md](docs/release-checklist.md) and

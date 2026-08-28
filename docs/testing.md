@@ -70,7 +70,7 @@ acceptance.
 
 ## Current CBS and arena-invite verification matrix — 2026-08-27
 
-These results were recorded on the current CBS integration tree. The public
+These results were recorded on the current CBS and arena-invite tree. The public
 source/build scans were rerun after the release build; none of these local,
 fixture, cache-backed, or emulator results is a deployment or live-provider
 claim.
@@ -98,20 +98,30 @@ claim.
 ## Production release verification — 2026-08-27
 
 - The exact Firebase safety check passed for `lukes-picks` project number
-  `271408880910`; all 32 deployed Functions report `ACTIVE` on Node 22.
-- Code commit `0adbfa2f2e38a95e310551a58e2e383906f1f8db` passed both jobs in
-  <https://github.com/mleikam1/lukespics/actions/runs/33112892405>.
-- Hosting live version `cc6cb19ea8f74056` returns HTTP 200 and its
+  `271408880910`; all 34 deployed Functions report `ACTIVE` on Node 22.
+- Code commit `9ed851575918ff5f499cafc93915e4edff077e37` passed both jobs in
+  <https://github.com/mleikam1/lukespics/actions/runs/33134634949>.
+- Firestore Rules, all five `READY` indexes, both invitation Functions, the
+  fixed preview, and exact preview-to-live promotion completed through the
+  guarded release wrapper.
+- Preview and live reference finalized Hosting version `4b9185befb59b39b`.
+  Live returns HTTP 200 and its
   `main.dart.js` SHA-256 is
-  `6e8a4aa8b42db5bb084e2be1260074cfaad9de7edae003cabc79daa1f8a57541`.
+  `c931e4b2abb6f09462074db5714371df583acaf6ace758ad753f7d227343cd44`,
+  exactly matching the locally scanned release build and preview.
 - The post-cooldown Scheduler execution made one outbound request, received
-  HTTP 200, and refreshed the parser-1.2.0 cache at
-  `2026-08-27T21:24:28.753Z`: 99 games, 99 scheduled UTC kickoffs, 99 effective
-  lock instants, and zero TBD games.
-- A fresh production browser tab restored the existing signed-in session
+  HTTP 200, and the latest subsequent automatic refresh left the parser-1.2.0
+  cache at `2026-08-28T01:24:19.701Z`: 99 games, 99 scheduled UTC kickoffs, 99
+  effective lock instants, and zero TBD games.
+- A read-only production admin check after promotion found six arenas and one
+  completed entry; that entry's published games all retain scheduled kickoffs.
+- On the immediately preceding live artifact, a fresh production browser tab
+  restored the existing signed-in session
   without a Google prompt. The connected Week 1 entry showed scheduled local
   times, `Saved and locked`, and disabled pick buttons. Verification did not
-  mutate a slate, entry, or pick.
+  mutate a slate, entry, or pick. The post-invite release received exact asset,
+  Function, index, cache, and entry-state verification; the locked local Mac
+  prevented a second authenticated visual pass after promotion.
 
 ## Current dependency audit snapshot — 2026-08-25
 

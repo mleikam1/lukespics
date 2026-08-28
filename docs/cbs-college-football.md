@@ -232,25 +232,31 @@ normalized summaries, and never persist HTML.
 ### Verified production release — 2026-08-27
 
 The guarded release deployed code commit
-`0adbfa2f2e38a95e310551a58e2e383906f1f8db` to Firebase project `lukes-picks`
-(`271408880910`). Rules and indexes deployed, 32/32 Functions are `ACTIVE` on
-Node 22, and Hosting version `cc6cb19ea8f74056` is live at
+`9ed851575918ff5f499cafc93915e4edff077e37` to Firebase project `lukes-picks`
+(`271408880910`). Rules and indexes deployed, 34/34 Functions are `ACTIVE` on
+Node 22, and Hosting version `4b9185befb59b39b` is live at
 <https://lukes-picks.web.app>. The live `main.dart.js` SHA-256 is
-`6e8a4aa8b42db5bb084e2be1260074cfaad9de7edae003cabc79daa1f8a57541`.
+`c931e4b2abb6f09462074db5714371df583acaf6ace758ad753f7d227343cd44`.
 
 The private production config is enabled for FBS 2026 regular-season Week 1
 with automatic refresh, parser 1.2.0, a 120-minute per-page cooldown, and a
 12-attempt rolling-24-hour cap. The one manual Scheduler trigger after cooldown
 made exactly one outbound request and received HTTP 200. At
 `2026-08-27T21:24:28.753Z`, the normalized cache contained 99 games, 99
-confirmed UTC kickoffs, 99 effective lock instants, and zero TBD games. A fresh
-production tab restored the signed-in session without a Google prompt and
-showed the completed Week 1 entry with local times and disabled, saved-and-
-locked choices. The verification did not change a slate or pick.
+confirmed UTC kickoffs, 99 effective lock instants, and zero TBD games. The
+latest automatic refresh succeeded at `2026-08-28T01:24:19.701Z` with the same
+99 scheduled games and zero TBD games. On the immediately preceding live
+artifact, a fresh production tab restored the signed-in session without a
+Google prompt and showed the completed Week 1 entry with local times and
+disabled, saved-and-locked choices. The invitation promotion preserved the
+private cache and completed-entry state; verification did not change a slate or
+pick.
 
-This establishes live schedule, session-restoration, and entry-lock behavior.
-It does not yet establish a real completed CBS game through result grading and
-standings.
+This establishes the current live schedule/cache and completed-entry state. The
+immediately preceding artifact separately establishes browser-observed session
+restoration, displayed times, and entry locking; those UI observations were not
+rerun after the invitation promotion. Neither establishes a real completed CBS
+game through result grading and standings.
 
 Confirm Blaze billing, Cloud Scheduler API availability, scheduler service
 agent permissions, and the exact authorized Firebase project before deploying.

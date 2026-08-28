@@ -95,25 +95,44 @@ repository `gcf-artifacts` has no automatic cleanup policy; that retention/cost
 warning should be handled separately and must not be “fixed” by deleting
 unreviewed images.
 
+## Current production release — 2026-08-27
+
+The exact project guard passed for `lukes-picks` (`271408880910`) before each
+cloud write. Commit `9ed851575918ff5f499cafc93915e4edff077e37` passed both CI
+jobs in <https://github.com/mleikam1/lukespics/actions/runs/33134634949>.
+Firestore Rules and all five composite indexes deployed, all 34 Functions are
+`ACTIVE` on Node 22, and the new owner-only `issueArenaInvite` and
+`revokeArenaInvite` Functions are active.
+
+The fixed preview and live channels both reference finalized Hosting version
+`4b9185befb59b39b`. Live was promoted at `2026-08-28T02:10:30.514Z`, returns
+HTTP 200, and serves `main.dart.js` SHA-256
+`c931e4b2abb6f09462074db5714371df583acaf6ace758ad753f7d227343cd44`,
+exactly matching the scanned local build and preview. The Functions command's
+only nonzero condition was the existing optional Artifact Registry cleanup-
+policy prompt after all Functions had deployed; independent readback confirmed
+all 34 active revisions. No cleanup policy was created and no images were
+deleted.
+
+The private CBS cache remained parser 1.2.0 with 99 scheduled Week 1 games and
+zero TBD games after its successful automatic refresh at
+`2026-08-28T01:24:19.701Z`. A read-only post-promotion check also found the
+existing completed entry retained scheduled games. No production invitation,
+slate, entry, or pick was created or changed during verification.
+
 ## Authentication and platform status
 
 Google sign-in is enabled with the Luke’s Picks public name and configured
-support email. On the prior 2026-07-31 artifact, an authenticated popup sign-in
-succeeded on the preview, and
-reload restored the authenticated session and arena membership. Explicit
-sign-out and repeat sign-in also passed. The automated repeat popup was slow to
-settle, but a clean reload restored the authenticated arena without a console
-warning or error.
-
-For live, Firebase configuration was independently verified on that prior
-release: authorized domains
-include both `lukes-picks.web.app` and `lukes-picks.firebaseapp.com`, the Google
-provider is enabled/configured, and the auth handlers return HTTP 200. The
-automated in-app browser could not complete the live Google popup. Manual Google
-sign-in on a permanent live URL remains the user handoff check; live
-authenticated smoke is not claimed. The authenticated preview smoke remains
-historical only; current live authenticated sign-in was not rerun after the
-2026-08-01 artifact replacement.
+support email. Authorized domains include both `lukes-picks.web.app` and
+`lukes-picks.firebaseapp.com`, the Google provider is enabled/configured, and
+the auth handlers return HTTP 200. On the immediately preceding
+`0adbfa2f2e38a95e310551a58e2e383906f1f8db` live artifact, a fresh production
+tab restored the authenticated session and arena membership without opening a
+Google prompt; it also showed the completed entry's local times and locked
+choices. After the invitation promotion, the local Mac was locked, so a second
+authenticated visual pass was not possible. The exact new live bytes and
+read-only server state were verified, but the post-promotion owner invitation
+screen is not claimed as a direct production browser observation.
 
 The Android debug SHA-1 is registered. The Firebase app IDs and native
 package/bundle identifiers match the checked-in Flutter configuration. Add only
