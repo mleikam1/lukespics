@@ -229,6 +229,29 @@ normalized summaries, and never persist HTML.
 
 ## Deployment and rollback
 
+### Verified production release — 2026-08-27
+
+The guarded release deployed code commit
+`0adbfa2f2e38a95e310551a58e2e383906f1f8db` to Firebase project `lukes-picks`
+(`271408880910`). Rules and indexes deployed, 32/32 Functions are `ACTIVE` on
+Node 22, and Hosting version `cc6cb19ea8f74056` is live at
+<https://lukes-picks.web.app>. The live `main.dart.js` SHA-256 is
+`6e8a4aa8b42db5bb084e2be1260074cfaad9de7edae003cabc79daa1f8a57541`.
+
+The private production config is enabled for FBS 2026 regular-season Week 1
+with automatic refresh, parser 1.2.0, a 120-minute per-page cooldown, and a
+12-attempt rolling-24-hour cap. The one manual Scheduler trigger after cooldown
+made exactly one outbound request and received HTTP 200. At
+`2026-08-27T21:24:28.753Z`, the normalized cache contained 99 games, 99
+confirmed UTC kickoffs, 99 effective lock instants, and zero TBD games. A fresh
+production tab restored the signed-in session without a Google prompt and
+showed the completed Week 1 entry with local times and disabled, saved-and-
+locked choices. The verification did not change a slate or pick.
+
+This establishes live schedule, session-restoration, and entry-lock behavior.
+It does not yet establish a real completed CBS game through result grading and
+standings.
+
 Confirm Blaze billing, Cloud Scheduler API availability, scheduler service
 agent permissions, and the exact authorized Firebase project before deploying.
 The guarded repository commands are:
@@ -244,8 +267,8 @@ flutter build web --release
 ```
 
 After authenticated preview and emulator verification, use the existing guarded
-Hosting release procedure from `docs/deployment.md`. Do not enable the provider
-or scheduler automatically as part of code deployment.
+Hosting release procedure from `docs/deployment.md`. Provider configuration is
+a separate, explicit guarded operation from code deployment.
 
 Rollback order:
 

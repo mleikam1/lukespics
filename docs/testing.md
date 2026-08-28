@@ -3,13 +3,13 @@
 Tests must separate deterministic branch evidence from deployment evidence and
 from authenticated provider evidence. They are three different claims.
 
-## Current SportsDataIO branch boundary — 2026-08-01
+## Current SportsDataIO activation boundary — 2026-08-27
 
 The NFL/MLB integration is tested with sanitized, secret-free fixtures. Normal
-tests and CI do not call the internet. The branch has not been deployed, no API
-key was supplied or used, no authenticated SportsDataIO request was made, and
-no feed entitlement, quota, SLA, live schema, or anomaly behavior was
-validated.
+tests and CI do not call the internet. The shared source bundle is deployed but
+SportsDataIO is not activated: no API key was supplied or used, no authenticated
+SportsDataIO request was made, and no feed entitlement, quota, SLA, live schema,
+or anomaly behavior was validated.
 
 All browser/emulator tests explicitly keep:
 
@@ -55,9 +55,11 @@ The focused deterministic coverage lives in:
 Flutter tests exercise NCAAF controls restricted to the configured active
 season/type/week, cross-provider calendar ownership, arena-timezone display, TBD
 selection blocking, stale/last-updated state, and retention across refresh. A
-synthetic confirmed-time fixture proves workflow compatibility. Live rollout
-still requires an exact Functions release, private parser-version bump, forced
-refresh, and authenticated UI verification.
+synthetic confirmed-time fixture proves workflow compatibility. The exact
+Functions release, private parser-version bump, post-cooldown refresh, and
+authenticated production UI verification completed on 2026-08-27. That is
+schedule/session/entry-lock evidence; a real completed CBS game through result,
+grading, and standings remains a separate unchecked acceptance gate.
 
 The authenticated emulator flow does prove the local cache-backed boundary: an
 owner loads a fresh preseeded CBS game without consuming a provider attempt,
@@ -66,7 +68,7 @@ saves and publishes the game, the member reads it, and the member submits a
 pick. It does not contact CBS, exercise a live result, or establish production
 acceptance.
 
-## Current CBS-tree verification matrix — 2026-08-25
+## Current CBS-tree verification matrix — 2026-08-27
 
 These results were recorded on the current CBS integration tree. The public
 source/build scans were rerun after the release build; none of these local,
@@ -77,12 +79,12 @@ claim.
 |---|---|---|
 | `dart format --output=none --set-exit-if-changed .` | Pass | Flutter source and tests are formatted |
 | `flutter analyze --no-pub` | Pass | No analyzer issues on the current Flutter tree |
-| `flutter test --no-pub` | Pass — 122/122 | Includes CBS active controls, cross-provider calendar ownership, TBD/stale behavior, draft add/remove/re-add, and repository parsing |
+| `flutter test --no-pub` | Pass — 136/136 | Includes CBS active controls, cross-provider calendar ownership, TBD/stale behavior, completed-entry lock latching, draft add/remove/re-add, and repository parsing |
 | `flutter build web --release` | Pass | Current release web artifact compiled successfully |
 | `npm --prefix functions run lint` | Pass | ESLint completed with zero allowed warnings |
 | `npm --prefix functions run typecheck` | Pass | TypeScript no-emit check completed |
 | `npm --prefix functions run build` | Pass | Node 22 Functions TypeScript compiled |
-| `npm --prefix functions test` | Pass — 185/185 in 8 files | CBS parser/cache/contracts plus existing provider, lifecycle, and scoring coverage |
+| `npm --prefix functions test` | Pass — 205/205 | CBS parser/cache/contracts plus atomic completed-entry sealing, provider, lifecycle, and scoring coverage |
 | `npm --prefix functions run test:rules` | Pass — 12/12 | Firestore emulator confirms CBS config/cache/usage remain client-denied |
 | `npm --prefix functions run test:integration` | Pass — 10/10 | Includes authenticated cached-CBS lifecycle, authorization, and capacity checks without CBS network access |
 | `./scripts/test_browser_e2e.sh` | Pass | Connected three-user emulator lifecycle completed under safe provider flags |
@@ -92,6 +94,24 @@ claim.
 | `npm audit --prefix functions --omit=dev` | Pass — 0 vulnerabilities | Production Functions dependency graph only |
 | `npm audit --prefix functions` | Review — 8 findings | Full graph has 4 high and 4 moderate dev-tooling findings |
 | `flutter pub outdated` | Inventory | 25 locked packages can upgrade; 2 direct constraints trail otherwise resolvable versions |
+
+## Production release verification — 2026-08-27
+
+- The exact Firebase safety check passed for `lukes-picks` project number
+  `271408880910`; all 32 deployed Functions report `ACTIVE` on Node 22.
+- Code commit `0adbfa2f2e38a95e310551a58e2e383906f1f8db` passed both jobs in
+  <https://github.com/mleikam1/lukespics/actions/runs/33112892405>.
+- Hosting live version `cc6cb19ea8f74056` returns HTTP 200 and its
+  `main.dart.js` SHA-256 is
+  `6e8a4aa8b42db5bb084e2be1260074cfaad9de7edae003cabc79daa1f8a57541`.
+- The post-cooldown Scheduler execution made one outbound request, received
+  HTTP 200, and refreshed the parser-1.2.0 cache at
+  `2026-08-27T21:24:28.753Z`: 99 games, 99 scheduled UTC kickoffs, 99 effective
+  lock instants, and zero TBD games.
+- A fresh production browser tab restored the existing signed-in session
+  without a Google prompt. The connected Week 1 entry showed scheduled local
+  times, `Saved and locked`, and disabled pick buttons. Verification did not
+  mutate a slate, entry, or pick.
 
 ## Current dependency audit snapshot — 2026-08-25
 

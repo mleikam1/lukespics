@@ -1,8 +1,8 @@
 # Release checklist
 
-This checklist describes the SportsDataIO NFL/MLB branch as of 2026-08-01.
-Checked implementation items are source or deterministic-test facts. They are
-not deployment or activation claims.
+This checklist records the CBS/entry-lock production release and the independent
+SportsDataIO NFL/MLB activation boundary as of 2026-08-27. Checked items state
+their evidence boundary explicitly.
 
 ## Current release boundary
 
@@ -12,7 +12,8 @@ not deployment or activation claims.
       `SPORTSDATAIO_ACCESS_MODE=fixture`, and
       `SPORTSDATAIO_ENTITLEMENT_VERIFIED=false`.
 - [x] Normal validation uses sanitized, secret-free NFL and MLB fixtures.
-- [ ] This branch is deployed to Functions, Firestore, or Hosting.
+- [x] The shared release branch is deployed to Functions, Firestore, and
+      Hosting; SportsDataIO remains disabled and unprovisioned.
 - [ ] A SportsDataIO key was supplied, read, created, rotated, or tested for
       this branch.
 - [ ] An authenticated provider endpoint smoke test was run.
@@ -24,7 +25,7 @@ not deployment or activation claims.
 
 Production must stay `manual` while any unchecked activation item remains.
 
-## CBS additive release boundary — 2026-08-25
+## CBS additive release boundary — 2026-08-27
 
 - [x] `cbsSports` is server-only and scoped to `NCAAF` / `ncaaf` / `FBS`.
 - [x] Arena routing uses `settings.providerBySport.NCAAF`; the legacy
@@ -46,29 +47,37 @@ Production must stay `manual` while any unchecked activation item remains.
       `firestore.indexes.json` has no CBS-related change.
 - [x] The complete deterministic, rules, emulator, browser, and public-build
       matrix has passed after all CBS edits settle.
-- [ ] Blaze billing, Cloud Scheduler API, scheduler service-agent permission,
+- [x] Blaze billing, Cloud Scheduler API, scheduler service-agent permission,
       and the exact additive Function manifest have been rechecked.
-- [ ] `systemConfig/cbsCollegeFootball` has been created with both switches
-      false through a separately authorized guarded write.
-- [ ] Rules/Functions were deployed with CBS disabled, then verified in an
-      authenticated preview without a browser-originated CBS request.
-- [ ] A single arena was explicitly mapped to `cbsSports`, and a live CBS game
-      with a confirmed UTC kickoff completed load, slate, pick, lock, result,
-      scoring, and standings verification.
-- [ ] CBS parser 1.2.0 was deployed, the private config parser version was
+- [ ] Historical evidence that the CBS config was first created with both
+      switches false was not established during this release; current verified
+      state is enabled with automatic refresh.
+- [x] Rules, indexes, 32 Node 22 Functions, preview Hosting, and live Hosting
+      were deployed through the exact guarded project scripts.
+- [x] A connected production arena loaded a published CBS Week 1 slate with
+      confirmed kickoff times; its already-completed entry restored as saved
+      and permanently locked with disabled team choices.
+- [ ] A live CBS game has completed result, scoring, and standings verification.
+- [x] CBS parser 1.2.0 was deployed, the private config parser version was
       changed to `1.2.0`, and one forced active-week refresh confirmed that all
       99 cached games have cross-validated UTC kickoffs without retaining raw
       HTML or preloaded-state fields.
+- [x] The hourly Scheduler is enabled; the verified post-cooldown run made one
+      outbound request, returned HTTP 200, and left 99 effective lock instants
+      with zero TBD games.
+- [x] A fresh live browser tab restored the existing Google-authenticated
+      session without opening a new Google prompt.
 - [x] The current Functions production dependency graph reports 0
       vulnerabilities.
 - [ ] The full Functions graph's 8 vulnerabilities (4 high, 4 moderate) and
       Flutter's 25 locked upgrades/2 behind constraints have been reviewed and
       dispositioned; the observed inventory does not itself authorize upgrades.
 
-Until the unchecked items pass, keep both CBS config switches false and leave
-the NCAAF override unset/manual. Rollback is config-first: disable both switches,
-remove/restore only `providerBySport.NCAAF`, preserve cache and historical game/
-pick/result data, and redeploy prior Functions only if still necessary.
+Unchecked result-to-standings items block a claim of complete live CBS lifecycle
+acceptance; they do not invalidate the verified schedule integration. Rollback
+remains config-first: disable both switches, remove/restore only
+`providerBySport.NCAAF`, preserve cache and historical game/pick/result data,
+and redeploy prior Functions only if still necessary.
 
 ## Implemented catalog and result behavior
 
@@ -148,13 +157,13 @@ pick/result data, and redeploy prior Functions only if still necessary.
 - [ ] A separate written team-mark entitlement and narrow host operation were
       approved. Until then this must remain unchecked.
 
-## Current CBS-tree deterministic validation — 2026-08-25
+## Current CBS-tree deterministic validation — 2026-08-27
 
-- [x] Flutter format and analyze passed; unit/widget tests passed 122/122.
+- [x] Flutter format and analyze passed; unit/widget tests passed 136/136.
 - [x] The Flutter web release build completed and the fresh public-build scan
       passed.
 - [x] Functions lint, typecheck, and build passed; unit/contract tests passed
-      185/185 across 8 files.
+      205/205.
 - [x] Firestore Rules passed 12/12 and emulator integration passed 10/10,
       including the authenticated cache-backed CBS lifecycle and capacity
       boundary without a CBS network request.

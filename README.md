@@ -5,28 +5,31 @@ designated picker chooses the slate, eligible arena members choose straight-up
 winners, picks stay private until lock, and final results update weekly and
 overall standings.
 
-> Status as of 2026-08-01: the reviewed schedule/slate/picks/results release is
-> deployed only to `lukes-picks` (`271408880910`). All 29 Node 22 Functions are
-> active, Firestore uses ruleset
-> `projects/lukes-picks/rulesets/aa52ec56-c549-4e8e-880a-372474e4feeb`, and all
-> five composite indexes are `READY`. The exact
-> `connected-picker-flow` preview was cloned to live as Hosting version
-> `b58df6678863654a`; both permanent URLs return HTTP 200 and serve
+> Status as of 2026-08-27: commit
+> `0adbfa2f2e38a95e310551a58e2e383906f1f8db` is deployed only to the guarded
+> Firebase project `lukes-picks` (`271408880910`). Firestore Rules and indexes
+> deployed successfully, and all 32 Functions are `ACTIVE` on Node 22. Hosting
+> version `cc6cb19ea8f74056` was deployed to the
+> `connected-picker-flow` preview and cloned to live at
+> <https://lukes-picks.web.app>. Live returns HTTP 200 and serves
 > `main.dart.js` SHA-256
-> `411062a988bf5b8d798b317f118b505966c0d80f9fd07a4f4f4e4762842a1ed6`.
+> `6e8a4aa8b42db5bb084e2be1260074cfaad9de7edae003cabc79daa1f8a57541`.
 >
-> The live deployment predates the SportsDataIO work on this branch. Production
-> arenas remain `manual`, the SportsDataIO kill switch and entitlement gate are
-> off, no key is present in this checkout, and no authenticated SportsDataIO
-> smoke test or deployment was performed. The new integration is deterministic-
-> fixture complete, not production-activated. Remote provider marks remain off.
+> The shared release contains the dormant SportsDataIO adapter, but production
+> arenas remain `manual` for that provider. Its kill switch and entitlement gate
+> are off, no key is present in this checkout, and no authenticated SportsDataIO
+> smoke or activation was performed. Its integration remains deterministic-
+> fixture complete only. Remote provider marks remain off.
 >
-> The additive `cbsSports` college-football work on the current branch is also
-> not deployed or production-activated. A bounded public-page check on
-> 2026-08-25 confirmed the allowlisted FBS scoreboard route and matchup markup,
-> but the observed page did not expose a trustworthy kickoff date/time. The
-> implementation therefore keeps those live observations TBD and unselectable;
-> it is not live end-to-end acceptance evidence.
+> The server-only `cbsSports` schedule integration is enabled for 2026 FBS
+> regular-season Week 1 with automatic refresh and parser 1.2.0. At
+> `2026-08-27T21:24:28.753Z`, one permitted post-cooldown request returned HTTP
+> 200 and refreshed 99 normalized games: all 99 have confirmed UTC kickoffs and
+> effective lock instants, and zero are TBD. A fresh production browser tab
+> restored the existing Google session without a prompt; the completed entry
+> displayed scheduled local times, `Saved and locked`, and disabled choices.
+> The remaining CBS acceptance boundary is a real completed game through final
+> result, grading, and standings.
 
 ## Product contract
 
@@ -320,39 +323,36 @@ does not deploy.
 
 ## Deployment
 
-The SportsDataIO and CBS additions on this branch have not been deployed.
-Before any provider-backed
+The completed-entry lock, remembered Google session behavior, automatic CBS
+kickoff parser/cache, Rules, Functions, and Hosting release are live. The
+SportsDataIO integration remains inactive. Before any SportsDataIO-backed
 preview or live release, confirm the key/contract covers the exact NFL and MLB
 schedule, team, and score feeds plus the intended display and result-grading
 use. Keep `ALLOW_SPORTSDATAIO_PROVIDER=false`, access mode `fixture`, entitlement
 verification false, and the provider catalog absent/disabled until then. Logo
 rights are a separate gate; neutral initials remain production-safe.
 
-For CBS, first deploy with `systemConfig/cbsCollegeFootball.enabled=false` and
-`autoRefreshEnabled=false`, leave `settings.providerBySport.NCAAF` unset (or
-`manual`), and review the additive callable/scheduler manifest. Activation also
-requires Blaze billing, Cloud Scheduler readiness, deterministic and emulator
-validation, a bounded public-route recheck, and an authorized single-arena
-preview. The implementation requires no new composite Firestore index.
+The current production release record is:
 
-The current deployed release record below is historical evidence for the prior
-manual-provider build, not evidence for this SportsDataIO branch:
-
-- URL:
-  <https://lukes-picks--connected-picker-flow-wfrwr4gp.web.app>
-- Firebase-displayed expiry: `2026-08-08 13:52:18 UTC`
+- implementation commit:
+  `0adbfa2f2e38a95e310551a58e2e383906f1f8db`;
+- successful CI: <https://github.com/mleikam1/lukespics/actions/runs/33112892405>;
+- preview: <https://lukes-picks--connected-picker-flow-9abhuudi.web.app>;
+- live: <https://lukes-picks.web.app>;
+- Hosting version: `cc6cb19ea8f74056`, cloned live at
+  `2026-08-27T20:27:35.519Z`;
 - deployed `main.dart.js` SHA-256:
-  `411062a988bf5b8d798b317f118b505966c0d80f9fd07a4f4f4e4762842a1ed6`
+  `6e8a4aa8b42db5bb084e2be1260074cfaad9de7edae003cabc79daa1f8a57541`;
+- Functions: 32/32 `ACTIVE`, all Node 22;
+- CBS cache: parser 1.2.0, 99/99 scheduled kickoffs, 99/99 effective lock
+  instants, zero TBD, last successful fetch `2026-08-27T21:24:28.753Z`;
+- scheduler: enabled hourly in UTC; the verified forced run made one outbound
+  request, received HTTP 200, and completed successfully; and
+- authenticated UI: fresh-tab session restoration reached the connected
+  dashboard without a Google prompt, then the Week 1 entry showed local game
+  times and permanently disabled saved choices.
 
-The active Firestore ruleset is
-`projects/lukes-picks/rulesets/aa52ec56-c549-4e8e-880a-372474e4feeb`, all five
-composite indexes are `READY`, `INVITE_CODE_PEPPER` version 1 exists without
-its value being recorded, and all 29 Functions are active/Cloud Run ready.
-`scheduledResultSync` runs every 30 minutes on UTC time. At
-`2026-08-01T13:52:56.156Z`, the exact `connected-picker-flow` preview channel
-was cloned to `lukes-picks:live`. Both <https://lukes-picks.web.app> and
-<https://lukes-picks.firebaseapp.com> returned HTTP 200, and the live bundle
-digest matches the preview digest above. See
+The CBS implementation requires no new composite Firestore index. See
 [release-checklist.md](docs/release-checklist.md) and
 [deployment.md](docs/deployment.md) for evidence and rollback identifiers.
 
@@ -373,13 +373,9 @@ the project guard.
 
 ## Known limitations
 
-- The 2026-08-25 CBS Week 1 page observation contained matchups, network, and
-  venue data, but no trustworthy kickoff date/time. Those observations remain
-  visible as TBD and unselectable. An authenticated local emulator test passed
-  for a fresh preseeded CBS cache through authorization, catalog load,
-  save/publish, ordinary-member visibility, and pick submission without any CBS
-  request. No live-source result/scoring/standings flow, production authenticated
-  CBS acceptance, or deployment has been completed.
+- The active 2026 FBS Week 1 CBS schedule is live with 99 confirmed kickoffs and
+  zero TBD games. The production UI and completed-entry lock are verified, but
+  no real CBS game has yet completed the live result/scoring/standings flow.
 - The 2026-08-25 dependency audit found 0 vulnerabilities in the Functions
   production graph, but 8 in the complete graph (4 high, 4 moderate).
   `flutter pub outdated` also reported 25 locked packages that can be upgraded
@@ -400,14 +396,13 @@ the project guard.
   suite also creates and publishes a manual MLB game while another connected
   provider is configured, proving the authorized fallback remains usable.
 - Authenticated preview Google popup sign-in, reload/session/membership
-  restoration, explicit sign-out, and repeat sign-in passed. The automated
-  repeat popup was slow to settle, but a clean reload restored the
-  authenticated arena with no console warning or error.
+  restoration, explicit sign-out, and repeat sign-in passed. Production
+  fresh-tab restoration on `lukes-picks.web.app` also reused the existing
+  signed-in session without opening a Google prompt.
 - Live unauthenticated smoke passed on desktop and a `390x844` phone-size
   viewport, including Privacy, Terms, and Data sources, with zero warning/error
-  console logs. The automated in-app browser could not complete the live Google
-  popup, so manual Google sign-in on a permanent live URL remains required; do
-  not treat the preview auth pass as a completed live authenticated smoke.
+  console logs. A subsequent authenticated production check restored the
+  connected dashboard and locked entry without requiring a new Google login.
 - App Check valid-token monitoring, Analytics/Crashlytics production operation,
   and operational alerting remain deferred production gates.
 - Ownership transfer is not supported; an active owner is prevented from

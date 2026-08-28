@@ -3,12 +3,13 @@
 This project has no automatic deploy. A passing local or CI run does not
 authorize a cloud write.
 
-## Current SportsDataIO branch status — 2026-08-01
+## Current SportsDataIO activation status — 2026-08-27
 
-This branch adds a server-only SportsDataIO integration for NFL and MLB. It has
-not been deployed to Firebase Hosting, Cloud Functions, Firestore, or Secret
-Manager. The previously deployed web application remains the dated manual-data
-artifact recorded below; none of that evidence applies to this branch.
+The shared release contains the server-only SportsDataIO integration for NFL
+and MLB, but it has not been provider-activated or provisioned. Production
+arenas remain `manual` for SportsDataIO, its environment gates remain safe, and
+no `SPORTSDATAIO_API_KEY` Secret Manager binding was added. The live CBS
+schedule release below is not evidence of SportsDataIO access or entitlement.
 
 The branch was validated only with sanitized, secret-free fixtures. No API key
 was supplied, read, created, rotated, or used; no authenticated SportsDataIO
@@ -17,9 +18,9 @@ rate limit, schema stability, service level, or logo right was established.
 The repository contains only an empty secret placeholder. Current cloud secret
 state was not inspected and must not be inferred from source.
 
-Production arenas must remain `manual`. Do not describe the current live site
-as SportsDataIO-backed until an authorized deployment and the complete
-activation process below have both passed.
+Production SportsDataIO routing must remain `manual`. Do not describe the
+current live site as SportsDataIO-backed until an authorized activation and the
+complete process below have both passed.
 
 ## Current CBS college-football kickoff update — 2026-08-27
 
@@ -29,9 +30,31 @@ scoreboard found the exact kickoff epochs and Eastern display times inside the
 page's inert base64 `reduxPreloadedState`. Parser 1.2.0 decodes only that exact
 inline definition, never evaluates it, cross-checks both time representations
 against the visible card and requested week, and adds no endpoint or request.
-Rollout is not complete until Functions are deployed, the private CBS config's
-`parserVersion` is changed to `1.2.0`, and a forced refresh replaces the prior
-TBD cache.
+That rollout completed on 2026-08-27. The guarded project check resolved
+`lukes-picks` (`271408880910`, lifecycle `ACTIVE`); Rules and indexes deployed;
+32/32 Functions are `ACTIVE` on Node 22; and Hosting version
+`cc6cb19ea8f74056` is live at <https://lukes-picks.web.app>. The live bundle
+SHA-256 is
+`6e8a4aa8b42db5bb084e2be1260074cfaad9de7edae003cabc79daa1f8a57541`.
+The Functions release command's only nonzero condition was the optional
+Artifact Registry cleanup-policy setup after every Function update completed;
+the independent Cloud Functions readback confirmed all 32 revisions `ACTIVE`.
+
+The private CBS configuration is enabled with automatic refresh, parser 1.2.0,
+FBS 2026 regular-season Week 1, a 120-minute minimum refresh interval, and a
+12-attempt rolling-24-hour cap. After that minimum cooldown, the single manual
+Scheduler trigger at `2026-08-27T21:24:20.878604Z` made exactly one CBS request,
+received HTTP 200, and completed successfully. The cache committed at
+`2026-08-27T21:24:28.753Z` with 99 games, 99 confirmed UTC kickoffs, 99
+effective lock instants, zero TBD games, no error, and parser 1.2.0. The next
+normal refresh was scheduled for `2026-08-28T00:24:28.753Z`.
+
+A fresh production browser tab restored the existing Google session directly
+to the connected dashboard. The Week 1 entry displayed local kickoff times,
+`Saved and locked`, and disabled all team choices. No published slate, entry,
+or pick was changed during verification. Code commit
+`0adbfa2f2e38a95e310551a58e2e383906f1f8db` passed CI run
+<https://github.com/mleikam1/lukespics/actions/runs/33112892405>.
 
 The deployment is additive: `getCollegeFootballSchedule` and
 `refreshCollegeFootballScheduleAdmin` are callable Functions, and
@@ -40,8 +63,9 @@ automatic retries disabled. Existing `scheduledResultSync` remains the separate
 30-minute selected-result job. CBS adds a Firestore Rules denial for
 `sportsProviderCache`; it does not add or modify a composite index.
 
-CBS activation has no API key, but it still requires a separate operational and
-source-policy review:
+CBS activation has no API key. The completed release used the following
+operational and source-policy sequence, which remains required for future
+re-activation:
 
 1. Confirm the exact target is `lukes-picks`, Blaze billing is active, the Cloud
    Scheduler API is available, and the scheduler service agent can invoke the
@@ -195,7 +219,7 @@ preview or live promotion.
 
 The following is retained as dated rollback and provenance evidence for the
 previous manual-data artifact. It is not evidence that this SportsDataIO branch
-was deployed, activated, authenticated, or smoke-tested.
+was activated, authenticated, or smoke-tested.
 
 | Historical release item | Recorded state |
 |---|---|
@@ -214,7 +238,7 @@ was deployed, activated, authenticated, or smoke-tested.
 The prior Functions command recorded an exit code of 1 only after Function
 deployment succeeded, when automatic Artifact Registry cleanup policy setup
 failed. `gcf-artifacts` had no automatic cleanup policy at that time. That is a
-historical retention/cost warning, not current branch deployment evidence.
+historical retention/cost warning, not SportsDataIO activation evidence.
 
 The prior browser/emulator lifecycle used sanitized fixtures and manual result
 handling. A historical authenticated preview smoke covered the earlier manual
@@ -222,8 +246,9 @@ artifact. Neither is a live-provider test for this branch.
 
 ## Rollback
 
-If this branch has not been deployed, there is no SportsDataIO cloud rollback
-to perform. Keep production in `manual` and preserve the historical artifact.
+While SportsDataIO remains disabled and unprovisioned, there is no provider
+state to roll back even though the shared bundle is deployed. Keep production
+in `manual` and preserve normalized historical data.
 
 If a future authorized activation misbehaves:
 

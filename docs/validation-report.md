@@ -1,10 +1,11 @@
 # Validation report
 
-Date: 2026-08-01
+Original validation date: 2026-08-01; release-boundary note: 2026-08-27
 
 Scope: Luke's Picks web application, SportsDataIO NFL/MLB branch
 
-Status: fixture-validated branch; not deployed or provider-activated
+Status: fixture-validated SportsDataIO adapter; shared bundle deployed, provider
+not activated
 
 ## Executive conclusion
 
@@ -14,12 +15,14 @@ records, renders confirmed starts in browser/device local time, renders
 catalog-only TBD games against their Eastern day, retains provider-qualified
 identity, and fails closed when a kickoff or lock is not confirmed.
 
-This is not a live-data validation report. The branch has not been deployed.
-No API key was supplied, read, created, rotated, or used. No authenticated
-SportsDataIO request or endpoint smoke was run. No account feed entitlement,
-public-display right, caching/storage right, redistribution right, quota, rate
-limit, SLA, live response schema, or anomaly behavior was established.
-Production must remain on manual data, and team marks must remain neutral.
+This is not a live SportsDataIO validation report. The shared CBS/entry-lock
+bundle was deployed on 2026-08-27, but SportsDataIO was not provisioned or
+activated. No API key was supplied, read, created, rotated, or used. No
+authenticated SportsDataIO request or endpoint smoke was run. No account feed
+entitlement, public-display right, caching/storage right, redistribution right,
+quota, rate limit, SLA, live response schema, or anomaly behavior was
+established. SportsDataIO must remain on manual data, and team marks must remain
+neutral.
 
 ## Implemented provider boundary
 
@@ -93,7 +96,7 @@ not establish live provider behavior.
 | Connected browser-to-emulator lifecycle | Pass | Three isolated users completed create/join, cross-query draft retention, publish, picks/privacy, late rejection, reveal, manual result, finalization, standings, rotation, and next-week participation with automatic providers disabled |
 | Source, secret, and fresh public-build scans | Pass | All three scanners passed against the settled source and clean public-release artifact; no ESPN text remained in `.dart_tool` or `build/web` |
 | Authenticated SportsDataIO endpoint smoke | Not run | No key or verified entitlement was available |
-| Cloud deployment or live Hosting smoke | Not run for this branch | No cloud write was authorized |
+| Cloud deployment or live Hosting smoke | Shared bundle deployed 2026-08-27; no SportsDataIO activation smoke | The CBS/entry-lock release is not evidence of SportsDataIO access |
 
 ## Fixture evidence and limitations
 
@@ -133,8 +136,8 @@ today's live schema, or that the intended use is permitted.
 7. Separately authorize activation, enable one test arena, and validate the
    full catalog-to-settlement lifecycle before wider rollout.
 
-Until then, the correct production state is manual schedules/results and
-neutral badges.
+Until then, SportsDataIO routing must remain manual for schedules/results and
+its presentation must use neutral badges.
 
 ## Historical manual deployment evidence — 2026-08-01
 

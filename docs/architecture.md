@@ -109,6 +109,13 @@ ledger, failure counter, and circuit deadline live at
 `providerUsage/cbsSports_rolling24h`. Raw HTML is parsed in memory and is not
 persisted.
 
+Production evidence recorded on 2026-08-27 confirms this boundary is active
+for FBS 2026 regular-season Week 1 under parser 1.2.0. A single permitted
+post-cooldown request produced 99 normalized games with 99 UTC kickoffs, 99
+effective lock instants, and zero TBD games. The authenticated live UI restored
+its session and rendered the completed entry with timed, disabled choices; no
+published slate or pick was mutated during verification.
+
 Only the configured active identity can make a network request. The server and
 Flutter advertise exactly that season, season type, and week; they do not expose
 a synthetic historical range. Parser-version changes force a full
